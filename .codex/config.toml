@@ -1,0 +1,8 @@
+default_permissions = "project-safe"
+
+[permissions.project-safe]
+description = "Workspace access without environment secrets."
+extends = ":workspace"
+
+[permissions.project-safe.filesystem.":workspace_roots"]
+"**/*.env" = "deny"
