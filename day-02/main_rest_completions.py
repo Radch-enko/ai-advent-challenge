@@ -3,6 +3,8 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 
 API_URL = "https://api.openai.com/v1/chat/completions"
@@ -13,6 +15,24 @@ INSTRUCTIONS = (
     "concrete, actionable steps. Each step must be one short sentence. Order steps "
     f"by execution sequence. After the fifth step, write {STOP_SEQUENCE} on a new line."
 )
+KEY_BINDINGS = KeyBindings()
+
+
+@KEY_BINDINGS.add("enter")
+def send_message(event):
+    event.current_buffer.validate_and_handle()
+
+
+@KEY_BINDINGS.add("escape", "enter")
+def insert_newline(event):
+    event.current_buffer.insert_text("\n")
+
+
+SESSION = PromptSession(multiline=True, key_bindings=KEY_BINDINGS)
+
+
+def read_user_message() -> str:
+    return SESSION.prompt("You: ").strip()
 
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -23,7 +43,13 @@ print("Chat started. Press Ctrl+C to stop.")
 
 try:
     while True:
-        prompt = input("\nYou: ")
+        prompt = read_user_message()
+
+        if not prompt:
+            continue
+
+        if prompt.lower() in {"exit", "quit"}:
+            break
         messages.append({"role": "user", "content": prompt})
 
         response = requests.post(

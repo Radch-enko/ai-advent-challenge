@@ -23,3 +23,5 @@ The API key must be set in the root `.env` file:
 ```text
 OPENAI_API_KEY=your-api-key
 ```
+
+Press `Enter` to send a message. Press `Alt+Enter` to add a new line.
