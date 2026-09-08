@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiRequestError, completeWithMeta, createAgent, createAgentFromProfile, deleteAgent, getModels, getProfiles, sendMessageWithMeta } from './data/api/copiaApi'
+import { ApiRequestError, ChatSession, ChatSessionSummary, createSession, createSessionFromProfile, deleteSession, getModels, getProfiles, getSession, getSessions, sendSessionMessageWithMeta } from './data/api/copiaApi'
 import { AgentConfig } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
 import { ChatMessage, RequestLog } from './domain/models/chat'
@@ -24,26 +24,30 @@ export function App() {
   const [schema, setSchema] = useState('{\n  "type": "object",\n  "properties": {}\n}')
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>(starterMessages)
-  const [isLoading, setIsLoading] = useState(false)
+  const [pendingSessionIds, setPendingSessionIds] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [activeLog, setActiveLog] = useState<RequestLog | null>(null)
   const [logTab, setLogTab] = useState<'request' | 'response'>('request')
   const [models, setModels] = useState<ProviderModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, AgentConfig>>({})
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null)
-  const [activeAgentConfig, setActiveAgentConfig] = useState<AgentConfig | null>(null)
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null)
+  const [savedSessions, setSavedSessions] = useState<ChatSessionSummary[]>([])
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
+  const activeSessionIdRef = useRef<string | null>(null)
   const settingsRef = useOutsideClose(settingsOpen, () => setSettingsOpen(false))
   const supportsSampling = supportsSamplingParameters(provider, model)
+  const isProfileSession = activeSession?.profile_name != null
+  const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
 
   useEffect(() => resizeTextArea(composerRef.current), [message])
   useEffect(() => { setModelsLoading(true); getModels(provider).then(setModels).catch(() => setModels([])).finally(() => setModelsLoading(false)) }, [provider])
   useEffect(() => { getProfiles().then(setProfiles).catch(() => setProfiles({})) }, [])
+  useEffect(() => { void restoreSession() }, [])
 
   const baseConfig = useMemo<AgentConfig>(() => ({
-    name: 'web-client',
+    name: 'Copia',
     provider,
     model: model.trim(),
     system_prompt: systemPrompt.trim() || undefined,
@@ -68,24 +72,27 @@ export function App() {
     let requestForLog: object = {}
     let configForLog: AgentConfig | null = null
     let startedAt = 0
+    let session: ChatSession | null = null
     try {
       const config = buildConfig()
       configForLog = config
       const timestamp = now()
       setMessage('')
       setMessages((current) => [...current, { id: Date.now(), role: 'user', content, timestamp }])
-      setIsLoading(true)
       startedAt = performance.now()
-      const directConfig = (() => {
-        const { name: _name, description: _description, ...rest } = config
-        return rest
-      })()
-      requestForLog = activeAgentId
-        ? { agent_id: activeAgentId, config: activeAgentConfig, content }
-        : { config: directConfig, messages: [{ role: 'user', content }] }
-      const result = activeAgentId
-        ? await sendMessageWithMeta(activeAgentId, content)
-        : await completeWithMeta(directConfig, [...messages.filter((item) => item.role !== 'error').map((item) => ({ role: item.role as 'user' | 'assistant', content: item.content })), { role: 'user', content }])
+      session = activeSession
+      if (!session) {
+        session = await createSession(config)
+        setActiveSession(session)
+        activeSessionIdRef.current = session.id
+        localStorage.setItem('copia.activeSessionId', session.id)
+        void refreshSessions()
+      }
+      const requestSession = session
+      const sessionConfig = requestSession.profile_name == null ? config : undefined
+      requestForLog = { session_id: requestSession.id, config: sessionConfig ?? requestSession.config, content }
+      setPendingSessionIds((current) => [...current, requestSession.id])
+      const result = await sendSessionMessageWithMeta(requestSession.id, content, sessionConfig)
       const response = result.data
       const trace = response.response.trace
       const log: RequestLog = {
@@ -96,28 +103,38 @@ export function App() {
         request: trace?.request_body ?? requestForLog,
         response: trace?.response_body ?? response,
       }
-      setMessages((current) => [...current, {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: response.response.content,
-        timestamp: now(),
-        log,
-      }])
+      if (activeSessionIdRef.current === requestSession.id) {
+        setMessages((current) => [...current, {
+          id: Date.now() + 1,
+          role: 'assistant',
+          content: response.response.content,
+          timestamp: now(),
+          log,
+        }])
+        if (sessionConfig) setActiveSession((current) => current ? { ...current, config: sessionConfig } : current)
+      }
+      window.setTimeout(() => void refreshSessions(), 700)
+      window.setTimeout(() => void refreshSessions(), 2500)
     } catch (error) {
       const content = error instanceof Error ? error.message : 'Unexpected error'
       const apiError = error instanceof ApiRequestError ? error : null
       const trace = apiError?.providerTrace
       const log: RequestLog = {
-        provider: activeAgentConfig?.provider ?? configForLog?.provider ?? provider,
-        model: activeAgentConfig?.model ?? configForLog?.model ?? model,
+        provider: activeSession?.config.provider ?? configForLog?.provider ?? provider,
+        model: activeSession?.config.model ?? configForLog?.model ?? model,
         status: trace?.status_code ?? apiError?.status ?? 0,
         duration: startedAt ? `${((performance.now() - startedAt) / 1000).toFixed(2)}s` : '0.00s',
         request: trace?.request_body ?? requestForLog,
         response: trace?.response_body ?? apiError?.body ?? { error: content },
       }
-      setMessages((current) => [...current, { id: Date.now() + 2, role: 'error', content, timestamp: now(), log }])
+      if (activeSessionIdRef.current === session?.id) {
+        setMessages((current) => [...current, { id: Date.now() + 2, role: 'error', content, timestamp: now(), log }])
+      }
     } finally {
-      setIsLoading(false)
+      if (requestForLog && 'session_id' in requestForLog) {
+        const sessionId = String(requestForLog.session_id)
+        setPendingSessionIds((current) => current.filter((id) => id !== sessionId))
+      }
     }
   }
 
@@ -126,12 +143,51 @@ export function App() {
     setModel(providerModels[nextProvider])
   }
 
+  function openSession(session: ChatSession) {
+    setActiveSession(session)
+    activeSessionIdRef.current = session.id
+    localStorage.setItem('copia.activeSessionId', session.id)
+    if (session.profile_name == null) applyConfig(session.config)
+    setMessages(session.messages.map((item, index) => ({ id: index, role: item.role, content: item.content, timestamp: '' })))
+    setActiveLog(null)
+    void refreshSessions()
+  }
+
+  async function restoreSession() {
+    await refreshSessions()
+    const sessionId = localStorage.getItem('copia.activeSessionId')
+    if (!sessionId) return
+    try { openSession(await getSession(sessionId)) } catch { localStorage.removeItem('copia.activeSessionId') }
+  }
+
+  async function refreshSessions() {
+    try { setSavedSessions(await getSessions()) } catch { setSavedSessions([]) }
+  }
+
+  function applyConfig(config: AgentConfig) {
+    setProvider(config.provider)
+    setModel(config.model)
+    setSystemPrompt(config.system_prompt ?? '')
+    setMaxTokens(String(config.generation.max_output_tokens ?? 512))
+    setTemperature(String(config.generation.temperature ?? 0.7))
+    setTopP(String(config.generation.top_p ?? 1))
+    setStructuredOutput(config.structured_output != null)
+    if (config.structured_output) setSchema(JSON.stringify(config.structured_output.schema, null, 2))
+  }
+
   function startNewChat() {
-    if (activeAgentId) void deleteAgent(activeAgentId).catch(() => undefined)
-    setActiveAgentId(null)
-    setActiveAgentConfig(null)
+    setMode('chat')
+    setActiveSession(null)
+    activeSessionIdRef.current = null
+    localStorage.removeItem('copia.activeSessionId')
     setMessages(starterMessages)
     setActiveLog(null)
+  }
+
+  async function removeSession(sessionId: string) {
+    await deleteSession(sessionId)
+    if (activeSession?.id === sessionId) startNewChat()
+    await refreshSessions()
   }
 
   return (
@@ -139,25 +195,26 @@ export function App() {
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark">◇</div><strong>Copia</strong></div>
         <nav className="primary-nav">
-          <button className={`new-chat ${mode === 'chat' ? 'active' : ''}`} onClick={() => { setMode('chat'); startNewChat() }}><b>＋</b> Новый чат</button>
+          <button className={`new-chat ${mode === 'chat' ? 'active' : ''}`} onClick={startNewChat}><b>＋</b> Новый чат</button>
           <button className={`agents-nav ${mode === 'agents' ? 'active' : ''}`} onClick={() => setMode('agents')}>Агенты</button>
+          <div className="saved-chats">{savedSessions.map((session) => <div className="saved-chat" key={session.id}><button className={session.id === activeSession?.id ? 'active' : ''} onClick={() => void getSession(session.id).then(openSession)}>{session.title ?? 'Новый чат'}</button><button className="delete-chat" aria-label="Удалить чат" onClick={() => void removeSession(session.id)}>×</button></div>)}</div>
         </nav>
       </aside>
 
       <section className="chat-stage">
-        {mode === 'agents' ? <Agents profiles={profiles} onLaunch={async (profile) => { const id = await createAgentFromProfile(profile); setActiveAgentId(id); setActiveAgentConfig(profiles[profile]); setMode('chat'); setMessages([]) }} onCreate={async (config) => { const id = await createAgent(config); setActiveAgentId(id); setActiveAgentConfig(config); setMode('chat'); setMessages([]) }} /> : <>
-        <div className="message-list" aria-live="polite">
+        {mode === 'agents' ? <Agents profiles={profiles} onLaunch={async (profile) => { openSession(await createSessionFromProfile(profile)); setMode('chat') }} onCreate={async (config) => { openSession(await createSession(config)); setMode('chat') }} /> : <>
+        <div className="messages-scroll" aria-live="polite"><div className="message-list">
           {messages.map((entry) => <article className={`message ${entry.role}`} key={entry.id}>
-            {entry.role !== 'user' && <span className="avatar">{entry.role === 'error' ? '!' : activeAgentConfig?.avatar_path ? <img src={activeAgentConfig.avatar_path} alt={activeAgentConfig.name} /> : '◇'}</span>}
+            {entry.role !== 'user' && <span className="avatar">{entry.role === 'error' ? '!' : activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span>}
             <div className="message-body">
               <div className="markdown"><Markdown content={entry.content} /></div>
-              <footer><span>{entry.timestamp}</span>{entry.log && <button onClick={() => { setActiveLog(entry.log ?? null); setLogTab('request') }}>Логи</button>}</footer>
+              {(entry.timestamp || entry.log) && <footer>{entry.timestamp && <span>{entry.timestamp}</span>}{entry.log && <button onClick={() => { setActiveLog(entry.log ?? null); setLogTab('request') }}>Логи</button>}</footer>}
             </div>
           </article>)}
-          {isLoading && <article className="message assistant loading"><span className="avatar">{activeAgentConfig?.avatar_path ? <img src={activeAgentConfig.avatar_path} alt={activeAgentConfig.name} /> : '◇'}</span><div className="message-body"><p><i /><i /><i /></p><footer>Loading…</footer></div></article>}
-        </div>
+          {isLoading && <article className="message assistant loading"><span className="avatar">{activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span><div className="message-body"><p><i /><i /><i /></p><footer>Loading…</footer></div></article>}
+        </div></div>
         <div className="composer-area">
-          {!activeAgentConfig && settingsOpen && <div ref={settingsRef}><Settings
+          {!isProfileSession && settingsOpen && <div ref={settingsRef}><Settings
             provider={provider} model={model} models={models} modelsLoading={modelsLoading} systemPrompt={systemPrompt} maxTokens={maxTokens}
             temperature={temperature} topP={topP} structuredOutput={structuredOutput} schema={schema}
             supportsSampling={supportsSampling} onProvider={changeProvider} onModel={setModel}
@@ -165,8 +222,8 @@ export function App() {
             onTopP={setTopP} onStructuredOutput={setStructuredOutput} onSchema={setSchema}
           /></div>}
           <form className="composer" ref={formRef} onSubmit={submit}>
-            <span className="model-chip">{activeAgentConfig ? activeAgentConfig.name : model}</span><span className="composer-divider" />
-            {!activeAgentConfig && <button type="button" className={`tune ${settingsOpen ? 'active' : ''}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setSettingsOpen((open) => !open)} aria-label="Request settings">☷</button>}
+            <span className="model-chip">{isProfileSession ? activeSession?.config.name : model}</span><span className="composer-divider" />
+            {!isProfileSession && <button type="button" className={`tune ${settingsOpen ? 'active' : ''}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setSettingsOpen((open) => !open)} aria-label="Request settings">☷</button>}
             <textarea ref={composerRef} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => handleComposerKeyDown(event, formRef.current)} placeholder="Напишите сообщение Copia…" rows={1} disabled={isLoading} />
             <button className="send" type="submit" disabled={isLoading || !message.trim()} aria-label="Send">↑</button>
           </form>
@@ -188,7 +245,7 @@ type SettingsProps = {
 
 function Settings(props: SettingsProps) {
   return <section className="settings-popover">
-    <header><b>Настройки запроса</b><span>Конфигурация применяется к новому агенту</span></header>
+    <header><b>Настройки запроса</b><span>Конфигурация применяется к обычному чату</span></header>
     <div className="settings-grid">
       <label>Провайдер<ProviderSelect value={props.provider} onChange={props.onProvider} /></label>
       <label>Модель<ModelsSelect value={props.model} models={props.models} loading={props.modelsLoading} onChange={props.onModel} /></label>

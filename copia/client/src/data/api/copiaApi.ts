@@ -18,6 +18,18 @@ export type ChatResponse = {
 
 export type ApiResult<T> = { data: T; status: number }
 
+export type StoredMessage = { role: 'user' | 'assistant'; content: string }
+export type ChatSession = {
+  id: string
+  title: string | null
+  profile_name: string | null
+  config: AgentConfig
+  messages: StoredMessage[]
+  created_at: string
+  updated_at: string
+}
+export type ChatSessionSummary = Pick<ChatSession, 'id' | 'title' | 'profile_name' | 'updated_at'>
+
 export class ApiRequestError extends Error {
   constructor(public readonly status: number, public readonly body: unknown) {
     super(apiErrorMessage(body, status))
@@ -96,4 +108,21 @@ export function getProfiles(): Promise<Record<string, AgentConfig>> { return req
 export async function createAgentFromProfile(profileName: string): Promise<string> {
   const result = await request<{ agent_id: string }>('/agents', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
   return result.agent_id
+}
+
+export function getSessions(): Promise<ChatSessionSummary[]> { return request('/sessions') }
+export function getSession(sessionId: string): Promise<ChatSession> { return request(`/sessions/${sessionId}`) }
+export function createSession(config: AgentConfig): Promise<ChatSession> {
+  return request('/sessions', { method: 'POST', body: JSON.stringify({ config }) })
+}
+export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
+  return request('/sessions', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
+}
+export function deleteSession(sessionId: string): Promise<void> {
+  return fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).then((response) => {
+    if (!response.ok) throw new Error(`Could not delete session: ${response.status}`)
+  })
+}
+export function sendSessionMessageWithMeta(sessionId: string, content: string, config?: AgentConfig): Promise<ApiResult<ChatResponse>> {
+  return requestWithMeta(`/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ content, config }) })
 }

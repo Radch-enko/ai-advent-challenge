@@ -13,10 +13,15 @@ class ProfilesSource(Protocol):
 class Agent:
     """A stateful conversation with one configuration and in-memory history."""
 
-    def __init__(self, config: AgentConfig, router: LLMRouter) -> None:
+    def __init__(
+        self,
+        config: AgentConfig,
+        router: LLMRouter,
+        history: list[ChatMessage] | None = None,
+    ) -> None:
         self.config = config
         self._router = router
-        self._history: list[ChatMessage] = []
+        self._history = list(history or [])
 
     @property
     def history(self) -> list[ChatMessage]:

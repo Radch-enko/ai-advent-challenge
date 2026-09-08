@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, model_validator
 
 from ..data.providers.llm import ProviderError
 from ..data.profiles_repository import ProfilesRepository
+from ..data.sessions_repository import SessionsRepository
 from ..domain.models.agent import Agent, AgentFactory
-from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName
+from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, GenerationConfig, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, StructuredOutputConfig
+from ..domain.models.session import ChatSession, ChatSessionSummary
 from ..domain.services.router import LLMRouter
 
 load_dotenv()
@@ -22,6 +25,7 @@ profiles_path = Path(os.getenv("COPIA_PROFILES_PATH", PROJECT_ROOT / "profiles.j
 router = LLMRouter()
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}
+sessions = SessionsRepository(Path(os.getenv("COPIA_SESSIONS_PATH", "~/.copia/sessions")))
 
 app = FastAPI(title="Copia API", version="0.1.0")
 
@@ -55,6 +59,7 @@ class CreateAgentResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1)
+    config: AgentConfig | None = None
 
 
 class MessageResponse(BaseModel):
@@ -64,6 +69,17 @@ class MessageResponse(BaseModel):
 class CompletionRequest(BaseModel):
     config: CompletionConfig
     messages: list[ChatMessage] = Field(min_length=1)
+
+
+class CreateSessionRequest(BaseModel):
+    profile_name: str | None = None
+    config: AgentConfig | None = None
+
+    @model_validator(mode="after")
+    def require_one_source(self) -> "CreateSessionRequest":
+        if (self.profile_name is None) == (self.config is None):
+            raise ValueError("Provide exactly one of profile_name or config")
+        return self
 
 
 @app.get("/health")
@@ -132,10 +148,118 @@ async def send_message(agent_id: str, request: MessageRequest) -> MessageRespons
     return MessageResponse(response=response)
 
 
+@app.get("/sessions", response_model=list[ChatSessionSummary])
+def list_sessions() -> list[ChatSessionSummary]:
+    return sessions.list()
+
+
+@app.post("/sessions", response_model=ChatSession, status_code=status.HTTP_201_CREATED)
+def create_session(request: CreateSessionRequest) -> ChatSession:
+    try:
+        config = (
+            factory.profiles()[request.profile_name]
+            if request.profile_name is not None
+            else request.config
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown profile: {request.profile_name}") from error
+    assert config is not None
+    now = datetime.now(UTC)
+    session = ChatSession(
+        id=str(uuid.uuid4()),
+        config=config,
+        profile_name=request.profile_name,
+        created_at=now,
+        updated_at=now,
+    )
+    sessions.save(session)
+    return session
+
+
+@app.get("/sessions/{session_id}", response_model=ChatSession)
+def get_session(session_id: str) -> ChatSession:
+    session = sessions.load(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+    return session
+
+
+@app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
+async def send_session_message(session_id: str, request: MessageRequest, background_tasks: BackgroundTasks) -> MessageResponse:
+    session = get_session(session_id)
+    if request.config is not None and session.profile_name is None:
+        session.config = request.config
+    agent = Agent(config=session.config, router=router, history=session.messages)
+    try:
+        response = await run_in_threadpool(agent.ask, request.content)
+    except ProviderError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+
+    session.messages = agent.history
+    session.updated_at = datetime.now(UTC)
+    sessions.save(session)
+    if session.title is None:
+        background_tasks.add_task(generate_session_title, session.id)
+    return MessageResponse(response=response)
+
+
+@app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(session_id: str) -> None:
+    if not sessions.delete(session_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+
+
 @app.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_agent(agent_id: str) -> None:
     if agents.pop(agent_id, None) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown agent")
+
+
+def generate_session_title(session_id: str) -> None:
+    """Generate a title without adding title-generation messages to the chat history."""
+    session = sessions.load(session_id)
+    if session is None or session.title is not None or len(session.messages) < 2:
+        return
+    source = session.messages[:2]
+    title_request = ChatMessage(
+        role="user",
+        content=(
+            "Create a concise Russian title for this chat, between 2 and 6 words. "
+            "Describe the topic only.\n\n"
+            f"User: {source[0].content}\nAssistant: {source[1].content}"
+        ),
+    )
+    config = LLMConfig(
+        provider=session.config.provider,
+        model=session.config.model,
+        generation=GenerationConfig(max_output_tokens=32, temperature=0),
+        structured_output=StructuredOutputConfig(
+            schema={
+                "type": "object",
+                "properties": {"title": {"type": "string"}},
+                "required": ["title"],
+                "additionalProperties": False,
+            },
+            strict=True,
+        ),
+    )
+    try:
+        response = router.complete([title_request], config)
+    except ProviderError:
+        return
+    data = response.structured_data
+    title = data.get("title") if isinstance(data, dict) else None
+    if not isinstance(title, str):
+        return
+    normalized = " ".join(title.split())[:80]
+    if not normalized:
+        return
+    latest = sessions.load(session_id)
+    if latest is None or latest.title is not None:
+        return
+    latest.title = normalized
+    latest.updated_at = datetime.now(UTC)
+    sessions.save(latest)
 
 
 def run() -> None:
