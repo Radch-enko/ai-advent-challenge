@@ -8,7 +8,13 @@ from copia.api.service import agents, app, router
 
 def test_agent_lifecycle_via_api(monkeypatch) -> None:
     def complete(messages, config):
-        return LLMResponse(content="reply", provider=config.provider, model=config.model)
+        return LLMResponse(
+            content="reply",
+            provider=config.provider,
+            model=config.model,
+            usage={"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            context_window=400_000,
+        )
 
     monkeypatch.setattr(router, "complete", complete)
     agents.clear()
@@ -34,7 +40,13 @@ def test_create_agent_requires_exactly_one_source() -> None:
 
 def test_direct_completion_does_not_create_agent(monkeypatch) -> None:
     def complete(messages, config):
-        return LLMResponse(content="reply", provider=config.provider, model=config.model)
+        return LLMResponse(
+            content="reply",
+            provider=config.provider,
+            model=config.model,
+            usage={"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            context_window=400_000,
+        )
 
     monkeypatch.setattr(router, "complete", complete)
     agents.clear()
@@ -60,7 +72,13 @@ def test_session_survives_api_restart_and_generates_title(monkeypatch, tmp_path)
                 provider=config.provider,
                 model=config.model,
             )
-        return LLMResponse(content="reply", provider=config.provider, model=config.model)
+        return LLMResponse(
+            content="reply",
+            provider=config.provider,
+            model=config.model,
+            usage={"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            context_window=400_000,
+        )
 
     monkeypatch.setattr(router, "complete", complete)
     client = TestClient(app)
@@ -75,6 +93,12 @@ def test_session_survives_api_restart_and_generates_title(monkeypatch, tmp_path)
     monkeypatch.setattr(service, "sessions", restarted_repository)
     restored = client.get(f"/sessions/{session_id}")
     assert [message["content"] for message in restored.json()["messages"]] == ["Помоги спланировать поездку", "reply"]
+    assert restored.json()["messages"][1]["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }
+    assert restored.json()["messages"][1]["context_window"] == 400_000
     assert restored.json()["title"] == "План поездки"
     assert client.get("/sessions").json()[0]["id"] == session_id
 

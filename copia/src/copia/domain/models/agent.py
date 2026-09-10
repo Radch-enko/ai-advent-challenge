@@ -36,7 +36,12 @@ class Agent:
         except Exception:
             self._history.pop()
             raise
-        self._history.append(ChatMessage(role="assistant", content=response.content))
+        self._history.append(ChatMessage(
+            role="assistant",
+            content=response.content,
+            usage=response.usage,
+            context_window=response.context_window,
+        ))
         return response
 
     def _messages_for_request(self) -> list[ChatMessage]:

@@ -20,7 +20,14 @@ def test_openai_maps_common_configuration() -> None:
         structured_output=StructuredOutputConfig(schema={"type": "object"}),
     )
 
-    response = OpenAIProvider(api_key="key", client=client).complete([ChatMessage(role="user", content="Hello")], config)
+    response = OpenAIProvider(api_key="key", client=client).complete([
+        ChatMessage(
+            role="user",
+            content="Hello",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            context_window=100,
+        ),
+    ], config)
 
     assert captured["max_completion_tokens"] == 42
     assert captured["response_format"]["json_schema"]["schema"] == {"type": "object"}
@@ -28,6 +35,7 @@ def test_openai_maps_common_configuration() -> None:
     assert response.trace is not None
     assert response.trace.request_body == captured
     assert "name" not in response.trace.request_body
+    assert captured["messages"] == [{"role": "user", "content": "Hello"}]
 
 
 def test_openai_omits_sampling_for_gpt_five_models() -> None:

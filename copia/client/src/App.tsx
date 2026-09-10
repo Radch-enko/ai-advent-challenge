@@ -2,7 +2,7 @@ import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useSta
 import { ApiRequestError, ChatSession, ChatSessionSummary, createSession, createSessionFromProfile, deleteSession, getModels, getProfiles, getSession, getSessions, sendSessionMessageWithMeta } from './data/api/copiaApi'
 import { AgentConfig } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
-import { ChatMessage, RequestLog } from './domain/models/chat'
+import { ChatMessage, RequestLog, TokenUsage } from './domain/models/chat'
 import { RequestLogs } from './ui/components/RequestLogs'
 
 const providerModels: Record<Provider, string> = {
@@ -40,6 +40,12 @@ export function App() {
   const supportsSampling = supportsSamplingParameters(provider, model)
   const isProfileSession = activeSession?.profile_name != null
   const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
+  const latestUsage = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messages[index].role === 'assistant' && contextTokenCount(messages[index].usage) != null) return messages[index]
+    }
+    return null
+  }, [messages])
 
   useEffect(() => resizeTextArea(composerRef.current), [message])
   useEffect(() => { setModelsLoading(true); getModels(provider).then(setModels).catch(() => setModels([])).finally(() => setModelsLoading(false)) }, [provider])
@@ -110,6 +116,8 @@ export function App() {
           content: response.response.content,
           timestamp: now(),
           log,
+          usage: response.response.usage,
+          contextWindow: response.response.context_window,
         }])
         if (sessionConfig) setActiveSession((current) => current ? { ...current, config: sessionConfig } : current)
       }
@@ -148,7 +156,14 @@ export function App() {
     activeSessionIdRef.current = session.id
     localStorage.setItem('copia.activeSessionId', session.id)
     if (session.profile_name == null) applyConfig(session.config)
-    setMessages(session.messages.map((item, index) => ({ id: index, role: item.role, content: item.content, timestamp: '' })))
+    setMessages(session.messages.map((item, index) => ({
+      id: index,
+      role: item.role,
+      content: item.content,
+      timestamp: '',
+      usage: item.usage,
+      contextWindow: item.context_window,
+    })))
     setActiveLog(null)
     void refreshSessions()
   }
@@ -208,7 +223,11 @@ export function App() {
             {entry.role !== 'user' && <span className="avatar">{entry.role === 'error' ? '!' : activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span>}
             <div className="message-body">
               <div className="markdown"><Markdown content={entry.content} /></div>
-              {(entry.timestamp || entry.log) && <footer>{entry.timestamp && <span>{entry.timestamp}</span>}{entry.log && <button onClick={() => { setActiveLog(entry.log ?? null); setLogTab('request') }}>Логи</button>}</footer>}
+              {(entry.timestamp || entry.log || entry.usage) && <footer>
+                {entry.timestamp && <span>{entry.timestamp}</span>}
+                {entry.usage && <TokenUsageSummary usage={entry.usage} />}
+                {entry.log && <button onClick={() => { setActiveLog(entry.log ?? null); setLogTab('request') }}>Логи</button>}
+              </footer>}
             </div>
           </article>)}
           {isLoading && <article className="message assistant loading"><span className="avatar">{activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span><div className="message-body"><p><i /><i /><i /></p><footer>Loading…</footer></div></article>}
@@ -222,7 +241,10 @@ export function App() {
             onTopP={setTopP} onStructuredOutput={setStructuredOutput} onSchema={setSchema}
           /></div>}
           <form className="composer" ref={formRef} onSubmit={submit}>
-            <span className="model-chip">{isProfileSession ? activeSession?.config.name : model}</span><span className="composer-divider" />
+            <span className="model-indicator" title={contextUsageLabel(latestUsage?.usage, latestUsage?.contextWindow)}>
+              <span className="model-chip">{isProfileSession ? activeSession?.config.name : model}</span>
+              {latestUsage?.usage && <ContextProgress usage={latestUsage.usage} contextWindow={latestUsage.contextWindow} />}
+            </span><span className="composer-divider" />
             {!isProfileSession && <button type="button" className={`tune ${settingsOpen ? 'active' : ''}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setSettingsOpen((open) => !open)} aria-label="Request settings">☷</button>}
             <textarea ref={composerRef} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => handleComposerKeyDown(event, formRef.current)} placeholder="Напишите сообщение Copia…" rows={1} disabled={isLoading} />
             <button className="send" type="submit" disabled={isLoading || !message.trim()} aria-label="Send">↑</button>
@@ -233,6 +255,21 @@ export function App() {
       {activeLog && <RequestLogs log={activeLog} tab={logTab} onTab={setLogTab} onClose={() => setActiveLog(null)} />}
     </main>
   )
+}
+
+function TokenUsageSummary({ usage }: { usage: TokenUsage }) {
+  return <span className="token-usage">
+    Input {formatTokens(usage.prompt_tokens)} · Output {formatTokens(usage.completion_tokens)} · Total {formatTokens(usage.total_tokens)}
+  </span>
+}
+
+function ContextProgress({ usage, contextWindow }: { usage: TokenUsage; contextWindow?: number | null }) {
+  const used = contextTokenCount(usage) ?? 0
+  if (!contextWindow) return null
+  const percentage = Math.min(100, used / contextWindow * 100)
+  const level = percentage >= 95 ? 'critical' : percentage >= 80 ? 'warning' : ''
+  const label = `${formatTokens(used)} / ${formatTokens(contextWindow)} · ${formatPercentage(percentage)}`
+  return <span className={`context-progress ${level}`} role="progressbar" aria-label={`Заполнение контекстного окна: ${label}`} aria-valuemin={0} aria-valuemax={contextWindow} aria-valuenow={Math.min(used, contextWindow)}><i style={{ width: `${percentage}%` }} /></span>
 }
 
 type SettingsProps = {
@@ -345,6 +382,22 @@ function inlineMarkdown(value: string): ReactNode[] {
 }
 
 function now() { return `Сегодня, ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date())}` }
+
+function formatTokens(value?: number) { return value == null ? '—' : new Intl.NumberFormat('ru-RU').format(value) }
+
+function formatPercentage(value: number) { return `${value < 0.1 && value > 0 ? value.toFixed(2) : value.toFixed(1)}%` }
+
+function contextTokenCount(usage?: TokenUsage | null) {
+  if (!usage) return undefined
+  if (usage.prompt_tokens != null && usage.completion_tokens != null) return usage.prompt_tokens + usage.completion_tokens
+  return usage.total_tokens
+}
+
+function contextUsageLabel(usage?: TokenUsage | null, contextWindow?: number | null) {
+  const used = contextTokenCount(usage)
+  if (used == null || !contextWindow) return undefined
+  return `${formatTokens(used)} / ${formatTokens(contextWindow)} · ${formatPercentage(Math.min(100, used / contextWindow * 100))}`
+}
 
 function resizeTextArea(element: HTMLTextAreaElement | null) {
   if (!element) return

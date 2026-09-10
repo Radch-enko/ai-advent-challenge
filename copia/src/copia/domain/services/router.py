@@ -3,6 +3,7 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 from ..models.config import ChatMessage, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName
+from ...data.model_catalog import context_window_for
 from ...data.providers.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
 
 
@@ -21,7 +22,9 @@ class LLMRouter:
             provider = self._providers[config.provider]
         except KeyError as error:
             raise ProviderError(f"Unsupported provider: {config.provider.value}") from error
-        return provider.complete(messages, config)
+        response = provider.complete(messages, config)
+        response.context_window = context_window_for(config.provider, config.model)
+        return response
 
     def capabilities(self, provider_name: ProviderName) -> ProviderCapabilities:
         try:
@@ -31,6 +34,9 @@ class LLMRouter:
 
     def models(self, provider_name: ProviderName) -> list[ProviderModel]:
         try:
-            return self._providers[provider_name].list_models()
+            models = self._providers[provider_name].list_models()
+            for model in models:
+                model.context_window = context_window_for(provider_name, model.id)
+            return models
         except KeyError as error:
             raise ProviderError(f"Unsupported provider: {provider_name.value}") from error

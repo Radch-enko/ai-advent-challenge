@@ -50,11 +50,14 @@ class CompletionConfig(LLMConfig):
 
 class ProviderModel(BaseModel):
     id: str
+    context_window: int | None = None
 
 
 class ChatMessage(BaseModel):
     role: str = Field(pattern="^(system|user|assistant)$")
     content: str
+    usage: dict[str, int] | None = None
+    context_window: int | None = Field(default=None, gt=0)
 
 
 class ProviderTrace(BaseModel):
@@ -68,6 +71,7 @@ class LLMResponse(BaseModel):
     provider: ProviderName
     model: str
     usage: dict[str, int] | None = None
+    context_window: int | None = Field(default=None, gt=0)
     structured_data: dict[str, Any] | list[Any] | None = None
     trace: ProviderTrace | None = None
 

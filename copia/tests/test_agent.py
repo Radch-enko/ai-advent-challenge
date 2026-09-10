@@ -11,7 +11,13 @@ class FakeRouter:
 
     def complete(self, messages, config):
         self.requests.append((messages, config))
-        return LLMResponse(content=f"answer: {messages[-1].content}", provider=config.provider, model=config.model)
+        return LLMResponse(
+            content=f"answer: {messages[-1].content}",
+            provider=config.provider,
+            model=config.model,
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            context_window=100,
+        )
 
 
 def config(name: str = "test") -> AgentConfig:
@@ -29,6 +35,8 @@ def test_agents_keep_independent_history() -> None:
     assert [message.content for message in first.history] == ["first message", "answer: first message"]
     assert [message.content for message in second.history] == ["second message", "answer: second message"]
     assert [message.content for message in router.requests[0][0]] == ["system", "first message"]
+    assert first.history[-1].usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert first.history[-1].context_window == 100
 
 
 def test_factory_loads_profiles(tmp_path: Path) -> None:

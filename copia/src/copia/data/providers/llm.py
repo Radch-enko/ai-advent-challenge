@@ -72,7 +72,7 @@ class OpenAIProvider(LLMProvider):
 
         request: dict[str, Any] = {
             "model": config.model,
-            "messages": [message.model_dump() for message in messages],
+            "messages": [message.model_dump(include={"role", "content"}) for message in messages],
         }
         generation = config.generation
         if generation.max_output_tokens is not None:
@@ -207,7 +207,7 @@ class GigaChatProvider(LLMProvider):
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": config.model,
-            "messages": [message.model_dump() for message in messages],
+            "messages": [message.model_dump(include={"role", "content"}) for message in messages],
         }
         generation = config.generation
         if generation.max_output_tokens is not None:

@@ -1,4 +1,5 @@
 import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
+import { TokenUsage } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
 
 export type { AgentConfig, CompletionConfig, Provider, ProviderModel }
@@ -8,6 +9,8 @@ export type ChatResponse = {
     content: string
     provider: Provider
     model: string
+    usage?: TokenUsage | null
+    context_window?: number | null
     trace?: {
       status_code: number
       request_body: Record<string, unknown>
@@ -18,7 +21,12 @@ export type ChatResponse = {
 
 export type ApiResult<T> = { data: T; status: number }
 
-export type StoredMessage = { role: 'user' | 'assistant'; content: string }
+export type StoredMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  usage?: TokenUsage | null
+  context_window?: number | null
+}
 export type ChatSession = {
   id: string
   title: string | null
