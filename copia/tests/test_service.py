@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
-from copia.domain.models.config import LLMResponse
+from copia.domain.models.config import ChatMessage, LLMResponse, ProviderName, ProviderTrace
+from copia.data.providers.llm import ProviderError
 from copia.data.sessions_repository import SessionsRepository
 from copia.api import service
 from copia.api.service import agents, app, router
@@ -126,3 +127,103 @@ def test_regular_session_accepts_new_config_and_can_be_deleted(monkeypatch, tmp_
     assert seen_models[0] == "second-model"
     assert client.delete(f"/sessions/{session_id}").status_code == 204
     assert client.get(f"/sessions/{session_id}").status_code == 404
+
+
+def test_profile_session_can_override_context_management_without_changing_profile(monkeypatch, tmp_path) -> None:
+    repository = SessionsRepository(tmp_path / "sessions")
+    monkeypatch.setattr(service, "sessions", repository)
+    client = TestClient(app)
+    created = client.post("/sessions", json={"profile_name": "planner"})
+    session_id = created.json()["id"]
+
+    updated = client.patch(f"/sessions/{session_id}/context-management", json={"enabled": False})
+
+    assert updated.status_code == 200
+    assert updated.json()["config"]["context_management"]["enabled"] is False
+    assert repository.load(session_id).config.context_management.enabled is False  # type: ignore[union-attr]
+    assert client.get("/profiles").json()["planner"]["context_management"]["enabled"] is True
+
+
+def test_failed_session_summarization_is_persisted_and_retry_resumes_turn(monkeypatch, tmp_path) -> None:
+    repository = SessionsRepository(tmp_path / "sessions")
+    monkeypatch.setattr(service, "sessions", repository)
+    summary_attempts = 0
+
+    def complete(messages, config):
+        nonlocal summary_attempts
+        if config.model == "summary-model":
+            summary_attempts += 1
+            if summary_attempts == 1:
+                raise ProviderError(
+                    "summary unavailable",
+                    status_code=503,
+                    request_body={"model": config.model},
+                    response_body={"error": "unavailable"},
+                )
+            return LLMResponse(
+                content="compressed facts",
+                provider=ProviderName.OPENAI,
+                model=config.model,
+                usage={"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24},
+                trace=ProviderTrace(
+                    status_code=200,
+                    request_body={"model": config.model},
+                    response_body={"summary": "compressed facts"},
+                ),
+            )
+        return LLMResponse(content="reply", provider=config.provider, model=config.model)
+
+    monkeypatch.setattr(router, "complete", complete)
+    client = TestClient(app)
+    config = {
+        "name": "Copia",
+        "provider": "openai",
+        "model": "main-model",
+        "context_management": {
+            "recent_exchange_limit": 1,
+            "summary_batch_exchange_count": 1,
+            "summarizer": {
+                "provider": "openai",
+                "model": "summary-model",
+                "prompt": "summary system",
+            },
+        },
+    }
+    created = client.post("/sessions", json={"config": config})
+    session_id = created.json()["id"]
+    session = repository.load(session_id)
+    assert session is not None
+    session.title = "Compression test"
+    session.messages = [
+        ChatMessage(role="user", content="old user"),
+        ChatMessage(role="assistant", content="old answer"),
+        ChatMessage(role="user", content="recent user"),
+        ChatMessage(role="assistant", content="recent answer"),
+    ]
+    repository.save(session)
+
+    failed = client.post(f"/sessions/{session_id}/messages", json={"content": "new question"})
+
+    assert failed.status_code == 502
+    assert failed.json()["detail"]["code"] == "summarization_failed"
+    restored = repository.load(session_id)
+    assert restored is not None
+    assert restored.messages[-1].content == "new question"
+    assert restored.context.events[-1].status == "failed"
+    assert restored.context.events[-1].trace.status_code == 503  # type: ignore[union-attr]
+
+    blocked = client.post(f"/sessions/{session_id}/messages", json={"content": "another question"})
+    assert blocked.status_code == 409
+
+    retried = client.post(f"/sessions/{session_id}/summarization/retry")
+
+    assert retried.status_code == 200
+    assert retried.json()["response"]["content"] == "reply"
+    assert retried.json()["summarization_events"][0]["status"] == "completed"
+    restored = repository.load(session_id)
+    assert restored is not None
+    assert [message.content for message in restored.messages].count("new question") == 1
+    assert restored.messages[-1].content == "reply"
+    assert restored.context.summary == "compressed facts"
+    assert restored.context.summarized_message_count == 2
+    assert restored.context.events[-1].status == "completed"

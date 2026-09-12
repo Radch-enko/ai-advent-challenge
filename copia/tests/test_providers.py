@@ -9,7 +9,7 @@ def test_openai_maps_common_configuration() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(__import__("json").loads(request.content))
-        return httpx.Response(200, json={"model": "test-model", "choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}})
+        return httpx.Response(200, json={"model": "test-model", "choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5, "prompt_tokens_details": {"cached_tokens": 1}}})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     config = AgentConfig(
@@ -36,6 +36,12 @@ def test_openai_maps_common_configuration() -> None:
     assert response.trace.request_body == captured
     assert "name" not in response.trace.request_body
     assert captured["messages"] == [{"role": "user", "content": "Hello"}]
+    assert response.usage == {
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "total_tokens": 5,
+        "cached_prompt_tokens": 1,
+    }
 
 
 def test_openai_omits_sampling_for_gpt_five_models() -> None:
@@ -75,7 +81,12 @@ def test_gigachat_reuses_access_token() -> None:
             json={
                 "model": "GigaChat",
                 "choices": [{"message": {"content": "Hello"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                "usage": {
+                    "prompt_tokens": 1,
+                    "precached_prompt_tokens": 7,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
             },
         )
 
@@ -90,3 +101,9 @@ def test_gigachat_reuses_access_token() -> None:
     assert response.trace is not None
     assert response.trace.status_code == 200
     assert response.trace.request_body["model"] == "GigaChat"
+    assert response.usage == {
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "total_tokens": 2,
+        "cached_prompt_tokens": 7,
+    }

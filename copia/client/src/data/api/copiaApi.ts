@@ -1,5 +1,5 @@
 import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
-import { TokenUsage } from '../../domain/models/chat'
+import { SummarizationEvent, TokenUsage } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
 
 export type { AgentConfig, CompletionConfig, Provider, ProviderModel }
@@ -11,12 +11,9 @@ export type ChatResponse = {
     model: string
     usage?: TokenUsage | null
     context_window?: number | null
-    trace?: {
-      status_code: number
-      request_body: Record<string, unknown>
-      response_body: Record<string, unknown>
-    }
+    trace?: SummarizationEvent['trace']
   }
+  summarization_events: SummarizationEvent[]
 }
 
 export type ApiResult<T> = { data: T; status: number }
@@ -33,6 +30,11 @@ export type ChatSession = {
   profile_name: string | null
   config: AgentConfig
   messages: StoredMessage[]
+  context: {
+    summary: string
+    summarized_message_count: number
+    events: SummarizationEvent[]
+  }
   created_at: string
   updated_at: string
 }
@@ -49,6 +51,13 @@ export class ApiRequestError extends Error {
     return typeof detail === 'object' && detail !== null && 'provider_trace' in detail
       ? detail.provider_trace as ChatResponse['response']['trace']
       : undefined
+  }
+
+  get summarizationEvent(): SummarizationEvent | undefined {
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) return undefined
+    const detail = this.body.detail
+    if (typeof detail !== 'object' || detail === null || !('summarization_event' in detail)) return undefined
+    return detail.summarization_event as SummarizationEvent
   }
 }
 
@@ -126,6 +135,12 @@ export function createSession(config: AgentConfig): Promise<ChatSession> {
 export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
   return request('/sessions', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
 }
+export function updateSessionContextManagement(sessionId: string, enabled: boolean): Promise<ChatSession> {
+  return request(`/sessions/${sessionId}/context-management`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
 export function deleteSession(sessionId: string): Promise<void> {
   return fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).then((response) => {
     if (!response.ok) throw new Error(`Could not delete session: ${response.status}`)
@@ -133,4 +148,7 @@ export function deleteSession(sessionId: string): Promise<void> {
 }
 export function sendSessionMessageWithMeta(sessionId: string, content: string, config?: AgentConfig): Promise<ApiResult<ChatResponse>> {
   return requestWithMeta(`/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ content, config }) })
+}
+export function retrySessionSummarizationWithMeta(sessionId: string): Promise<ApiResult<ChatResponse>> {
+  return requestWithMeta(`/sessions/${sessionId}/summarization/retry`, { method: 'POST' })
 }

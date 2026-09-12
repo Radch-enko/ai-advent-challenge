@@ -123,6 +123,9 @@ class OpenAIProvider(LLMProvider):
                 key: value for key, value in raw_usage.items()
                 if key in {"prompt_tokens", "completion_tokens", "total_tokens"} and isinstance(value, int)
             }
+            prompt_details = raw_usage.get("prompt_tokens_details")
+            if isinstance(prompt_details, dict) and isinstance(prompt_details.get("cached_tokens"), int):
+                usage["cached_prompt_tokens"] = prompt_details["cached_tokens"]
         return LLMResponse(
             content=content,
             provider=ProviderName.OPENAI,
@@ -257,6 +260,8 @@ class GigaChatProvider(LLMProvider):
                 if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
                 and isinstance(value, int)
             }
+            if isinstance(raw_usage.get("precached_prompt_tokens"), int):
+                usage["cached_prompt_tokens"] = raw_usage["precached_prompt_tokens"]
         return LLMResponse(
             content=content,
             provider=ProviderName.GIGACHAT,

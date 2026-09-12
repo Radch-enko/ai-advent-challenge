@@ -13,9 +13,9 @@ from pydantic import BaseModel, Field, model_validator
 from ..data.providers.llm import ProviderError
 from ..data.profiles_repository import ProfilesRepository
 from ..data.sessions_repository import SessionsRepository
-from ..domain.models.agent import Agent, AgentFactory
+from ..domain.models.agent import Agent, AgentFactory, SummarizationFailed, SummarizationRetryRequired
 from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, GenerationConfig, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, StructuredOutputConfig
-from ..domain.models.session import ChatSession, ChatSessionSummary
+from ..domain.models.session import ChatSession, ChatSessionSummary, SummarizationEvent
 from ..domain.services.router import LLMRouter
 
 load_dotenv()
@@ -62,8 +62,13 @@ class MessageRequest(BaseModel):
     config: AgentConfig | None = None
 
 
+class ContextManagementUpdate(BaseModel):
+    enabled: bool
+
+
 class MessageResponse(BaseModel):
     response: LLMResponse
+    summarization_events: list[SummarizationEvent] = Field(default_factory=list)
 
 
 class CompletionRequest(BaseModel):
@@ -184,23 +189,69 @@ def get_session(session_id: str) -> ChatSession:
     return session
 
 
+@app.patch("/sessions/{session_id}/context-management", response_model=ChatSession)
+def update_session_context_management(session_id: str, request: ContextManagementUpdate) -> ChatSession:
+    session = get_session(session_id)
+    session.config.context_management.enabled = request.enabled
+    session.updated_at = datetime.now(UTC)
+    sessions.save(session)
+    return session
+
+
 @app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
 async def send_session_message(session_id: str, request: MessageRequest, background_tasks: BackgroundTasks) -> MessageResponse:
     session = get_session(session_id)
     if request.config is not None and session.profile_name is None:
         session.config = request.config
-    agent = Agent(config=session.config, router=router, history=session.messages)
+    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context)
     try:
         response = await run_in_threadpool(agent.ask, request.content)
+    except SummarizationFailed as error:
+        _save_agent_state(session, agent)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": str(error),
+                "code": "summarization_failed",
+                "summarization_event": error.event.model_dump(mode="json"),
+            },
+        ) from error
+    except SummarizationRetryRequired as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except ProviderError as error:
+        _save_agent_state(session, agent)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
 
-    session.messages = agent.history
-    session.updated_at = datetime.now(UTC)
-    sessions.save(session)
+    _save_agent_state(session, agent)
     if session.title is None:
         background_tasks.add_task(generate_session_title, session.id)
-    return MessageResponse(response=response)
+    return MessageResponse(response=response, summarization_events=agent.operation_events)
+
+
+@app.post("/sessions/{session_id}/summarization/retry", response_model=MessageResponse)
+async def retry_session_summarization(session_id: str) -> MessageResponse:
+    session = get_session(session_id)
+    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context)
+    try:
+        response = await run_in_threadpool(agent.retry_summarization)
+    except SummarizationFailed as error:
+        _save_agent_state(session, agent)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": str(error),
+                "code": "summarization_failed",
+                "summarization_event": error.event.model_dump(mode="json"),
+            },
+        ) from error
+    except SummarizationRetryRequired as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ProviderError as error:
+        _save_agent_state(session, agent)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+
+    _save_agent_state(session, agent)
+    return MessageResponse(response=response, summarization_events=agent.operation_events)
 
 
 @app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -260,6 +311,13 @@ def generate_session_title(session_id: str) -> None:
     latest.title = normalized
     latest.updated_at = datetime.now(UTC)
     sessions.save(latest)
+
+
+def _save_agent_state(session: ChatSession, agent: Agent) -> None:
+    session.messages = agent.history
+    session.context = agent.context
+    session.updated_at = datetime.now(UTC)
+    sessions.save(session)
 
 
 def run() -> None:
