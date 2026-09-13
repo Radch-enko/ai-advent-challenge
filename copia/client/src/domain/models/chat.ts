@@ -46,3 +46,19 @@ export type SummarizationEvent = {
   created_at: string
   updated_at: string
 }
+
+export type FactsUpdateEvent = {
+  id: string
+  status: 'completed' | 'failed'
+  after_message_index: number
+  updates: Record<string, string>
+  deletions: string[]
+  provider: string
+  model: string
+  duration_seconds: number
+  usage?: TokenUsage | null
+  trace?: ProviderTrace | null
+  error?: string | null
+  created_at: string
+  updated_at: string
+}

@@ -1,8 +1,8 @@
 import { FormEvent, Fragment, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiRequestError, ChatSession, ChatSessionSummary, createSession, createSessionFromProfile, deleteSession, getModels, getProfiles, getSession, getSessions, retrySessionSummarizationWithMeta, sendSessionMessageWithMeta, updateSessionContextManagement } from './data/api/copiaApi'
-import { AgentConfig, ContextManagementConfig } from './domain/models/agent'
+import { ApiRequestError, ChatSession, ChatSessionSummary, createSession, createSessionFromProfile, deleteSession, forkSession, getModels, getProfiles, getSession, getSessionFacts, getSessions, retrySessionSummarizationWithMeta, sendSessionMessageWithMeta, updateSessionContextManagement } from './data/api/copiaApi'
+import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
-import { ChatMessage, RequestLog, SummarizationEvent, TokenUsage } from './domain/models/chat'
+import { ChatMessage, FactsUpdateEvent, RequestLog, SummarizationEvent, TokenUsage } from './domain/models/chat'
 import { RequestLogs } from './ui/components/RequestLogs'
 
 const providerModels: Record<Provider, string> = {
@@ -34,10 +34,21 @@ Rules:
 - Do not answer the conversation or address the user.
 - Write in the primary language of the conversation.
 - Return only the updated summary, without introductory text.`
+const defaultFactsPrompt = `Update persistent key-value facts from the latest user message.
+
+Store only information that may affect future responses: user goals, constraints,
+preferences, decisions, agreements, dates, quantities, identifiers, and corrections.
+
+Return only changes. Use updates to add or replace facts and deletions only when the user
+explicitly makes a fact obsolete. Use English snake_case keys and string values in the
+user's language. Do not store assistant suggestions without explicit user confirmation,
+small talk, transient questions, assumptions, or general knowledge. Do not invent facts.`
 
 function defaultContextManagement(provider: Provider, model: string): ContextManagementConfig {
   return {
     enabled: true,
+    strategy: 'sliding_window',
+    recent_message_limit: 10,
     recent_exchange_limit: 10,
     summary_batch_exchange_count: 10,
     summarizer: {
@@ -45,6 +56,12 @@ function defaultContextManagement(provider: Provider, model: string): ContextMan
       model,
       prompt: defaultSummaryPrompt,
       generation: { max_output_tokens: 512, temperature: 0.2, top_p: 1 },
+    },
+    facts_updater: {
+      provider,
+      model,
+      prompt: defaultFactsPrompt,
+      generation: { max_output_tokens: 512, temperature: 0, top_p: 1 },
     },
   }
 }
@@ -65,6 +82,11 @@ export function App() {
   const [message, setMessage] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>(starterMessages)
   const [summarizationEvents, setSummarizationEvents] = useState<SummarizationEvent[]>([])
+  const [factsEvents, setFactsEvents] = useState<FactsUpdateEvent[]>([])
+  const [facts, setFacts] = useState<Record<string, string>>({})
+  const [forkingMessageIndex, setForkingMessageIndex] = useState<number | null>(null)
+  const [forkError, setForkError] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('copia.sidebarCollapsed') === 'true')
   const [pendingSessionIds, setPendingSessionIds] = useState<string[]>([])
   const [summarizingSessionIds, setSummarizingSessionIds] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -85,10 +107,23 @@ export function App() {
   const summarizerProvider = contextManagement.summarizer.provider ?? provider
   const summarizerModel = contextManagement.summarizer.model ?? model
   const summarizerSupportsSampling = supportsSamplingParameters(summarizerProvider, summarizerModel)
+  const factsProvider = contextManagement.facts_updater.provider ?? provider
+  const factsModel = contextManagement.facts_updater.model ?? model
+  const [factsModels, setFactsModels] = useState<ProviderModel[]>([])
+  const [factsModelsLoading, setFactsModelsLoading] = useState(false)
+  const factsSupportsSampling = supportsSamplingParameters(factsProvider, factsModel)
   const isProfileSession = activeSession?.profile_name != null
   const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
   const isSummarizing = activeSession != null && summarizingSessionIds.includes(activeSession.id)
-  const failedSummarization = [...summarizationEvents].reverse().find((event) => event.status === 'failed')
+  const effectiveContextManagement = isProfileSession && activeSession
+    ? activeSession.config.context_management
+    : contextManagement
+  const failedSummarization = effectiveContextManagement.strategy === 'summary'
+    ? [...summarizationEvents].reverse().find((event) => event.status === 'failed')
+    : undefined
+  const contextWindowStart = effectiveContextManagement.strategy === 'sliding_window' || effectiveContextManagement.strategy === 'sticky_facts'
+    ? Math.max(0, transcriptLength(messages) - effectiveContextManagement.recent_message_limit)
+    : null
   const latestUsage = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index--) {
       if (messages[index].role === 'assistant' && contextTokenCount(messages[index].usage) != null) return messages[index]
@@ -99,6 +134,7 @@ export function App() {
   useEffect(() => resizeTextArea(composerRef.current), [message])
   useEffect(() => { setModelsLoading(true); getModels(provider).then(setModels).catch(() => setModels([])).finally(() => setModelsLoading(false)) }, [provider])
   useEffect(() => { setSummarizerModelsLoading(true); getModels(summarizerProvider).then(setSummarizerModels).catch(() => setSummarizerModels([])).finally(() => setSummarizerModelsLoading(false)) }, [summarizerProvider])
+  useEffect(() => { setFactsModelsLoading(true); getModels(factsProvider).then(setFactsModels).catch(() => setFactsModels([])).finally(() => setFactsModelsLoading(false)) }, [factsProvider])
   useEffect(() => { getProfiles().then(setProfiles).catch(() => setProfiles({})) }, [])
   useEffect(() => { void restoreSession() }, [])
 
@@ -179,6 +215,10 @@ export function App() {
         if (response.summarization_events.length) {
           setSummarizationEvents((current) => upsertSummarizationEvents(current, response.summarization_events))
         }
+        if (response.facts_events.length) {
+          setFactsEvents((current) => upsertFactsEvents(current, response.facts_events))
+        }
+        setFacts(response.facts)
         setMessages((current) => [...current, {
           id: Date.now() + 1,
           role: 'assistant',
@@ -197,6 +237,7 @@ export function App() {
       const content = error instanceof Error ? error.message : 'Unexpected error'
       const apiError = error instanceof ApiRequestError ? error : null
       const summaryEvent = apiError?.summarizationEvent
+      const factsEvent = apiError?.factsEvent
       const trace = apiError?.providerTrace
       const log: RequestLog = {
         provider: activeSession?.config.provider ?? configForLog?.provider ?? provider,
@@ -209,6 +250,26 @@ export function App() {
       if (summaryEvent && activeSessionIdRef.current === session?.id) {
         setSummarizationEvents((current) => upsertSummarizationEvents(current, [summaryEvent]))
         void refreshSessions()
+      } else if (factsEvent && activeSessionIdRef.current === session?.id) {
+        setMessages((current) => [
+          ...current.map((entry) => entry.role === 'user' && entry.transcriptIndex === factsEvent.after_message_index
+            ? { ...entry, transcriptIndex: undefined }
+            : entry),
+          {
+            id: Date.now() + 2,
+            role: 'error',
+            content,
+            timestamp: now(),
+            log: {
+              provider: factsEvent.provider,
+              model: factsEvent.model,
+              status: factsEvent.trace?.status_code ?? apiError?.status ?? 0,
+              duration: `${factsEvent.duration_seconds.toFixed(2)}s`,
+              request: factsEvent.trace?.request_body ?? requestForLog,
+              response: factsEvent.trace?.response_body ?? { error: content },
+            },
+          },
+        ])
       } else if (activeSessionIdRef.current === session?.id) {
         setMessages((current) => [...current, { id: Date.now() + 2, role: 'error', content, timestamp: now(), log }])
       }
@@ -302,7 +363,13 @@ export function App() {
       transcriptIndex: index,
     })))
     setSummarizationEvents(session.context.events)
+    setFactsEvents(session.context.facts_events ?? [])
+    setFacts({})
+    void getSessionFacts(session.id).then((loadedFacts) => {
+      if (activeSessionIdRef.current === session.id) setFacts(loadedFacts)
+    }).catch(() => {})
     setProfileSettingsError(null)
+    setForkError(null)
     setActiveLog(null)
     void refreshSessions()
   }
@@ -337,7 +404,10 @@ export function App() {
     localStorage.removeItem('copia.activeSessionId')
     setMessages(starterMessages)
     setSummarizationEvents([])
+    setFactsEvents([])
+    setFacts({})
     setProfileSettingsError(null)
+    setForkError(null)
     setActiveLog(null)
   }
 
@@ -347,13 +417,13 @@ export function App() {
     await refreshSessions()
   }
 
-  async function setProfileSummarization(enabled: boolean) {
+  async function setProfileContextManagement(value: ContextManagementConfig) {
     const session = activeSession
     if (!session || session.profile_name == null || profileSettingsSaving) return
     setProfileSettingsSaving(true)
     setProfileSettingsError(null)
     try {
-      const updated = await updateSessionContextManagement(session.id, enabled)
+      const updated = await updateSessionContextManagement(session.id, value)
       if (activeSessionIdRef.current === session.id) setActiveSession(updated)
       await refreshSessions()
     } catch (error) {
@@ -363,28 +433,58 @@ export function App() {
     }
   }
 
+  async function forkFromMessage(messageIndex: number) {
+    const session = activeSession
+    if (!session || isLoading || forkingMessageIndex != null) return
+    setForkingMessageIndex(messageIndex)
+    setForkError(null)
+    try {
+      openSession(await forkSession(session.id, messageIndex))
+    } catch (error) {
+      setForkError(error instanceof Error ? error.message : 'Не удалось создать ветку')
+    } finally {
+      setForkingMessageIndex(null)
+    }
+  }
+
+  function setSidebarVisibility(collapsed: boolean) {
+    setSidebarCollapsed(collapsed)
+    localStorage.setItem('copia.sidebarCollapsed', String(collapsed))
+  }
+
   return (
-    <main className={`app-shell ${activeLog ? 'has-logs' : ''}`}>
-      <aside className="sidebar">
-        <div className="brand"><div className="brand-mark">◇</div><strong>Copia</strong></div>
+    <main className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${activeLog ? 'has-logs' : ''}`}>
+      {!sidebarCollapsed && <aside className="sidebar">
+        <div className="brand"><div className="brand-mark">◇</div><strong>Copia</strong><button type="button" className="sidebar-collapse" aria-label="Скрыть навигацию" title="Скрыть навигацию" onClick={() => setSidebarVisibility(true)}>‹</button></div>
         <nav className="primary-nav">
           <button className={`new-chat ${mode === 'chat' ? 'active' : ''}`} onClick={startNewChat}><b>＋</b> Новый чат</button>
           <button className={`agents-nav ${mode === 'agents' ? 'active' : ''}`} onClick={() => setMode('agents')}>Агенты</button>
           <div className="saved-chats">{savedSessions.map((session) => <div className="saved-chat" key={session.id}><button className={session.id === activeSession?.id ? 'active' : ''} onClick={() => void getSession(session.id).then(openSession)}>{session.title ?? 'Новый чат'}</button><button className="delete-chat" aria-label="Удалить чат" onClick={() => void removeSession(session.id)}>×</button></div>)}</div>
         </nav>
-      </aside>
+      </aside>}
+      {sidebarCollapsed && <button type="button" className="sidebar-bubble" aria-label="Показать навигацию" title="Показать навигацию" onClick={() => setSidebarVisibility(false)}>›</button>}
 
       <section className="chat-stage">
         {mode === 'agents' ? <Agents profiles={profiles} onLaunch={async (profile) => { openSession(await createSessionFromProfile(profile)); setMode('chat') }} onCreate={async (config) => { openSession(await createSession(config)); setMode('chat') }} /> : <>
         <div className="messages-scroll" aria-live="polite"><div className="message-list">
-          {messages.map((entry) => <Fragment key={entry.id}><article className={`message ${entry.role}`}>
+          {messages.map((entry) => <Fragment key={entry.id}>
+            {contextWindowStart != null && entry.transcriptIndex === contextWindowStart && contextWindowStart > 0 && <div className="context-window-boundary"><span>{effectiveContextManagement.strategy === 'sticky_facts' ? 'Sticky Facts' : 'Sliding Window'} · последние {effectiveContextManagement.recent_message_limit} сообщений</span></div>}
+            <article className={`message ${entry.role}`}>
               {entry.role !== 'user' && <span className="avatar">{entry.role === 'error' ? '!' : activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span>}
               <div className="message-body">
                 <div className="markdown"><Markdown content={entry.content} /></div>
-                {(entry.timestamp || entry.log || entry.usage) && <footer>
+                {(entry.timestamp || entry.log || entry.usage || (effectiveContextManagement.strategy === 'branching' && activeSession && entry.transcriptIndex != null)) && <footer>
                   {entry.timestamp && <span>{entry.timestamp}</span>}
                   {entry.usage && <TokenUsageSummary usage={entry.usage} />}
                   {entry.log && <button onClick={() => { setActiveLog(entry.log ?? null); setLogTab('request') }}>Логи</button>}
+                  {effectiveContextManagement.strategy === 'branching' && activeSession && entry.transcriptIndex != null && <button
+                    type="button"
+                    className="fork-message"
+                    aria-label="Создать ветку с этого сообщения"
+                    title="Создать ветку с этого сообщения"
+                    disabled={isLoading || forkingMessageIndex != null}
+                    onClick={() => void forkFromMessage(entry.transcriptIndex!)}
+                  ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v7a4 4 0 0 0 4 4h4m0 0-3-3m3 3-3 3M6 10h5a4 4 0 0 0 4-4V3m0 0-3 3m3-3 3 3" /></svg></button>}
                 </footer>}
               </div>
             </article>
@@ -395,16 +495,23 @@ export function App() {
               onRetry={() => void retrySummarization()}
               onLogs={(log) => { setActiveLog(log); setLogTab('request') }}
             />)}
+            {entry.transcriptIndex != null && factsEvents.filter((event) => event.after_message_index === entry.transcriptIndex).map((event) => <FactsUpdateIndicator
+              key={event.id}
+              event={event}
+              onLogs={(log) => { setActiveLog(log); setLogTab('request') }}
+            />)}
           </Fragment>)}
+          {forkError && <div className="fork-error">{forkError}</div>}
           {isSummarizing && !failedSummarization && <div className="summarization-event in-progress"><span className="summary-event-icon">↻</span><div><b>Сжимаем контекст…</b><span>Основной ответ продолжится автоматически</span></div></div>}
           {isLoading && !isSummarizing && <article className="message assistant loading"><span className="avatar">{activeSession?.config.avatar_path ? <img src={activeSession.config.avatar_path} alt={activeSession.config.name} /> : '◇'}</span><div className="message-body"><p><i /><i /><i /></p><footer>Loading…</footer></div></article>}
         </div></div>
         <div className="composer-area">
           {settingsOpen && <div ref={settingsRef}>{isProfileSession && activeSession ? <ProfileSessionSettings
-            enabled={activeSession.config.context_management.enabled}
+            value={activeSession.config.context_management}
+            facts={facts}
             saving={profileSettingsSaving}
             error={profileSettingsError}
-            onEnabled={setProfileSummarization}
+            onChange={setProfileContextManagement}
           /> : <Settings
               provider={provider} model={model} models={models} modelsLoading={modelsLoading} systemPrompt={systemPrompt} maxTokens={maxTokens}
               temperature={temperature} topP={topP} structuredOutput={structuredOutput} schema={schema}
@@ -413,6 +520,7 @@ export function App() {
               onTopP={setTopP} onStructuredOutput={setStructuredOutput} onSchema={setSchema}
               contextManagement={contextManagement} summarizerModels={summarizerModels} summarizerModelsLoading={summarizerModelsLoading}
               summarizerSupportsSampling={summarizerSupportsSampling} onContextManagement={setContextManagement}
+              facts={facts} factsModels={factsModels} factsModelsLoading={factsModelsLoading} factsSupportsSampling={factsSupportsSampling}
             />}</div>}
           <form className="composer" ref={formRef} onSubmit={submit}>
             <span className="model-indicator" title={contextUsageLabel(latestUsage?.usage, latestUsage?.contextWindow)}>
@@ -448,15 +556,16 @@ function ContextProgress({ usage, contextWindow }: { usage: TokenUsage; contextW
   return <span className={`context-progress ${level}`} role="progressbar" aria-label={`Заполнение контекстного окна: ${label}`} aria-valuemin={0} aria-valuemax={contextWindow} aria-valuenow={Math.min(used, contextWindow)}><i style={{ width: `${percentage}%` }} /></span>
 }
 
-function ProfileSessionSettings({ enabled, saving, error, onEnabled }: {
-  enabled: boolean
+function ProfileSessionSettings({ value, facts, saving, error, onChange }: {
+  value: ContextManagementConfig
+  facts: Record<string, string>
   saving: boolean
   error: string | null
-  onEnabled: (enabled: boolean) => Promise<void>
+  onChange: (value: ContextManagementConfig) => Promise<void>
 }) {
   return <section className="settings-popover">
     <header><b>Настройки диалога</b><span>Изменения действуют только в текущем диалоге</span></header>
-    <label className="toggle-row"><span><b>Сжатие контекста</b><small>{enabled ? 'Старые пары заменяются summary' : 'В модель отправляется полный transcript'}</small></span><input type="checkbox" checked={enabled} disabled={saving} onChange={(event) => void onEnabled(event.target.checked)} /></label>
+    <StrategySettings value={value} facts={facts} disabled={saving} onChange={(next) => void onChange(next)} />
     {error && <p className="model-note">{error}</p>}
   </section>
 }
@@ -468,6 +577,7 @@ type SettingsProps = {
   onMaxTokens: (value: string) => void; onTemperature: (value: string) => void; onTopP: (value: string) => void
   onStructuredOutput: (value: boolean) => void; onSchema: (value: string) => void
   contextManagement: ContextManagementConfig; summarizerModels: ProviderModel[]; summarizerModelsLoading: boolean; summarizerSupportsSampling: boolean
+  facts: Record<string, string>; factsModels: ProviderModel[]; factsModelsLoading: boolean; factsSupportsSampling: boolean
   onContextManagement: (value: ContextManagementConfig) => void
 }
 
@@ -492,16 +602,24 @@ function Settings(props: SettingsProps) {
       modelsLoading={props.summarizerModelsLoading}
       supportsSampling={props.summarizerSupportsSampling}
       onChange={props.onContextManagement}
+      facts={props.facts}
+      factsModels={props.factsModels}
+      factsModelsLoading={props.factsModelsLoading}
+      factsSupportsSampling={props.factsSupportsSampling}
     />
   </section>
 }
 
-function SummarizationSettings({ value, models, modelsLoading, supportsSampling, onChange }: {
+function SummarizationSettings({ value, models, modelsLoading, supportsSampling, onChange, facts, factsModels, factsModelsLoading, factsSupportsSampling }: {
   value: ContextManagementConfig
   models: ProviderModel[]
   modelsLoading: boolean
   supportsSampling: boolean
   onChange: (value: ContextManagementConfig) => void
+  facts: Record<string, string>
+  factsModels: ProviderModel[]
+  factsModelsLoading: boolean
+  factsSupportsSampling: boolean
 }) {
   const summarizer = value.summarizer
   const provider = summarizer.provider ?? 'openai'
@@ -514,8 +632,8 @@ function SummarizationSettings({ value, models, modelsLoading, supportsSampling,
   })
 
   return <div className="summarization-settings">
-    <label className="toggle-row"><span><b>Сжатие контекста</b><small>Summary старой части диалога</small></span><input type="checkbox" checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} /></label>
-    {value.enabled && <>
+    <StrategySettings value={value} facts={facts} onChange={onChange} />
+    {value.strategy === 'summary' && <>
       <div className="settings-grid">
         <label>Последние пары<small className="field-help">5 = 5 запросов + 5 ответов</small><input type="number" min="1" value={value.recent_exchange_limit} onChange={(event) => onChange({ ...value, recent_exchange_limit: Number(event.target.value) })} /></label>
         <label>Размер пачки, пар<small className="field-help">5 = суммаризировать 5 пар</small><input type="number" min="1" value={value.summary_batch_exchange_count} onChange={(event) => onChange({ ...value, summary_batch_exchange_count: Number(event.target.value) })} /></label>
@@ -531,6 +649,13 @@ function SummarizationSettings({ value, models, modelsLoading, supportsSampling,
         <label>Summary top p<input type="number" min="0.01" max="1" step="0.01" value={summarizer.generation.top_p ?? 1} onChange={(event) => updateGeneration({ top_p: Number(event.target.value) })} /></label>
       </div> : <p className="model-note">Для этой summary-модели параметры sampling задаёт провайдер.</p>}
     </>}
+    {value.strategy === 'sticky_facts' && <FactsUpdaterSettings
+      value={value}
+      models={factsModels}
+      modelsLoading={factsModelsLoading}
+      supportsSampling={factsSupportsSampling}
+      onChange={onChange}
+    />}
   </div>
 }
 
@@ -547,6 +672,58 @@ function SummarizationIndicator({ event, retrying, onRetry, onLogs }: {
     {event.usage && <TokenUsageSummary usage={event.usage} />}
     <button onClick={() => onLogs(summarizationEventLog(event))}>Логи</button>
     {failed && <button className="summary-retry" disabled={retrying} onClick={onRetry}>{retrying ? 'Повторяем…' : 'Retry'}</button>}
+  </div>
+}
+
+function FactsUpdaterSettings({ value, models, modelsLoading, supportsSampling, onChange }: {
+  value: ContextManagementConfig
+  models: ProviderModel[]
+  modelsLoading: boolean
+  supportsSampling: boolean
+  onChange: (value: ContextManagementConfig) => void
+}) {
+  const updater = value.facts_updater
+  const provider = updater.provider ?? 'openai'
+  const updateUpdater = (next: Partial<ContextManagementConfig['facts_updater']>) => onChange({
+    ...value,
+    facts_updater: { ...updater, ...next },
+  })
+  const updateGeneration = (next: Partial<ContextManagementConfig['facts_updater']['generation']>) => updateUpdater({
+    generation: { ...updater.generation, ...next },
+  })
+  return <div className="facts-updater-settings">
+    <div className="settings-grid">
+      <label>Провайдер facts<ProviderSelect value={provider} onChange={(nextProvider) => updateUpdater({ provider: nextProvider, model: providerModels[nextProvider] })} /></label>
+      <label>Модель facts<ModelsSelect value={updater.model ?? providerModels[provider]} models={models} loading={modelsLoading} onChange={(model) => updateUpdater({ model })} /></label>
+    </div>
+    <label>Facts prompt<textarea className="summary-prompt" value={updater.prompt} onChange={(event) => updateUpdater({ prompt: event.target.value })} rows={6} /></label>
+    <label>Facts max output tokens<input type="number" min="1" value={updater.generation.max_output_tokens ?? 512} onChange={(event) => updateGeneration({ max_output_tokens: Number(event.target.value) })} /></label>
+    {supportsSampling ? <div className="settings-grid">
+      <label>Facts temperature<input type="number" min="0" max="2" step="0.1" value={updater.generation.temperature ?? 0} onChange={(event) => updateGeneration({ temperature: Number(event.target.value) })} /></label>
+      <label>Facts top p<input type="number" min="0.01" max="1" step="0.01" value={updater.generation.top_p ?? 1} onChange={(event) => updateGeneration({ top_p: Number(event.target.value) })} /></label>
+    </div> : <p className="model-note">Для этой facts-модели параметры sampling задаёт провайдер.</p>}
+  </div>
+}
+
+function FactsPanel({ facts }: { facts: Record<string, string> }) {
+  const entries = Object.entries(facts)
+  return <section className="facts-panel">
+    <header><b>Facts · {entries.length}</b></header>
+    {entries.length ? entries.map(([key, value]) => <div key={key}><code>{key}</code><span>{value}</span></div>) : <p>Память пока пуста</p>}
+  </section>
+}
+
+function FactsUpdateIndicator({ event, onLogs }: {
+  event: FactsUpdateEvent
+  onLogs: (log: RequestLog) => void
+}) {
+  const failed = event.status === 'failed'
+  const changed = Object.keys(event.updates).length
+  return <div className={`summarization-event facts-event ${event.status}`}>
+    <span className="summary-event-icon">{failed ? '!' : '✓'}</span>
+    <div><b>{failed ? 'Не удалось обновить facts' : `Facts обновлены: ${changed}, удалены: ${event.deletions.length}`}</b><span>{failed ? event.error : `${event.provider} · ${event.model}`}</span></div>
+    {event.usage && <TokenUsageSummary usage={event.usage} />}
+    <button onClick={() => onLogs(factsEventLog(event))}>Логи</button>
   </div>
 }
 
@@ -570,10 +747,15 @@ function Agents({ profiles, onLaunch, onCreate }: { profiles: Record<string, Age
   const [contextManagement, setContextManagement] = useState<ContextManagementConfig>(() => defaultContextManagement('openai', providerModels.openai))
   const [summarizerModels, setSummarizerModels] = useState<ProviderModel[]>([])
   const [summarizerModelsLoading, setSummarizerModelsLoading] = useState(false)
+  const [factsModels, setFactsModels] = useState<ProviderModel[]>([])
+  const [factsModelsLoading, setFactsModelsLoading] = useState(false)
   const summarizerProvider = contextManagement.summarizer.provider ?? provider
   const summarizerModel = contextManagement.summarizer.model ?? model
+  const factsProvider = contextManagement.facts_updater.provider ?? provider
+  const factsModel = contextManagement.facts_updater.model ?? model
   useEffect(() => { setModelsLoading(true); getModels(provider).then(setAvailableModels).catch(() => setAvailableModels([])).finally(() => setModelsLoading(false)) }, [provider])
   useEffect(() => { setSummarizerModelsLoading(true); getModels(summarizerProvider).then(setSummarizerModels).catch(() => setSummarizerModels([])).finally(() => setSummarizerModelsLoading(false)) }, [summarizerProvider])
+  useEffect(() => { setFactsModelsLoading(true); getModels(factsProvider).then(setFactsModels).catch(() => setFactsModels([])).finally(() => setFactsModelsLoading(false)) }, [factsProvider])
   const changeProvider = (nextProvider: Provider) => { setProvider(nextProvider); setModel(providerModels[nextProvider]) }
   const create = async (event: FormEvent) => {
     event.preventDefault()
@@ -599,6 +781,10 @@ function Agents({ profiles, onLaunch, onCreate }: { profiles: Record<string, Age
         modelsLoading={summarizerModelsLoading}
         supportsSampling={supportsSamplingParameters(summarizerProvider, summarizerModel)}
         onChange={setContextManagement}
+        facts={{}}
+        factsModels={factsModels}
+        factsModelsLoading={factsModelsLoading}
+        factsSupportsSampling={supportsSamplingParameters(factsProvider, factsModel)}
       />
       <button className="create-submit" type="submit">Создать и открыть чат</button>
     </form>}
@@ -679,13 +865,23 @@ function isSafeMarkdownHref(value: string): boolean {
 
 function normalizeContextManagement(value: ContextManagementConfig | undefined, provider: Provider, model: string): ContextManagementConfig {
   if (!value) return defaultContextManagement(provider, model)
+  const defaults = defaultContextManagement(provider, model)
+  const factsUpdater = value.facts_updater ?? defaults.facts_updater
   return {
     ...value,
+    strategy: value.strategy ?? 'summary',
+    recent_message_limit: value.recent_message_limit ?? 10,
     summarizer: {
       ...value.summarizer,
       provider: value.summarizer.provider ?? provider,
       model: value.summarizer.model ?? model,
       generation: { ...value.summarizer.generation },
+    },
+    facts_updater: {
+      ...factsUpdater,
+      provider: factsUpdater.provider ?? provider,
+      model: factsUpdater.model ?? model,
+      generation: { ...factsUpdater.generation },
     },
   }
 }
@@ -701,12 +897,51 @@ function upsertSummarizationEvents(current: SummarizationEvent[], updates: Summa
   return [...merged, ...updates.filter((event) => !existingIds.has(event.id))]
 }
 
+function upsertFactsEvents(current: FactsUpdateEvent[], updates: FactsUpdateEvent[]) {
+  const replacements = new Map(updates.map((event) => [event.id, event]))
+  const merged = current.map((event) => replacements.get(event.id) ?? event)
+  const existingIds = new Set(current.map((event) => event.id))
+  return [...merged, ...updates.filter((event) => !existingIds.has(event.id))]
+}
+
 function willSummarize(messageCount: number, events: SummarizationEvent[], config: ContextManagementConfig) {
-  if (!config.enabled) return false
+  if (!config.enabled || config.strategy !== 'summary') return false
   const summarizedMessageCount = events
     .filter((event) => event.status === 'completed')
     .reduce((total, event) => total + event.message_count, 0)
   return messageCount - summarizedMessageCount - config.recent_exchange_limit * 2 >= config.summary_batch_exchange_count * 2
+}
+
+function StrategySettings({ value, facts = {}, disabled = false, onChange }: {
+  value: ContextManagementConfig
+  facts?: Record<string, string>
+  disabled?: boolean
+  onChange: (value: ContextManagementConfig) => void
+}) {
+  return <div className="strategy-settings">
+    <label>Стратегия контекста<StrategySelect value={value.strategy} disabled={disabled} onChange={(strategy) => onChange({ ...value, enabled: true, strategy })} /></label>
+    {(value.strategy === 'sliding_window' || value.strategy === 'sticky_facts') && <label>Размер окна<small className="field-help">Количество последних сообщений, system prompt не учитывается</small><input type="number" min="1" disabled={disabled} value={value.recent_message_limit} onChange={(event) => onChange({ ...value, recent_message_limit: Number(event.target.value) })} /></label>}
+    {value.strategy === 'sticky_facts' && <FactsPanel facts={facts} />}
+  </div>
+}
+
+function StrategySelect({ value, disabled, onChange }: {
+  value: ContextStrategy
+  disabled: boolean
+  onChange: (value: ContextStrategy) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useOutsideClose(isOpen, () => setIsOpen(false))
+  const labels: Record<ContextStrategy, string> = {
+    sliding_window: 'Sliding Window',
+    sticky_facts: 'Sticky Facts',
+    branching: 'Branching',
+    summary: 'Summary',
+  }
+  return <div className="react-select" ref={ref}>
+    <button type="button" className="select-trigger" disabled={disabled} onClick={() => setIsOpen((open) => !open)} aria-expanded={isOpen}>{labels[value]}<span>⌄</span></button>
+    {isOpen && <div className="select-menu">{(Object.keys(labels) as ContextStrategy[]).map((option) => <button type="button" key={option} className={option === value ? 'selected' : ''} onClick={() => { onChange(option); setIsOpen(false) }}>{labels[option]}</button>)}</div>}
+  </div>
 }
 
 function summarizationEventLog(event: SummarizationEvent): RequestLog {
@@ -720,6 +955,20 @@ function summarizationEventLog(event: SummarizationEvent): RequestLog {
       message_count: event.message_count,
     },
     response: event.trace?.response_body ?? (event.error ? { error: event.error } : {}),
+  }
+}
+
+function factsEventLog(event: FactsUpdateEvent): RequestLog {
+  return {
+    provider: event.provider,
+    model: event.model,
+    status: event.trace?.status_code ?? (event.status === 'completed' ? 200 : 0),
+    duration: `${event.duration_seconds.toFixed(2)}s`,
+    request: event.trace?.request_body ?? {},
+    response: event.trace?.response_body ?? (event.error ? { error: event.error } : {
+      updates: event.updates,
+      deletions: event.deletions,
+    }),
   }
 }
 

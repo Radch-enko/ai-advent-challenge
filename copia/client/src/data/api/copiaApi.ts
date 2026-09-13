@@ -1,5 +1,5 @@
 import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
-import { SummarizationEvent, TokenUsage } from '../../domain/models/chat'
+import { FactsUpdateEvent, SummarizationEvent, TokenUsage } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
 
 export type { AgentConfig, CompletionConfig, Provider, ProviderModel }
@@ -14,6 +14,8 @@ export type ChatResponse = {
     trace?: SummarizationEvent['trace']
   }
   summarization_events: SummarizationEvent[]
+  facts_events: FactsUpdateEvent[]
+  facts: Record<string, string>
 }
 
 export type ApiResult<T> = { data: T; status: number }
@@ -34,6 +36,7 @@ export type ChatSession = {
     summary: string
     summarized_message_count: number
     events: SummarizationEvent[]
+    facts_events: FactsUpdateEvent[]
   }
   created_at: string
   updated_at: string
@@ -58,6 +61,13 @@ export class ApiRequestError extends Error {
     const detail = this.body.detail
     if (typeof detail !== 'object' || detail === null || !('summarization_event' in detail)) return undefined
     return detail.summarization_event as SummarizationEvent
+  }
+
+  get factsEvent(): FactsUpdateEvent | undefined {
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) return undefined
+    const detail = this.body.detail
+    if (typeof detail !== 'object' || detail === null || !('facts_event' in detail)) return undefined
+    return detail.facts_event as FactsUpdateEvent
   }
 }
 
@@ -129,17 +139,28 @@ export async function createAgentFromProfile(profileName: string): Promise<strin
 
 export function getSessions(): Promise<ChatSessionSummary[]> { return request('/sessions') }
 export function getSession(sessionId: string): Promise<ChatSession> { return request(`/sessions/${sessionId}`) }
+export function getSessionFacts(sessionId: string): Promise<Record<string, string>> { return request(`/sessions/${sessionId}/facts`) }
 export function createSession(config: AgentConfig): Promise<ChatSession> {
   return request('/sessions', { method: 'POST', body: JSON.stringify({ config }) })
 }
 export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
   return request('/sessions', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
 }
-export function updateSessionContextManagement(sessionId: string, enabled: boolean): Promise<ChatSession> {
+export function updateSessionContextManagement(
+  sessionId: string,
+  value: Pick<AgentConfig['context_management'], 'enabled' | 'strategy' | 'recent_message_limit'>,
+): Promise<ChatSession> {
   return request(`/sessions/${sessionId}/context-management`, {
     method: 'PATCH',
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({
+      enabled: value.enabled,
+      strategy: value.strategy,
+      recent_message_limit: value.recent_message_limit,
+    }),
   })
+}
+export function forkSession(sessionId: string, messageIndex: number): Promise<ChatSession> {
+  return request(`/sessions/${sessionId}/fork`, { method: 'POST', body: JSON.stringify({ message_index: messageIndex }) })
 }
 export function deleteSession(sessionId: string): Promise<void> {
   return fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).then((response) => {

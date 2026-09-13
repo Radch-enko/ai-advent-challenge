@@ -144,6 +144,24 @@ def test_profile_session_can_override_context_management_without_changing_profil
     assert client.get("/profiles").json()["planner"]["context_management"]["enabled"] is True
 
 
+def test_session_can_select_sliding_window_without_changing_profile(monkeypatch, tmp_path) -> None:
+    repository = SessionsRepository(tmp_path / "sessions")
+    monkeypatch.setattr(service, "sessions", repository)
+    client = TestClient(app)
+    created = client.post("/sessions", json={"profile_name": "planner"})
+    session_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/sessions/{session_id}/context-management",
+        json={"strategy": "sliding_window", "recent_message_limit": 7},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["config"]["context_management"]["strategy"] == "sliding_window"
+    assert updated.json()["config"]["context_management"]["recent_message_limit"] == 7
+    assert client.get("/profiles").json()["planner"]["context_management"]["strategy"] == "summary"
+
+
 def test_failed_session_summarization_is_persisted_and_retry_resumes_turn(monkeypatch, tmp_path) -> None:
     repository = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", repository)
@@ -227,3 +245,81 @@ def test_failed_session_summarization_is_persisted_and_retry_resumes_turn(monkey
     assert restored.context.summary == "compressed facts"
     assert restored.context.summarized_message_count == 2
     assert restored.context.events[-1].status == "completed"
+
+
+def test_sticky_facts_are_saved_separately_and_returned_with_response(monkeypatch, tmp_path) -> None:
+    repository = SessionsRepository(tmp_path / "sessions")
+    monkeypatch.setattr(service, "sessions", repository)
+
+    def complete(messages, config):
+        if config.structured_output is not None:
+            return LLMResponse(
+                content='{"updates":[{"key":"project_name","value":"Aurora"}],"deletions":[]}',
+                structured_data={"updates": [{"key": "project_name", "value": "Aurora"}], "deletions": []},
+                provider=config.provider,
+                model=config.model,
+            )
+        return LLMResponse(content="reply", provider=config.provider, model=config.model)
+
+    monkeypatch.setattr(router, "complete", complete)
+    client = TestClient(app)
+    created = client.post("/sessions", json={"config": {
+        "name": "Copia",
+        "provider": "openai",
+        "model": "test-model",
+        "context_management": {"strategy": "sticky_facts", "recent_message_limit": 4},
+    }})
+    session_id = created.json()["id"]
+
+    response = client.post(f"/sessions/{session_id}/messages", json={"content": "Проект называется Aurora"})
+
+    assert response.status_code == 200
+    assert response.json()["facts"] == {"project_name": "Aurora"}
+    assert response.json()["facts_events"][0]["updates"] == {"project_name": "Aurora"}
+    assert repository.load_facts(session_id) == {"project_name": "Aurora"}
+    assert client.get(f"/sessions/{session_id}/facts").json() == {"project_name": "Aurora"}
+
+
+def test_fork_creates_independent_session_from_selected_message(monkeypatch, tmp_path) -> None:
+    repository = SessionsRepository(tmp_path / "sessions")
+    monkeypatch.setattr(service, "sessions", repository)
+    requests = []
+
+    def complete(messages, config):
+        requests.append([message.content for message in messages])
+        return LLMResponse(content=f"reply to {messages[-1].content}", provider=config.provider, model=config.model)
+
+    monkeypatch.setattr(router, "complete", complete)
+    client = TestClient(app)
+    created = client.post("/sessions", json={"config": {
+        "name": "Copia",
+        "provider": "openai",
+        "model": "test-model",
+        "context_management": {"strategy": "branching"},
+    }})
+    session_id = created.json()["id"]
+    session = repository.load(session_id)
+    assert session is not None
+    session.title = "Branch test"
+    repository.save(session)
+
+    client.post(f"/sessions/{session_id}/messages", json={"content": "shared"})
+    client.post(f"/sessions/{session_id}/messages", json={"content": "original only"})
+
+    fork_response = client.post(f"/sessions/{session_id}/fork", json={"message_index": 1})
+
+    assert fork_response.status_code == 201
+    fork = fork_response.json()
+    assert fork["id"] != session_id
+    assert fork["title"] == "Branch test · ветка"
+    assert [message["content"] for message in fork["messages"]] == ["shared", "reply to shared"]
+    assert [message.content for message in repository.load(session_id).messages] == [
+        "shared", "reply to shared", "original only", "reply to original only",
+    ]
+
+    client.post(f"/sessions/{fork['id']}/messages", json={"content": "fork only"})
+
+    assert requests[-1] == ["shared", "reply to shared", "fork only"]
+    assert [message.content for message in repository.load(fork["id"]).messages] == [
+        "shared", "reply to shared", "fork only", "reply to fork only",
+    ]

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from copia.data.providers.llm import ProviderError
-from copia.domain.models.agent import Agent, AgentFactory, SummarizationFailed, SummarizationRetryRequired
+from copia.domain.models.agent import Agent, AgentFactory, FactsUpdateFailed, SummarizationFailed, SummarizationRetryRequired
 from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse, ProviderName, ProviderTrace
 from copia.domain.models.session import ConversationContext
 from copia.domain.services.router import LLMRouter
@@ -208,6 +208,35 @@ def test_disabled_context_management_sends_full_transcript_even_when_summary_exi
     ]
 
 
+def test_sliding_window_sends_only_last_messages_but_keeps_full_transcript() -> None:
+    router = CompressionRouter()
+    agent_config = compression_config().model_copy(deep=True)
+    agent_config.context_management.strategy = "sliding_window"
+    agent_config.context_management.recent_message_limit = 3
+    agent = Agent(agent_config, router, history=old_messages())  # type: ignore[arg-type]
+
+    agent.ask("new question")
+
+    assert len(router.requests) == 1
+    messages, _ = router.requests[0]
+    assert [message.content for message in messages] == [
+        "main system",
+        "recent user",
+        "recent answer",
+        "new question",
+    ]
+    assert [message.content for message in agent.history] == [
+        "old user",
+        "old answer",
+        "recent user",
+        "recent answer",
+        "new question",
+        "main answer",
+    ]
+    assert agent.context.summary == ""
+    assert agent.context.events == []
+
+
 def test_summarization_batch_size_counts_user_assistant_pairs() -> None:
     router = CompressionRouter()
     agent_config = compression_config().model_copy(deep=True)
@@ -256,3 +285,78 @@ def test_retry_summarization_resumes_the_pending_turn_without_duplicate_user_mes
     assert agent.history[-1].content == "main answer"
     assert agent.context.summarized_message_count == 2
     assert agent.context.events[-1].status == "completed"
+
+
+class FactsRouter:
+    def __init__(self, *, fail_update: bool = False) -> None:
+        self.requests = []
+        self.fail_update = fail_update
+
+    def complete(self, messages, config):
+        self.requests.append((messages, config))
+        if config.structured_output is not None:
+            if self.fail_update:
+                raise ProviderError("facts unavailable", status_code=503)
+            return LLMResponse(
+                content='{"updates":[{"key":"release_date","value":"20 декабря"}],"deletions":["old_deadline"]}',
+                structured_data={
+                    "updates": [{"key": "release_date", "value": "20 декабря"}],
+                    "deletions": ["old_deadline"],
+                },
+                provider=config.provider,
+                model=config.model,
+                usage={"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+            )
+        return LLMResponse(content="main answer", provider=config.provider, model=config.model)
+
+
+def facts_config() -> AgentConfig:
+    return AgentConfig.model_validate({
+        "name": "facts",
+        "provider": "openai",
+        "model": "main-model",
+        "system_prompt": "main system",
+        "context_management": {
+            "strategy": "sticky_facts",
+            "recent_message_limit": 2,
+            "facts_updater": {"model": "facts-model"},
+        },
+    })
+
+
+def test_sticky_facts_applies_delta_and_sends_facts_with_recent_messages() -> None:
+    router = FactsRouter()
+    agent = Agent(
+        facts_config(),
+        router,  # type: ignore[arg-type]
+        history=[ChatMessage(role="user", content="old"), ChatMessage(role="assistant", content="agreed")],
+        facts={"project_name": "Aurora", "old_deadline": "15 декабря"},
+    )
+
+    agent.ask("Переносим релиз на 20 декабря")
+
+    assert len(router.requests) == 2
+    updater_messages, updater_config = router.requests[0]
+    updater_payload = json.loads(updater_messages[1].content)
+    assert updater_config.model == "facts-model"
+    assert updater_payload["existing_facts"]["project_name"] == "Aurora"
+    assert updater_payload["previous_assistant_message"] == "agreed"
+    assert agent.facts == {"project_name": "Aurora", "release_date": "20 декабря"}
+    main_messages, _ = router.requests[1]
+    assert [message.role for message in main_messages] == ["system", "assistant", "user"]
+    assert '"project_name": "Aurora"' in main_messages[0].content
+    assert '"release_date": "20 декабря"' in main_messages[0].content
+    assert [message.content for message in main_messages[1:]] == ["agreed", "Переносим релиз на 20 декабря"]
+    assert agent.facts_operation_events[0].updates == {"release_date": "20 декабря"}
+
+
+def test_failed_facts_update_does_not_change_history_or_facts() -> None:
+    router = FactsRouter(fail_update=True)
+    agent = Agent(facts_config(), router, facts={"project_name": "Aurora"})  # type: ignore[arg-type]
+
+    with pytest.raises(FactsUpdateFailed):
+        agent.ask("New fact")
+
+    assert agent.history == []
+    assert agent.facts == {"project_name": "Aurora"}
+    assert len(router.requests) == 1

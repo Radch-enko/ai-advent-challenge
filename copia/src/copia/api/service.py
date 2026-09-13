@@ -13,9 +13,9 @@ from pydantic import BaseModel, Field, model_validator
 from ..data.providers.llm import ProviderError
 from ..data.profiles_repository import ProfilesRepository
 from ..data.sessions_repository import SessionsRepository
-from ..domain.models.agent import Agent, AgentFactory, SummarizationFailed, SummarizationRetryRequired
-from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, GenerationConfig, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, StructuredOutputConfig
-from ..domain.models.session import ChatSession, ChatSessionSummary, SummarizationEvent
+from ..domain.models.agent import Agent, AgentFactory, FactsUpdateFailed, SummarizationFailed, SummarizationRetryRequired
+from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, ContextStrategyName, GenerationConfig, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, StructuredOutputConfig
+from ..domain.models.session import ChatSession, ChatSessionSummary, FactsUpdateEvent, SummarizationEvent
 from ..domain.services.router import LLMRouter
 
 load_dotenv()
@@ -63,12 +63,16 @@ class MessageRequest(BaseModel):
 
 
 class ContextManagementUpdate(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    strategy: ContextStrategyName | None = None
+    recent_message_limit: int | None = Field(default=None, ge=1)
 
 
 class MessageResponse(BaseModel):
     response: LLMResponse
     summarization_events: list[SummarizationEvent] = Field(default_factory=list)
+    facts_events: list[FactsUpdateEvent] = Field(default_factory=list)
+    facts: dict[str, str] = Field(default_factory=dict)
 
 
 class CompletionRequest(BaseModel):
@@ -85,6 +89,10 @@ class CreateSessionRequest(BaseModel):
         if (self.profile_name is None) == (self.config is None):
             raise ValueError("Provide exactly one of profile_name or config")
         return self
+
+
+class ForkSessionRequest(BaseModel):
+    message_index: int = Field(ge=0)
 
 
 @app.get("/health")
@@ -189,13 +197,49 @@ def get_session(session_id: str) -> ChatSession:
     return session
 
 
+@app.get("/sessions/{session_id}/facts", response_model=dict[str, str])
+def get_session_facts(session_id: str) -> dict[str, str]:
+    get_session(session_id)
+    try:
+        return sessions.load_facts(session_id)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
+
+
 @app.patch("/sessions/{session_id}/context-management", response_model=ChatSession)
 def update_session_context_management(session_id: str, request: ContextManagementUpdate) -> ChatSession:
     session = get_session(session_id)
-    session.config.context_management.enabled = request.enabled
+    if request.enabled is not None:
+        session.config.context_management.enabled = request.enabled
+    if request.strategy is not None:
+        session.config.context_management.strategy = request.strategy
+    if request.recent_message_limit is not None:
+        session.config.context_management.recent_message_limit = request.recent_message_limit
     session.updated_at = datetime.now(UTC)
     sessions.save(session)
     return session
+
+
+@app.post("/sessions/{session_id}/fork", response_model=ChatSession, status_code=status.HTTP_201_CREATED)
+def fork_session(session_id: str, request: ForkSessionRequest) -> ChatSession:
+    source = get_session(session_id)
+    if source.config.context_management.strategy != ContextStrategyName.BRANCHING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Forking requires the branching strategy")
+    if request.message_index >= len(source.messages):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message index is outside the transcript")
+
+    now = datetime.now(UTC)
+    fork = ChatSession(
+        id=str(uuid.uuid4()),
+        config=source.config.model_copy(deep=True),
+        messages=list(source.messages[:request.message_index + 1]),
+        title=f"{source.title or 'Новый чат'} · ветка",
+        profile_name=source.profile_name,
+        created_at=now,
+        updated_at=now,
+    )
+    sessions.save(fork)
+    return fork
 
 
 @app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
@@ -203,9 +247,22 @@ async def send_session_message(session_id: str, request: MessageRequest, backgro
     session = get_session(session_id)
     if request.config is not None and session.profile_name is None:
         session.config = request.config
-    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context)
+    try:
+        facts = sessions.load_facts(session.id)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
+    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context, facts=facts)
     try:
         response = await run_in_threadpool(agent.ask, request.content)
+    except FactsUpdateFailed as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": str(error),
+                "code": "facts_update_failed",
+                "facts_event": error.event.model_dump(mode="json"),
+            },
+        ) from error
     except SummarizationFailed as error:
         _save_agent_state(session, agent)
         raise HTTPException(
@@ -225,7 +282,12 @@ async def send_session_message(session_id: str, request: MessageRequest, backgro
     _save_agent_state(session, agent)
     if session.title is None:
         background_tasks.add_task(generate_session_title, session.id)
-    return MessageResponse(response=response, summarization_events=agent.operation_events)
+    return MessageResponse(
+        response=response,
+        summarization_events=agent.operation_events,
+        facts_events=agent.facts_operation_events,
+        facts=agent.facts,
+    )
 
 
 @app.post("/sessions/{session_id}/summarization/retry", response_model=MessageResponse)
@@ -318,6 +380,8 @@ def _save_agent_state(session: ChatSession, agent: Agent) -> None:
     session.context = agent.context
     session.updated_at = datetime.now(UTC)
     sessions.save(session)
+    if session.config.context_management.strategy == ContextStrategyName.STICKY_FACTS:
+        sessions.save_facts(session.id, agent.facts)
 
 
 def run() -> None:
