@@ -2,5 +2,14 @@
 .env.*
 !.env.example
 .venv/
-.venv-*/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+client/node_modules/
+client/dist/
+.opencode/node_modules/
+.run/
+*.egg-info/
+*.tsbuildinfo
+.DS_Store

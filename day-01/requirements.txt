@@ -1,5 +1,0 @@
-openai
-python-dotenv
-requests
-urllib3<2
-prompt_toolkit

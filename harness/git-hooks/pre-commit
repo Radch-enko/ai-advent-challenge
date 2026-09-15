@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+[[ -n "$staged_files" ]] || exit 0
+
+generated_pattern='(^|/)(dist|node_modules|build|\.venv|\.run|__pycache__|\.pytest_cache)/|\.egg-info/|\.tsbuildinfo$'
+if echo "$staged_files" | grep -E "$generated_pattern" >/dev/null; then
+  echo "$staged_files" | grep -E "$generated_pattern" >&2 || true
+  echo "ERROR: generated output or local runtime state must not be committed" >&2
+  exit 1
+fi
+
+./harness/scripts/security-check.sh --staged
+
+production_pattern='^(src/|tests/|client/src/|client/public/|profiles\.json$|pyproject\.toml$|client/package(-lock)?\.json$)'
+if echo "$staged_files" | grep -E "$production_pattern" >/dev/null; then
+  active_task_count="$(find docs/tasks/active -maxdepth 1 -type f -name '*.md' ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$active_task_count" -eq 0 ]]; then
+    echo "ERROR: production changes require a matching active task under docs/tasks/active/" >&2
+    exit 1
+  fi
+fi
+
+./harness/scripts/architecture-check.sh
+
+if echo "$staged_files" | grep -E '^harness/evals/' >/dev/null; then
+  ./harness/evals/run-evals.sh
+fi
+
+./harness/scripts/check.sh
+echo "pre-commit checks passed."
