@@ -1,7 +1,12 @@
 import httpx
 
-from copia.domain.models.config import AgentConfig, ChatMessage, GenerationConfig, StructuredOutputConfig
 from copia.data.providers.llm import GigaChatProvider, OpenAIProvider
+from copia.domain.models.config import (
+    AgentConfig,
+    ChatMessage,
+    GenerationConfig,
+    StructuredOutputConfig,
+)
 
 
 def test_openai_maps_common_configuration() -> None:
@@ -9,7 +14,19 @@ def test_openai_maps_common_configuration() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(__import__("json").loads(request.content))
-        return httpx.Response(200, json={"model": "test-model", "choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5, "prompt_tokens_details": {"cached_tokens": 1}}})
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 3,
+                    "total_tokens": 5,
+                    "prompt_tokens_details": {"cached_tokens": 1},
+                },
+            },
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     config = AgentConfig(
@@ -20,14 +37,17 @@ def test_openai_maps_common_configuration() -> None:
         structured_output=StructuredOutputConfig(schema={"type": "object"}),
     )
 
-    response = OpenAIProvider(api_key="key", client=client).complete([
-        ChatMessage(
-            role="user",
-            content="Hello",
-            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            context_window=100,
-        ),
-    ], config)
+    response = OpenAIProvider(api_key="key", client=client).complete(
+        [
+            ChatMessage(
+                role="user",
+                content="Hello",
+                usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                context_window=100,
+            ),
+        ],
+        config,
+    )
 
     assert captured["max_completion_tokens"] == 42
     assert captured["response_format"]["json_schema"]["schema"] == {"type": "object"}
@@ -49,7 +69,9 @@ def test_openai_omits_sampling_for_gpt_five_models() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(__import__("json").loads(request.content))
-        return httpx.Response(200, json={"model": "gpt-5-mini", "choices": [{"message": {"content": "Hello"}}]})
+        return httpx.Response(
+            200, json={"model": "gpt-5-mini", "choices": [{"message": {"content": "Hello"}}]}
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     config = AgentConfig(
@@ -59,7 +81,9 @@ def test_openai_omits_sampling_for_gpt_five_models() -> None:
         generation=GenerationConfig(temperature=0.7, top_p=0.8),
     )
 
-    OpenAIProvider(api_key="key", client=client).complete([ChatMessage(role="user", content="Hello")], config)
+    OpenAIProvider(api_key="key", client=client).complete(
+        [ChatMessage(role="user", content="Hello")], config
+    )
 
     assert "temperature" not in captured
     assert "top_p" not in captured
@@ -75,7 +99,9 @@ def test_gigachat_reuses_access_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if "oauth" in str(request.url):
-            return httpx.Response(200, json={"access_token": "token", "expires_at": 9_999_999_999_000})
+            return httpx.Response(
+                200, json={"access_token": "token", "expires_at": 9_999_999_999_000}
+            )
         return httpx.Response(
             200,
             json={
@@ -90,7 +116,9 @@ def test_gigachat_reuses_access_token() -> None:
             },
         )
 
-    provider = GigaChatProvider(auth_key="key", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider = GigaChatProvider(
+        auth_key="key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
     config = AgentConfig(name="test", provider="gigachat", model="GigaChat")
 
     response = provider.complete([ChatMessage(role="user", content="One")], config)

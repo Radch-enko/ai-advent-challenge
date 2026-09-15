@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ProviderName(str, Enum):
+class ProviderName(StrEnum):
     OPENAI = "openai"
     GIGACHAT = "gigachat"
 
 
-class ContextStrategyName(str, Enum):
+class ContextStrategyName(StrEnum):
     SUMMARY = "summary"
     SLIDING_WINDOW = "sliding_window"
     STICKY_FACTS = "sticky_facts"

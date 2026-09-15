@@ -44,38 +44,55 @@ export type ChatSession = {
 export type ChatSessionSummary = Pick<ChatSession, 'id' | 'title' | 'profile_name' | 'updated_at'>
 
 export class ApiRequestError extends Error {
-  constructor(public readonly status: number, public readonly body: unknown) {
+  constructor(
+    public readonly status: number,
+    public readonly body: unknown,
+  ) {
     super(apiErrorMessage(body, status))
   }
 
   get providerTrace(): ChatResponse['response']['trace'] {
-    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) return undefined
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
+      return undefined
+    }
     const detail = this.body.detail
     return typeof detail === 'object' && detail !== null && 'provider_trace' in detail
-      ? detail.provider_trace as ChatResponse['response']['trace']
+      ? (detail.provider_trace as ChatResponse['response']['trace'])
       : undefined
   }
 
   get summarizationEvent(): SummarizationEvent | undefined {
-    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) return undefined
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
+      return undefined
+    }
     const detail = this.body.detail
-    if (typeof detail !== 'object' || detail === null || !('summarization_event' in detail)) return undefined
+    if (typeof detail !== 'object' || detail === null || !('summarization_event' in detail)) {
+      return undefined
+    }
     return detail.summarization_event as SummarizationEvent
   }
 
   get factsEvent(): FactsUpdateEvent | undefined {
-    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) return undefined
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
+      return undefined
+    }
     const detail = this.body.detail
-    if (typeof detail !== 'object' || detail === null || !('facts_event' in detail)) return undefined
+    if (typeof detail !== 'object' || detail === null || !('facts_event' in detail)) {
+      return undefined
+    }
     return detail.facts_event as FactsUpdateEvent
   }
 }
 
 function apiErrorMessage(body: unknown, status: number): string {
-  if (typeof body !== 'object' || body === null || !('detail' in body)) return `Request failed with status ${status}`
+  if (typeof body !== 'object' || body === null || !('detail' in body)) {
+    return `Request failed with status ${status}`
+  }
   const detail = body.detail
   if (typeof detail === 'string') return detail
-  if (typeof detail === 'object' && detail !== null && 'message' in detail) return String(detail.message)
+  if (typeof detail === 'object' && detail !== null && 'message' in detail) {
+    return String(detail.message)
+  }
   return `Request failed with status ${status}`
 }
 
@@ -92,7 +109,7 @@ async function requestWithMeta<T>(path: string, init?: RequestInit): Promise<Api
     const body = await response.json().catch(() => null)
     throw new ApiRequestError(response.status, body)
   }
-  return { data: await response.json() as T, status: response.status }
+  return { data: (await response.json()) as T, status: response.status }
 }
 
 export async function createAgent(config: AgentConfig): Promise<string> {
@@ -118,33 +135,64 @@ export function sendMessage(agentId: string, content: string): Promise<ChatRespo
   })
 }
 
-export function sendMessageWithMeta(agentId: string, content: string): Promise<ApiResult<ChatResponse>> {
-  return requestWithMeta(`/agents/${agentId}/messages`, { method: 'POST', body: JSON.stringify({ content }) })
+export function sendMessageWithMeta(
+  agentId: string,
+  content: string,
+): Promise<ApiResult<ChatResponse>> {
+  return requestWithMeta(`/agents/${agentId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  })
 }
 
-export function complete(config: CompletionConfig, messages: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<ChatResponse> {
+export function complete(
+  config: CompletionConfig,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+): Promise<ChatResponse> {
   return request('/completions', { method: 'POST', body: JSON.stringify({ config, messages }) })
 }
 
-export function completeWithMeta(config: CompletionConfig, messages: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<ApiResult<ChatResponse>> {
-  return requestWithMeta('/completions', { method: 'POST', body: JSON.stringify({ config, messages }) })
+export function completeWithMeta(
+  config: CompletionConfig,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+): Promise<ApiResult<ChatResponse>> {
+  return requestWithMeta('/completions', {
+    method: 'POST',
+    body: JSON.stringify({ config, messages }),
+  })
 }
 
-export function getModels(provider: Provider): Promise<ProviderModel[]> { return request(`/providers/${provider}/models`) }
-export function getProfiles(): Promise<Record<string, AgentConfig>> { return request('/profiles') }
+export function getModels(provider: Provider): Promise<ProviderModel[]> {
+  return request(`/providers/${provider}/models`)
+}
+export function getProfiles(): Promise<Record<string, AgentConfig>> {
+  return request('/profiles')
+}
 export async function createAgentFromProfile(profileName: string): Promise<string> {
-  const result = await request<{ agent_id: string }>('/agents', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
+  const result = await request<{ agent_id: string }>('/agents', {
+    method: 'POST',
+    body: JSON.stringify({ profile_name: profileName }),
+  })
   return result.agent_id
 }
 
-export function getSessions(): Promise<ChatSessionSummary[]> { return request('/sessions') }
-export function getSession(sessionId: string): Promise<ChatSession> { return request(`/sessions/${sessionId}`) }
-export function getSessionFacts(sessionId: string): Promise<Record<string, string>> { return request(`/sessions/${sessionId}/facts`) }
+export function getSessions(): Promise<ChatSessionSummary[]> {
+  return request('/sessions')
+}
+export function getSession(sessionId: string): Promise<ChatSession> {
+  return request(`/sessions/${sessionId}`)
+}
+export function getSessionFacts(sessionId: string): Promise<Record<string, string>> {
+  return request(`/sessions/${sessionId}/facts`)
+}
 export function createSession(config: AgentConfig): Promise<ChatSession> {
   return request('/sessions', { method: 'POST', body: JSON.stringify({ config }) })
 }
 export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
-  return request('/sessions', { method: 'POST', body: JSON.stringify({ profile_name: profileName }) })
+  return request('/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ profile_name: profileName }),
+  })
 }
 export function updateSessionContextManagement(
   sessionId: string,
@@ -160,16 +208,28 @@ export function updateSessionContextManagement(
   })
 }
 export function forkSession(sessionId: string, messageIndex: number): Promise<ChatSession> {
-  return request(`/sessions/${sessionId}/fork`, { method: 'POST', body: JSON.stringify({ message_index: messageIndex }) })
+  return request(`/sessions/${sessionId}/fork`, {
+    method: 'POST',
+    body: JSON.stringify({ message_index: messageIndex }),
+  })
 }
 export function deleteSession(sessionId: string): Promise<void> {
   return fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).then((response) => {
     if (!response.ok) throw new Error(`Could not delete session: ${response.status}`)
   })
 }
-export function sendSessionMessageWithMeta(sessionId: string, content: string, config?: AgentConfig): Promise<ApiResult<ChatResponse>> {
-  return requestWithMeta(`/sessions/${sessionId}/messages`, { method: 'POST', body: JSON.stringify({ content, config }) })
+export function sendSessionMessageWithMeta(
+  sessionId: string,
+  content: string,
+  config?: AgentConfig,
+): Promise<ApiResult<ChatResponse>> {
+  return requestWithMeta(`/sessions/${sessionId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content, config }),
+  })
 }
-export function retrySessionSummarizationWithMeta(sessionId: string): Promise<ApiResult<ChatResponse>> {
+export function retrySessionSummarizationWithMeta(
+  sessionId: string,
+): Promise<ApiResult<ChatResponse>> {
   return requestWithMeta(`/sessions/${sessionId}/summarization/retry`, { method: 'POST' })
 }

@@ -6,10 +6,18 @@ import uuid
 from datetime import UTC, datetime
 from typing import Protocol
 
-from .config import AgentConfig, ChatMessage, ContextStrategyName, LLMConfig, LLMResponse, ProviderTrace
-from .session import ConversationContext, FactsUpdateEvent, SummarizationEvent
-from ..services.context_strategy import FactsUpdateFailed, context_strategy_for
+from ..services.context_strategy import FactsUpdateFailed as FactsUpdateFailed
+from ..services.context_strategy import context_strategy_for
 from ..services.router import LLMRouter, ProviderError
+from .config import (
+    AgentConfig,
+    ChatMessage,
+    ContextStrategyName,
+    LLMConfig,
+    LLMResponse,
+    ProviderTrace,
+)
+from .session import ConversationContext, FactsUpdateEvent, SummarizationEvent
 
 
 class ProfilesSource(Protocol):
@@ -67,7 +75,9 @@ class Agent:
 
     def ask(self, content: str) -> LLMResponse:
         if self._pending_event() is not None:
-            raise SummarizationRetryRequired("Retry the failed summarization before sending another message")
+            raise SummarizationRetryRequired(
+                "Retry the failed summarization before sending another message"
+            )
 
         self._operation_events = []
         self._facts_operation_events = []
@@ -91,7 +101,9 @@ class Agent:
             raise
 
         try:
-            response = self._router.complete(self._strategy.messages_for_request(self._history, self._context), self.config)
+            response = self._router.complete(
+                self._strategy.messages_for_request(self._history, self._context), self.config
+            )
         except Exception:
             self._history.pop()
             self._context = context_before_turn
@@ -131,9 +143,7 @@ class Agent:
         recent_message_count = policy.recent_exchange_limit * 2
         summary_batch_message_count = policy.summary_batch_exchange_count * 2
         while (
-            len(self._history)
-            - self._context.summarized_message_count
-            - recent_message_count
+            len(self._history) - self._context.summarized_message_count - recent_message_count
             >= summary_batch_message_count
         ):
             start = self._context.summarized_message_count
@@ -159,7 +169,9 @@ class Agent:
         end = start + event.message_count
         batch = self._history[start:end]
         if len(batch) != event.message_count:
-            raise SummarizationRetryRequired("The messages for this summarization are no longer available")
+            raise SummarizationRetryRequired(
+                "The messages for this summarization are no longer available"
+            )
 
         config = self._summarizer_config()
         payload = {
@@ -218,12 +230,14 @@ class Agent:
         return self._strategy.messages_for_request(self._history, self._context)
 
     def _append_response(self, response: LLMResponse) -> None:
-        self._history.append(ChatMessage(
-            role="assistant",
-            content=response.content,
-            usage=response.usage,
-            context_window=response.context_window,
-        ))
+        self._history.append(
+            ChatMessage(
+                role="assistant",
+                content=response.content,
+                usage=response.usage,
+                context_window=response.context_window,
+            )
+        )
 
     @staticmethod
     def _error_trace(error: Exception) -> ProviderTrace | None:

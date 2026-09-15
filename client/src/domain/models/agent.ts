@@ -7,12 +7,22 @@ export type AgentConfig = {
   provider: Provider
   model: string
   system_prompt?: string
-  generation: { max_output_tokens?: number; temperature?: number; top_p?: number }
-  structured_output?: { schema: Record<string, unknown>; strict: boolean }
+  generation: {
+    max_output_tokens?: number
+    temperature?: number
+    top_p?: number
+  }
+  structured_output?: {
+    schema: Record<string, unknown>
+    strict: boolean
+  }
   context_management: ContextManagementConfig
 }
 
-export type CompletionConfig = Omit<AgentConfig, 'name' | 'description' | 'avatar_path' | 'context_management'>
+export type CompletionConfig = Omit<
+  AgentConfig,
+  'name' | 'description' | 'avatar_path' | 'context_management'
+>
 
 export type ContextStrategy = 'summary' | 'sliding_window' | 'sticky_facts' | 'branching'
 
@@ -26,12 +36,20 @@ export type ContextManagementConfig = {
     provider?: Provider | null
     model?: string | null
     prompt: string
-    generation: { max_output_tokens?: number; temperature?: number; top_p?: number }
+    generation: {
+      max_output_tokens?: number
+      temperature?: number
+      top_p?: number
+    }
   }
   facts_updater: {
     provider?: Provider | null
     model?: string | null
     prompt: string
-    generation: { max_output_tokens?: number; temperature?: number; top_p?: number }
+    generation: {
+      max_output_tokens?: number
+      temperature?: number
+      top_p?: number
+    }
   }
 }

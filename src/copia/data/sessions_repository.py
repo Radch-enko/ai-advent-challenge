@@ -25,12 +25,14 @@ class SessionsRepository:
                 session = ChatSession.model_validate_json(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            summaries.append(ChatSessionSummary(
-                id=session.id,
-                title=session.title,
-                profile_name=session.profile_name,
-                updated_at=session.updated_at,
-            ))
+            summaries.append(
+                ChatSessionSummary(
+                    id=session.id,
+                    title=session.title,
+                    profile_name=session.profile_name,
+                    updated_at=session.updated_at,
+                )
+            )
         return sorted(summaries, key=lambda session: session.updated_at, reverse=True)
 
     def load(self, session_id: str) -> ChatSession | None:
@@ -74,7 +76,9 @@ class SessionsRepository:
         if not path.is_file():
             return {}
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in data.items()):
+        if not isinstance(data, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in data.items()
+        ):
             raise ValueError("Invalid facts file")
         return data
 

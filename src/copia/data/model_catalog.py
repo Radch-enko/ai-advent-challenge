@@ -19,8 +19,13 @@ def _context_windows() -> dict[str, dict[str, int]]:
         raise RuntimeError("Model context windows catalog must be a JSON object")
     for provider, models in data.items():
         if not isinstance(provider, str) or not isinstance(models, dict):
-            raise RuntimeError("Each provider in the model context windows catalog must contain an object")
-        if any(not isinstance(model, str) or not isinstance(limit, int) or limit <= 0 for model, limit in models.items()):
+            raise RuntimeError(
+                "Each provider in the model context windows catalog must contain an object"
+            )
+        if any(
+            not isinstance(model, str) or not isinstance(limit, int) or limit <= 0
+            for model, limit in models.items()
+        ):
             raise RuntimeError("Model context window limits must be positive integers")
     return data
 

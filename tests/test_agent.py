@@ -1,14 +1,24 @@
-from pathlib import Path
-
 import json
+from pathlib import Path
 
 import pytest
 
 from copia.data.providers.llm import ProviderError
-from copia.domain.models.agent import Agent, AgentFactory, FactsUpdateFailed, SummarizationFailed, SummarizationRetryRequired
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse, ProviderName, ProviderTrace
+from copia.domain.models.agent import (
+    Agent,
+    AgentFactory,
+    FactsUpdateFailed,
+    SummarizationFailed,
+    SummarizationRetryRequired,
+)
+from copia.domain.models.config import (
+    AgentConfig,
+    ChatMessage,
+    LLMResponse,
+    ProviderName,
+    ProviderTrace,
+)
 from copia.domain.models.session import ConversationContext
-from copia.domain.services.router import LLMRouter
 
 
 class FakeRouter:
@@ -38,10 +48,20 @@ def test_agents_keep_independent_history() -> None:
     first.ask("first message")
     second.ask("second message")
 
-    assert [message.content for message in first.history] == ["first message", "answer: first message"]
-    assert [message.content for message in second.history] == ["second message", "answer: second message"]
+    assert [message.content for message in first.history] == [
+        "first message",
+        "answer: first message",
+    ]
+    assert [message.content for message in second.history] == [
+        "second message",
+        "answer: second message",
+    ]
     assert [message.content for message in router.requests[0][0]] == ["system", "first message"]
-    assert first.history[-1].usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert first.history[-1].usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    }
     assert first.history[-1].context_window == 100
 
 
@@ -93,26 +113,28 @@ class CompressionRouter:
 
 
 def compression_config() -> AgentConfig:
-    return AgentConfig.model_validate({
-        "name": "test",
-        "provider": "openai",
-        "model": "main-model",
-        "system_prompt": "main system",
-        "context_management": {
-            "recent_exchange_limit": 1,
-            "summary_batch_exchange_count": 1,
-            "summarizer": {
-                "provider": "openai",
-                "model": "summary-model",
-                "prompt": "summary system",
-                "generation": {
-                    "max_output_tokens": 100,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
+    return AgentConfig.model_validate(
+        {
+            "name": "test",
+            "provider": "openai",
+            "model": "main-model",
+            "system_prompt": "main system",
+            "context_management": {
+                "recent_exchange_limit": 1,
+                "summary_batch_exchange_count": 1,
+                "summarizer": {
+                    "provider": "openai",
+                    "model": "summary-model",
+                    "prompt": "summary system",
+                    "generation": {
+                        "max_output_tokens": 100,
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                    },
                 },
             },
-        },
-    })
+        }
+    )
 
 
 def old_messages() -> list[ChatMessage]:
@@ -311,17 +333,19 @@ class FactsRouter:
 
 
 def facts_config() -> AgentConfig:
-    return AgentConfig.model_validate({
-        "name": "facts",
-        "provider": "openai",
-        "model": "main-model",
-        "system_prompt": "main system",
-        "context_management": {
-            "strategy": "sticky_facts",
-            "recent_message_limit": 2,
-            "facts_updater": {"model": "facts-model"},
-        },
-    })
+    return AgentConfig.model_validate(
+        {
+            "name": "facts",
+            "provider": "openai",
+            "model": "main-model",
+            "system_prompt": "main system",
+            "context_management": {
+                "strategy": "sticky_facts",
+                "recent_message_limit": 2,
+                "facts_updater": {"model": "facts-model"},
+            },
+        }
+    )
 
 
 def test_sticky_facts_applies_delta_and_sends_facts_with_recent_messages() -> None:
@@ -329,7 +353,10 @@ def test_sticky_facts_applies_delta_and_sends_facts_with_recent_messages() -> No
     agent = Agent(
         facts_config(),
         router,  # type: ignore[arg-type]
-        history=[ChatMessage(role="user", content="old"), ChatMessage(role="assistant", content="agreed")],
+        history=[
+            ChatMessage(role="user", content="old"),
+            ChatMessage(role="assistant", content="agreed"),
+        ],
         facts={"project_name": "Aurora", "old_deadline": "15 декабря"},
     )
 
@@ -346,7 +373,10 @@ def test_sticky_facts_applies_delta_and_sends_facts_with_recent_messages() -> No
     assert [message.role for message in main_messages] == ["system", "assistant", "user"]
     assert '"project_name": "Aurora"' in main_messages[0].content
     assert '"release_date": "20 декабря"' in main_messages[0].content
-    assert [message.content for message in main_messages[1:]] == ["agreed", "Переносим релиз на 20 декабря"]
+    assert [message.content for message in main_messages[1:]] == [
+        "agreed",
+        "Переносим релиз на 20 декабря",
+    ]
     assert agent.facts_operation_events[0].updates == {"release_date": "20 декабря"}
 
 

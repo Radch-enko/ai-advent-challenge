@@ -29,6 +29,9 @@ permission:
     "./harness/scripts/lint.sh": allow
     "./harness/scripts/security-check.sh": allow
     "./harness/scripts/architecture-check.sh": allow
+    "npx --prefix client prettier --write client/src/**/*.ts": allow
+    "npx --prefix client prettier --write client/src/**/*.tsx": allow
+    "npx --prefix client prettier --write client/src/App.tsx client/src/data/api/copiaApi.ts client/src/styles/app.css": allow
 ---
 
 # Copia Implementer

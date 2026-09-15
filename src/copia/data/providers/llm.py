@@ -9,13 +9,28 @@ from typing import Any
 
 import httpx
 
-from ...domain.models.config import ChatMessage, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, ProviderTrace
+from ...domain.models.config import (
+    ChatMessage,
+    LLMConfig,
+    LLMResponse,
+    ProviderCapabilities,
+    ProviderModel,
+    ProviderName,
+    ProviderTrace,
+)
 
 
 class ProviderError(RuntimeError):
     """An error returned while communicating with an LLM provider."""
 
-    def __init__(self, message: str, *, status_code: int = 0, request_body: dict[str, Any] | None = None, response_body: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 0,
+        request_body: dict[str, Any] | None = None,
+        response_body: Any = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.request_body = request_body or {}
@@ -63,8 +78,21 @@ class OpenAIProvider(LLMProvider):
     def _supports_sampling(model: str) -> bool:
         """Return model-level support instead of treating every GPT-5 model equally."""
         normalized = model.lower()
-        unsupported_prefixes = ("gpt-5-mini-", "gpt-5-nano-", "gpt-5.1", "gpt-5.2", "gpt-6", "o1", "o3", "o4")
-        return normalized not in {"gpt-5", "gpt-5-mini", "gpt-5-nano"} and not normalized.startswith(unsupported_prefixes)
+        unsupported_prefixes = (
+            "gpt-5-mini-",
+            "gpt-5-nano-",
+            "gpt-5.1",
+            "gpt-5.2",
+            "gpt-6",
+            "o1",
+            "o3",
+            "o4",
+        )
+        return normalized not in {
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+        } and not normalized.startswith(unsupported_prefixes)
 
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
         if not self._api_key:
@@ -120,11 +148,15 @@ class OpenAIProvider(LLMProvider):
         raw_usage = data.get("usage")
         if isinstance(raw_usage, dict):
             usage = {
-                key: value for key, value in raw_usage.items()
-                if key in {"prompt_tokens", "completion_tokens", "total_tokens"} and isinstance(value, int)
+                key: value
+                for key, value in raw_usage.items()
+                if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
+                and isinstance(value, int)
             }
             prompt_details = raw_usage.get("prompt_tokens_details")
-            if isinstance(prompt_details, dict) and isinstance(prompt_details.get("cached_tokens"), int):
+            if isinstance(prompt_details, dict) and isinstance(
+                prompt_details.get("cached_tokens"), int
+            ):
                 usage["cached_prompt_tokens"] = prompt_details["cached_tokens"]
         return LLMResponse(
             content=content,
@@ -268,12 +300,16 @@ class GigaChatProvider(LLMProvider):
             model=data.get("model", config.model),
             usage=usage,
             structured_data=_structured_data(content, config.structured_output is not None),
-            trace=ProviderTrace(status_code=response.status_code, request_body=payload, response_body=data),
+            trace=ProviderTrace(
+                status_code=response.status_code, request_body=payload, response_body=data
+            ),
         )
 
     def list_models(self) -> list[ProviderModel]:
         try:
-            response = self._client.get(self.MODELS_URL, headers={"Authorization": f"Bearer {self._token()}"})
+            response = self._client.get(
+                self.MODELS_URL, headers={"Authorization": f"Bearer {self._token()}"}
+            )
             response.raise_for_status()
             data = response.json().get("data", [])
             return [ProviderModel(id=item["id"]) for item in data if item.get("type") == "chat"]

@@ -10,12 +10,35 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, model_validator
 
-from ..data.providers.llm import ProviderError
 from ..data.profiles_repository import ProfilesRepository
+from ..data.providers.llm import ProviderError
 from ..data.sessions_repository import SessionsRepository
-from ..domain.models.agent import Agent, AgentFactory, FactsUpdateFailed, SummarizationFailed, SummarizationRetryRequired
-from ..domain.models.config import AgentConfig, ChatMessage, CompletionConfig, ContextStrategyName, GenerationConfig, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName, StructuredOutputConfig
-from ..domain.models.session import ChatSession, ChatSessionSummary, FactsUpdateEvent, SummarizationEvent
+from ..domain.models.agent import (
+    Agent,
+    AgentFactory,
+    FactsUpdateFailed,
+    SummarizationFailed,
+    SummarizationRetryRequired,
+)
+from ..domain.models.config import (
+    AgentConfig,
+    ChatMessage,
+    CompletionConfig,
+    ContextStrategyName,
+    GenerationConfig,
+    LLMConfig,
+    LLMResponse,
+    ProviderCapabilities,
+    ProviderModel,
+    ProviderName,
+    StructuredOutputConfig,
+)
+from ..domain.models.session import (
+    ChatSession,
+    ChatSessionSummary,
+    FactsUpdateEvent,
+    SummarizationEvent,
+)
 from ..domain.services.router import LLMRouter
 
 load_dotenv()
@@ -46,7 +69,7 @@ class CreateAgentRequest(BaseModel):
     config: AgentConfig | None = None
 
     @model_validator(mode="after")
-    def require_one_source(self) -> "CreateAgentRequest":
+    def require_one_source(self) -> CreateAgentRequest:
         if (self.profile_name is None) == (self.config is None):
             raise ValueError("Provide exactly one of profile_name or config")
         return self
@@ -85,7 +108,7 @@ class CreateSessionRequest(BaseModel):
     config: AgentConfig | None = None
 
     @model_validator(mode="after")
-    def require_one_source(self) -> "CreateSessionRequest":
+    def require_one_source(self) -> CreateSessionRequest:
         if (self.profile_name is None) == (self.config is None):
             raise ValueError("Provide exactly one of profile_name or config")
         return self
@@ -118,7 +141,9 @@ async def models(provider_name: ProviderName) -> list[ProviderModel]:
     try:
         return await run_in_threadpool(router.models, provider_name)
     except ProviderError as error:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)
+        ) from error
 
 
 @app.post("/completions", response_model=MessageResponse)
@@ -129,7 +154,9 @@ async def completion(request: CompletionRequest) -> MessageResponse:
     try:
         response = await run_in_threadpool(router.complete, messages, request.config)
     except ProviderError as error:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)
+        ) from error
     return MessageResponse(response=response)
 
 
@@ -157,7 +184,9 @@ async def send_message(agent_id: str, request: MessageRequest) -> MessageRespons
     try:
         response = await run_in_threadpool(agent.ask, request.content)
     except ProviderError as error:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)
+        ) from error
     return MessageResponse(response=response)
 
 
@@ -175,7 +204,9 @@ def create_session(request: CreateSessionRequest) -> ChatSession:
             else request.config
         )
     except KeyError as error:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown profile: {request.profile_name}") from error
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown profile: {request.profile_name}"
+        ) from error
     assert config is not None
     now = datetime.now(UTC)
     session = ChatSession(
@@ -203,11 +234,15 @@ def get_session_facts(session_id: str) -> dict[str, str]:
     try:
         return sessions.load_facts(session_id)
     except (OSError, ValueError) as error:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)
+        ) from error
 
 
 @app.patch("/sessions/{session_id}/context-management", response_model=ChatSession)
-def update_session_context_management(session_id: str, request: ContextManagementUpdate) -> ChatSession:
+def update_session_context_management(
+    session_id: str, request: ContextManagementUpdate
+) -> ChatSession:
     session = get_session(session_id)
     if request.enabled is not None:
         session.config.context_management.enabled = request.enabled
@@ -220,19 +255,26 @@ def update_session_context_management(session_id: str, request: ContextManagemen
     return session
 
 
-@app.post("/sessions/{session_id}/fork", response_model=ChatSession, status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/sessions/{session_id}/fork", response_model=ChatSession, status_code=status.HTTP_201_CREATED
+)
 def fork_session(session_id: str, request: ForkSessionRequest) -> ChatSession:
     source = get_session(session_id)
     if source.config.context_management.strategy != ContextStrategyName.BRANCHING:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Forking requires the branching strategy")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Forking requires the branching strategy"
+        )
     if request.message_index >= len(source.messages):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message index is outside the transcript")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Message index is outside the transcript",
+        )
 
     now = datetime.now(UTC)
     fork = ChatSession(
         id=str(uuid.uuid4()),
         config=source.config.model_copy(deep=True),
-        messages=list(source.messages[:request.message_index + 1]),
+        messages=list(source.messages[: request.message_index + 1]),
         title=f"{source.title or 'Новый чат'} · ветка",
         profile_name=source.profile_name,
         created_at=now,
@@ -243,15 +285,25 @@ def fork_session(session_id: str, request: ForkSessionRequest) -> ChatSession:
 
 
 @app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
-async def send_session_message(session_id: str, request: MessageRequest, background_tasks: BackgroundTasks) -> MessageResponse:
+async def send_session_message(
+    session_id: str, request: MessageRequest, background_tasks: BackgroundTasks
+) -> MessageResponse:
     session = get_session(session_id)
     if request.config is not None and session.profile_name is None:
         session.config = request.config
     try:
         facts = sessions.load_facts(session.id)
     except (OSError, ValueError) as error:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
-    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context, facts=facts)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)
+        ) from error
+    agent = Agent(
+        config=session.config,
+        router=router,
+        history=session.messages,
+        context=session.context,
+        facts=facts,
+    )
     try:
         response = await run_in_threadpool(agent.ask, request.content)
     except FactsUpdateFailed as error:
@@ -277,7 +329,9 @@ async def send_session_message(session_id: str, request: MessageRequest, backgro
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except ProviderError as error:
         _save_agent_state(session, agent)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)
+        ) from error
 
     _save_agent_state(session, agent)
     if session.title is None:
@@ -293,7 +347,9 @@ async def send_session_message(session_id: str, request: MessageRequest, backgro
 @app.post("/sessions/{session_id}/summarization/retry", response_model=MessageResponse)
 async def retry_session_summarization(session_id: str) -> MessageResponse:
     session = get_session(session_id)
-    agent = Agent(config=session.config, router=router, history=session.messages, context=session.context)
+    agent = Agent(
+        config=session.config, router=router, history=session.messages, context=session.context
+    )
     try:
         response = await run_in_threadpool(agent.retry_summarization)
     except SummarizationFailed as error:
@@ -310,7 +366,9 @@ async def retry_session_summarization(session_id: str) -> MessageResponse:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     except ProviderError as error:
         _save_agent_state(session, agent)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)) from error
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=provider_error_detail(error)
+        ) from error
 
     _save_agent_state(session, agent)
     return MessageResponse(response=response, summarization_events=agent.operation_events)

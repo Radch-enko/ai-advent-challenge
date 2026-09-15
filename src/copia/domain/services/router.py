@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from dotenv import load_dotenv
 
-from ..models.config import ChatMessage, LLMConfig, LLMResponse, ProviderCapabilities, ProviderModel, ProviderName
 from ...data.model_catalog import context_window_for
 from ...data.providers.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
+from ..models.config import (
+    ChatMessage,
+    LLMConfig,
+    LLMResponse,
+    ProviderCapabilities,
+    ProviderModel,
+    ProviderName,
+)
 
 
 class LLMRouter:
