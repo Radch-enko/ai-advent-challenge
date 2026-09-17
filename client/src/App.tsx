@@ -10,30 +10,51 @@ import {
 } from 'react'
 import {
   ApiRequestError,
+  approveMemory,
   ChatSession,
   ChatSessionSummary,
   createSession,
   createSessionFromProfile,
+  createProfileMemory,
+  clearWorkingMemory,
+  deleteWorkingMemory,
+  deleteProfileMemory,
   deleteSession,
   forkSession,
   getModels,
   getProfiles,
+  getProfileMemory,
   getSession,
   getSessionFacts,
+  getWorkingMemory,
+  getPendingMemory,
   getSessions,
+  rejectMemory,
+  undoWorkingMemory,
+  updateWorkingMemory,
   retrySessionSummarizationWithMeta,
   sendSessionMessageWithMeta,
   updateSessionContextManagement,
+  updateSessionLongTermMemory,
+  updateProfileMemory,
 } from './data/api/copiaApi'
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
 import {
+  LongTermMemoryItem,
+  MemoryEvent,
+  PendingMemorySuggestion,
+  WorkingMemoryItem,
+} from './domain/models/memory'
+import {
+  AgentLogExchange,
   ChatMessage,
   FactsUpdateEvent,
-  RequestLog,
   SummarizationEvent,
   TokenUsage,
 } from './domain/models/chat'
+import { AgentLogBlock } from './ui/components/AgentLogBlock'
+import { LongTermMemoryEditor, MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
 import { RequestLogs } from './ui/components/RequestLogs'
 
 const providerModels: Record<Provider, string> = {
@@ -87,14 +108,6 @@ function loadProviderModels(
     .finally(() => setLoading(false))
 }
 
-function monotonicNow() {
-  return performance.now()
-}
-
-function elapsedDuration(startedAt: number) {
-  return `${((monotonicNow() - startedAt) / 1000).toFixed(2)}s`
-}
-
 function defaultContextManagement(provider: Provider, model: string): ContextManagementConfig {
   return {
     enabled: true,
@@ -137,6 +150,15 @@ export function App() {
   const [summarizationEvents, setSummarizationEvents] = useState<SummarizationEvent[]>([])
   const [factsEvents, setFactsEvents] = useState<FactsUpdateEvent[]>([])
   const [facts, setFacts] = useState<Record<string, string>>({})
+  const [longTermMemory, setLongTermMemory] = useState<LongTermMemoryItem[]>([])
+  const [memoryEvents, setMemoryEvents] = useState<MemoryEvent[]>([])
+  const [pendingMemory, setPendingMemory] = useState<PendingMemorySuggestion[]>([])
+  const [workingMemory, setWorkingMemory] = useState<WorkingMemoryItem[]>([])
+  const [memoryEventsByAgentLogId, setMemoryEventsByAgentLogId] = useState<
+    Record<string, MemoryEvent[]>
+  >({})
+  const [activeLog, setActiveLog] = useState<AgentLogExchange | null>(null)
+  const [logTab, setLogTab] = useState<'request' | 'response'>('request')
   const [forkingMessageIndex, setForkingMessageIndex] = useState<number | null>(null)
   const [forkError, setForkError] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -147,8 +169,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [profileSettingsSaving, setProfileSettingsSaving] = useState(false)
   const [profileSettingsError, setProfileSettingsError] = useState<string | null>(null)
-  const [activeLog, setActiveLog] = useState<RequestLog | null>(null)
-  const [logTab, setLogTab] = useState<'request' | 'response'>('request')
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
   const [models, setModels] = useState<ProviderModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, AgentConfig>>({})
@@ -188,7 +209,6 @@ export function App() {
     }
     return null
   }, [messages])
-
   useEffect(() => resizeTextArea(composerRef.current), [message])
   useEffect(() => {
     loadProviderModels(provider, setModels, setModelsLoading)
@@ -205,6 +225,21 @@ export function App() {
       .catch(() => setProfiles({}))
   }, [])
   useEffect(() => {
+    const profileName = activeSession?.profile_name
+    if (!profileName) return
+    let cancelled = false
+    void getProfileMemory(profileName)
+      .then((items) => {
+        if (!cancelled) setLongTermMemory(items)
+      })
+      .catch(() => {
+        if (!cancelled) setLongTermMemory([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeSession?.id, activeSession?.profile_name])
+  useEffect(() => {
     void (async () => {
       try {
         setSavedSessions(await getSessions())
@@ -213,8 +248,10 @@ export function App() {
       }
       const sessionId = localStorage.getItem('copia.activeSessionId')
       if (!sessionId) return
+      activeSessionIdRef.current = sessionId
       try {
         const session = await getSession(sessionId)
+        if (activeSessionIdRef.current !== sessionId) return
         setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
@@ -241,23 +278,39 @@ export function App() {
             id: index,
             role: item.role,
             content: item.content,
-            timestamp: '',
+            timestamp: formatMessageTimestamp(item.created_at),
             usage: item.usage,
             contextWindow: item.context_window,
+            agentLogId: item.agent_log_id ?? undefined,
             transcriptIndex: index,
           })),
         )
         setSummarizationEvents(session.context.events)
         setFactsEvents(session.context.facts_events ?? [])
+        setMemoryEvents([])
         setFacts({})
         void getSessionFacts(session.id)
           .then((loadedFacts) => {
             if (activeSessionIdRef.current === session.id) setFacts(loadedFacts)
           })
           .catch(() => {})
+        void Promise.all([getWorkingMemory(session.id), getPendingMemory(session.id)]).then(
+          ([working, pending]) => {
+            if (activeSessionIdRef.current === session.id) {
+              setWorkingMemory(working)
+              setPendingMemory(pending)
+            }
+          },
+          () => {
+            if (activeSessionIdRef.current === session.id) {
+              setWorkingMemory([])
+              setPendingMemory([])
+            }
+          },
+        )
         setProfileSettingsError(null)
         setForkError(null)
-        setActiveLog(null)
+        setMemoryPanelOpen(false)
         void getSessions()
           .then(setSavedSessions)
           .catch(() => setSavedSessions([]))
@@ -304,13 +357,10 @@ export function App() {
     const content = message.trim()
     if (!content || isLoading || failedSummarization) return
 
-    let requestForLog: object = {}
-    let configForLog: AgentConfig | null = null
-    let startedAt = 0
     let session: ChatSession | null = null
+    let requestSessionId: string | null = null
     try {
       const config = buildConfig()
-      configForLog = config
       const timestamp = now()
       const userTranscriptIndex = transcriptLength(messages)
       setMessage('')
@@ -318,7 +368,6 @@ export function App() {
         ...current,
         { id: Date.now(), role: 'user', content, timestamp, transcriptIndex: userTranscriptIndex },
       ])
-      startedAt = monotonicNow()
       session = activeSession
       if (!session) {
         session = await createSession(config)
@@ -328,12 +377,8 @@ export function App() {
         void refreshSessions()
       }
       const requestSession = session
+      requestSessionId = requestSession.id
       const sessionConfig = requestSession.profile_name == null ? config : undefined
-      requestForLog = {
-        session_id: requestSession.id,
-        config: sessionConfig ?? requestSession.config,
-        content,
-      }
       setPendingSessionIds((current) => [...current, requestSession.id])
       const effectiveConfig = sessionConfig ?? requestSession.config
       if (
@@ -347,15 +392,6 @@ export function App() {
       }
       const result = await sendSessionMessageWithMeta(requestSession.id, content, sessionConfig)
       const response = result.data
-      const trace = response.response.trace
-      const log: RequestLog = {
-        provider: response.response.provider,
-        model: response.response.model,
-        status: trace?.status_code ?? result.status,
-        duration: elapsedDuration(startedAt),
-        request: trace?.request_body ?? requestForLog,
-        response: trace?.response_body ?? response,
-      }
       if (activeSessionIdRef.current === requestSession.id) {
         if (response.summarization_events.length) {
           setSummarizationEvents((current) =>
@@ -366,6 +402,13 @@ export function App() {
           setFactsEvents((current) => upsertFactsEvents(current, response.facts_events))
         }
         setFacts(response.facts)
+        setMemoryEvents(response.memory_events)
+        setPendingMemory(response.pending_memory)
+        setWorkingMemory(response.working_memory)
+        setMemoryEventsByAgentLogId((current) => ({
+          ...current,
+          [response.agent_log_id]: response.memory_events,
+        }))
         setMessages((current) => [
           ...current,
           {
@@ -373,7 +416,7 @@ export function App() {
             role: 'assistant',
             content: response.response.content,
             timestamp: now(),
-            log,
+            agentLogId: response.agent_log_id,
             usage: response.response.usage,
             contextWindow: response.response.context_window,
             transcriptIndex: userTranscriptIndex + 1,
@@ -389,17 +432,19 @@ export function App() {
       const apiError = error instanceof ApiRequestError ? error : null
       const summaryEvent = apiError?.summarizationEvent
       const factsEvent = apiError?.factsEvent
-      const trace = apiError?.providerTrace
-      const log: RequestLog = {
-        provider: activeSession?.config.provider ?? configForLog?.provider ?? provider,
-        model: activeSession?.config.model ?? configForLog?.model ?? model,
-        status: trace?.status_code ?? apiError?.status ?? 0,
-        duration: startedAt ? elapsedDuration(startedAt) : '0.00s',
-        request: trace?.request_body ?? requestForLog,
-        response: trace?.response_body ?? apiError?.body ?? { error: content },
-      }
+      const agentLogId = apiError?.agentLogId
       if (summaryEvent && activeSessionIdRef.current === session?.id) {
         setSummarizationEvents((current) => upsertSummarizationEvents(current, [summaryEvent]))
+        setMessages((current) => [
+          ...current,
+          {
+            id: Date.now() + 2,
+            role: 'error',
+            content,
+            timestamp: now(),
+            agentLogId,
+          },
+        ])
         void refreshSessions()
       } else if (factsEvent && activeSessionIdRef.current === session?.id) {
         setMessages((current) => [
@@ -413,27 +458,25 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            log: {
-              provider: factsEvent.provider,
-              model: factsEvent.model,
-              status: factsEvent.trace?.status_code ?? apiError?.status ?? 0,
-              duration: `${factsEvent.duration_seconds.toFixed(2)}s`,
-              request: factsEvent.trace?.request_body ?? requestForLog,
-              response: factsEvent.trace?.response_body ?? { error: content },
-            },
+            agentLogId,
           },
         ])
       } else if (activeSessionIdRef.current === session?.id) {
         setMessages((current) => [
           ...current,
-          { id: Date.now() + 2, role: 'error', content, timestamp: now(), log },
+          {
+            id: Date.now() + 2,
+            role: 'error',
+            content,
+            timestamp: now(),
+            agentLogId,
+          },
         ])
       }
     } finally {
-      if (requestForLog && 'session_id' in requestForLog) {
-        const sessionId = String(requestForLog.session_id)
-        setPendingSessionIds((current) => current.filter((id) => id !== sessionId))
-        setSummarizingSessionIds((current) => current.filter((id) => id !== sessionId))
+      if (requestSessionId) {
+        setPendingSessionIds((current) => current.filter((id) => id !== requestSessionId))
+        setSummarizingSessionIds((current) => current.filter((id) => id !== requestSessionId))
       }
     }
   }
@@ -441,25 +484,20 @@ export function App() {
   async function retrySummarization() {
     const session = activeSession
     if (!session || isLoading) return
-    const startedAt = monotonicNow()
     setPendingSessionIds((current) => [...current, session.id])
     setSummarizingSessionIds((current) => [...current, session.id])
     try {
       const result = await retrySessionSummarizationWithMeta(session.id)
       const response = result.data
-      const trace = response.response.trace
-      const log: RequestLog = {
-        provider: response.response.provider,
-        model: response.response.model,
-        status: trace?.status_code ?? result.status,
-        duration: elapsedDuration(startedAt),
-        request: trace?.request_body ?? { session_id: session.id, action: 'retry_summarization' },
-        response: trace?.response_body ?? response,
-      }
       if (activeSessionIdRef.current === session.id) {
         setSummarizationEvents((current) =>
           upsertSummarizationEvents(current, response.summarization_events),
         )
+        setMemoryEvents(response.memory_events)
+        setMemoryEventsByAgentLogId((current) => ({
+          ...current,
+          [response.agent_log_id]: response.memory_events,
+        }))
         setMessages((current) => [
           ...current,
           {
@@ -467,7 +505,7 @@ export function App() {
             role: 'assistant',
             content: response.response.content,
             timestamp: now(),
-            log,
+            agentLogId: response.agent_log_id,
             usage: response.response.usage,
             contextWindow: response.response.context_window,
             transcriptIndex: transcriptLength(current),
@@ -480,9 +518,18 @@ export function App() {
       const summaryEvent = apiError?.summarizationEvent
       if (summaryEvent && activeSessionIdRef.current === session.id) {
         setSummarizationEvents((current) => upsertSummarizationEvents(current, [summaryEvent]))
+        setMessages((current) => [
+          ...current,
+          {
+            id: Date.now(),
+            role: 'error',
+            content: summaryEvent.error ?? 'Conversation summarization failed',
+            timestamp: now(),
+            agentLogId: apiError?.agentLogId,
+          },
+        ])
       } else if (activeSessionIdRef.current === session.id) {
         const content = error instanceof Error ? error.message : 'Unexpected error'
-        const trace = apiError?.providerTrace
         setMessages((current) => [
           ...current,
           {
@@ -490,17 +537,7 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            log: {
-              provider: session.config.provider,
-              model: session.config.model,
-              status: trace?.status_code ?? apiError?.status ?? 0,
-              duration: elapsedDuration(startedAt),
-              request: trace?.request_body ?? {
-                session_id: session.id,
-                action: 'retry_summarization',
-              },
-              response: trace?.response_body ?? apiError?.body ?? { error: content },
-            },
+            agentLogId: apiError?.agentLogId,
           },
         ])
       }
@@ -525,15 +562,35 @@ export function App() {
         id: index,
         role: item.role,
         content: item.content,
-        timestamp: '',
+        timestamp: formatMessageTimestamp(item.created_at),
         usage: item.usage,
         contextWindow: item.context_window,
+        agentLogId: item.agent_log_id ?? undefined,
         transcriptIndex: index,
       })),
     )
     setSummarizationEvents(session.context.events)
     setFactsEvents(session.context.facts_events ?? [])
+    setMemoryEvents([])
+    setMemoryEventsByAgentLogId({})
+    setActiveLog(null)
     setFacts({})
+    setWorkingMemory([])
+    void getWorkingMemory(session.id)
+      .then((items) => {
+        if (activeSessionIdRef.current === session.id) setWorkingMemory(items)
+      })
+      .catch(() => {
+        if (activeSessionIdRef.current === session.id) setWorkingMemory([])
+      })
+    void getPendingMemory(session.id)
+      .then((items) => {
+        if (activeSessionIdRef.current === session.id) setPendingMemory(items)
+      })
+      .catch(() => {
+        if (activeSessionIdRef.current === session.id) setPendingMemory([])
+      })
+    setLongTermMemory([])
     void getSessionFacts(session.id)
       .then((loadedFacts) => {
         if (activeSessionIdRef.current === session.id) setFacts(loadedFacts)
@@ -541,8 +598,15 @@ export function App() {
       .catch(() => {})
     setProfileSettingsError(null)
     setForkError(null)
-    setActiveLog(null)
+    setMemoryPanelOpen(false)
     void refreshSessions()
+  }
+
+  function openSavedSession(sessionId: string) {
+    activeSessionIdRef.current = sessionId
+    void getSession(sessionId).then((session) => {
+      if (activeSessionIdRef.current === sessionId) openSession(session)
+    })
   }
 
   async function refreshSessions() {
@@ -577,15 +641,109 @@ export function App() {
     setSummarizationEvents([])
     setFactsEvents([])
     setFacts({})
+    setLongTermMemory([])
+    setPendingMemory([])
+    setWorkingMemory([])
+    setMemoryEventsByAgentLogId({})
+    setActiveLog(null)
     setProfileSettingsError(null)
     setForkError(null)
-    setActiveLog(null)
+    setMemoryPanelOpen(false)
   }
 
   async function removeSession(sessionId: string) {
     await deleteSession(sessionId)
-    if (activeSession?.id === sessionId) startNewChat()
+    if (activeSessionIdRef.current === sessionId) startNewChat()
     await refreshSessions()
+  }
+
+  async function refreshWorking(sessionId: string) {
+    try {
+      const items = await getWorkingMemory(sessionId)
+      if (activeSessionIdRef.current === sessionId) setWorkingMemory(items)
+    } catch {
+      if (activeSessionIdRef.current === sessionId) setWorkingMemory([])
+    }
+  }
+
+  async function editWorking(sessionId: string, item: WorkingMemoryItem) {
+    const value = window.prompt(`Value for ${item.key}`, item.value)
+    if (value == null || !value.trim()) return
+    const result = await updateWorkingMemory(sessionId, item.id, {
+      key: item.key,
+      value: value.trim(),
+    })
+    if (activeSessionIdRef.current !== sessionId) return
+    setMemoryEvents((events) => [...events, ...result.memory_events])
+    await refreshWorking(sessionId)
+  }
+
+  async function clearWorking(sessionId: string) {
+    const result = await clearWorkingMemory(sessionId)
+    if (activeSessionIdRef.current !== sessionId) return
+    setMemoryEvents((events) => [...events, ...result.memory_events])
+    await refreshWorking(sessionId)
+  }
+
+  async function undoWorking(sessionId: string) {
+    const result = await undoWorkingMemory(sessionId)
+    if (activeSessionIdRef.current !== sessionId) return
+    setMemoryEvents((events) => [...events, ...result.memory_events])
+    await refreshWorking(sessionId)
+  }
+
+  async function removeWorking(sessionId: string, item: WorkingMemoryItem) {
+    try {
+      const result = await deleteWorkingMemory(sessionId, item.id)
+      if (activeSessionIdRef.current !== sessionId) return
+      setMemoryEvents((events) => [...events, ...result.memory_events])
+      await refreshWorking(sessionId)
+    } catch (error) {
+      appendMemoryError(sessionId, error, 'Could not delete working memory')
+    }
+  }
+
+  async function approvePending(sessionId: string, suggestion: PendingMemorySuggestion) {
+    const profileName = activeSession?.profile_name
+    if (!profileName || activeSessionIdRef.current !== sessionId) return
+    try {
+      const item = await approveMemory(sessionId, suggestion.id)
+      if (activeSessionIdRef.current !== sessionId) return
+      setLongTermMemory((items) => {
+        if (suggestion.candidate.action === 'create') return [...items, item]
+        if (suggestion.candidate.action === 'delete')
+          return items.filter((current) => current.id !== item.id)
+        return items.map((current) => (current.id === item.id ? item : current))
+      })
+      setMemoryEvents((events) => [...events, ...item.memory_events])
+      setPendingMemory((items) => items.filter((current) => current.id !== suggestion.id))
+    } catch (error) {
+      appendMemoryError(sessionId, error, 'Could not approve memory')
+    }
+  }
+
+  async function rejectPending(sessionId: string, suggestion: PendingMemorySuggestion) {
+    try {
+      const result = await rejectMemory(sessionId, suggestion.id)
+      if (activeSessionIdRef.current !== sessionId) return
+      setPendingMemory((items) => items.filter((current) => current.id !== suggestion.id))
+      setMemoryEvents((events) => [...events, ...result.memory_events])
+    } catch (error) {
+      appendMemoryError(sessionId, error, 'Could not reject memory')
+    }
+  }
+
+  function appendMemoryError(sessionId: string, error: unknown, fallback: string) {
+    if (activeSessionIdRef.current !== sessionId) return
+    setMemoryEvents((events) => [
+      ...events,
+      {
+        id: String(Date.now()),
+        scope: 'long_term',
+        action: 'error',
+        message: error instanceof Error ? error.message : fallback,
+      },
+    ])
   }
 
   async function setProfileContextManagement(value: ContextManagementConfig) {
@@ -603,6 +761,78 @@ export function App() {
       )
     } finally {
       setProfileSettingsSaving(false)
+    }
+  }
+
+  async function setLongTermMemoryEnabled(enabled: boolean) {
+    const session = activeSession
+    if (!session || session.profile_name == null || profileSettingsSaving) return
+    setProfileSettingsSaving(true)
+    setProfileSettingsError(null)
+    try {
+      const updated = await updateSessionLongTermMemory(session.id, enabled)
+      if (activeSessionIdRef.current === session.id) setActiveSession(updated)
+    } catch (error) {
+      if (activeSessionIdRef.current === session.id)
+        setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось сохранить настройку',
+        )
+    } finally {
+      setProfileSettingsSaving(false)
+    }
+  }
+
+  async function addLongTermMemory(
+    sessionId: string,
+    profileName: string,
+    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+  ) {
+    if (activeSessionIdRef.current !== sessionId) return
+    setProfileSettingsError(null)
+    try {
+      const created = await createProfileMemory(profileName, value)
+      if (activeSessionIdRef.current === sessionId)
+        setLongTermMemory((current) => [...current, created])
+    } catch (error) {
+      if (activeSessionIdRef.current === sessionId)
+        setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось сохранить память',
+        )
+    }
+  }
+
+  async function editLongTermMemory(
+    sessionId: string,
+    profileName: string,
+    itemId: string,
+    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+  ) {
+    if (activeSessionIdRef.current !== sessionId) return
+    setProfileSettingsError(null)
+    try {
+      const updated = await updateProfileMemory(profileName, itemId, value)
+      if (activeSessionIdRef.current === sessionId)
+        setLongTermMemory((current) => current.map((item) => (item.id === itemId ? updated : item)))
+    } catch (error) {
+      if (activeSessionIdRef.current === sessionId)
+        setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось обновить память',
+        )
+    }
+  }
+
+  async function removeLongTermMemory(sessionId: string, profileName: string, itemId: string) {
+    if (activeSessionIdRef.current !== sessionId) return
+    setProfileSettingsError(null)
+    try {
+      await deleteProfileMemory(profileName, itemId)
+      if (activeSessionIdRef.current === sessionId)
+        setLongTermMemory((current) => current.filter((item) => item.id !== itemId))
+    } catch (error) {
+      if (activeSessionIdRef.current === sessionId)
+        setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось удалить память',
+        )
     }
   }
 
@@ -624,6 +854,45 @@ export function App() {
     setSidebarCollapsed(collapsed)
     localStorage.setItem('copia.sidebarCollapsed', String(collapsed))
   }
+
+  function openAgentLog(exchange: AgentLogExchange) {
+    setActiveLog(exchange)
+    setLogTab('request')
+  }
+
+  const memoryPanelContent = activeSession ? (
+    <MemoryPanel
+      open={true}
+      profileName={activeSession.profile_name}
+      facts={facts}
+      memoryEvents={memoryEvents}
+      workingMemory={workingMemory}
+      pendingMemory={pendingMemory}
+      longTermMemory={longTermMemory}
+      onToggle={() => setMemoryPanelOpen(false)}
+      onClearWorking={() => clearWorking(activeSession.id)}
+      onUndoWorking={() => undoWorking(activeSession.id)}
+      onEditWorking={(item) => editWorking(activeSession.id, item)}
+      onDeleteWorking={(item) => removeWorking(activeSession.id, item)}
+      onApprovePending={(suggestion) => approvePending(activeSession.id, suggestion)}
+      onRejectPending={(suggestion) => rejectPending(activeSession.id, suggestion)}
+      onAddLongTermMemory={(value) =>
+        activeSession.profile_name
+          ? addLongTermMemory(activeSession.id, activeSession.profile_name, value)
+          : Promise.resolve()
+      }
+      onEditLongTermMemory={(itemId, value) =>
+        activeSession.profile_name
+          ? editLongTermMemory(activeSession.id, activeSession.profile_name, itemId, value)
+          : Promise.resolve()
+      }
+      onDeleteLongTermMemory={(itemId) =>
+        activeSession.profile_name
+          ? removeLongTermMemory(activeSession.id, activeSession.profile_name, itemId)
+          : Promise.resolve()
+      }
+    />
+  ) : null
 
   return (
     <main
@@ -662,7 +931,7 @@ export function App() {
                 <div className="saved-chat" key={session.id}>
                   <button
                     className={session.id === activeSession?.id ? 'active' : ''}
-                    onClick={() => void getSession(session.id).then(openSession)}
+                    onClick={() => openSavedSession(session.id)}
                   >
                     {session.title ?? 'Новый чат'}
                   </button>
@@ -741,25 +1010,26 @@ export function App() {
                         <div className="markdown">
                           <Markdown content={entry.content} />
                         </div>
+                        {entry.role !== 'user' && (
+                          <AgentLogBlock
+                            key={`${activeSession?.id ?? 'session'}-${entry.id}-${entry.agentLogId ?? 'no-log'}`}
+                            sessionId={activeSession?.id}
+                            agentLogId={entry.agentLogId}
+                            memoryEvents={
+                              entry.agentLogId
+                                ? memoryEventsByAgentLogId[entry.agentLogId]
+                                : undefined
+                            }
+                            onOpenLogs={openAgentLog}
+                          />
+                        )}
                         {(entry.timestamp ||
-                          entry.log ||
-                          entry.usage ||
+                          entry.agentLogId ||
                           (effectiveContextManagement.strategy === 'branching' &&
                             activeSession &&
                             entry.transcriptIndex != null)) && (
                           <footer>
                             {entry.timestamp && <span>{entry.timestamp}</span>}
-                            {entry.usage && <TokenUsageSummary usage={entry.usage} />}
-                            {entry.log && (
-                              <button
-                                onClick={() => {
-                                  setActiveLog(entry.log ?? null)
-                                  setLogTab('request')
-                                }}
-                              >
-                                Логи
-                              </button>
-                            )}
                             {effectiveContextManagement.strategy === 'branching' &&
                               activeSession &&
                               entry.transcriptIndex != null && (
@@ -789,25 +1059,12 @@ export function App() {
                             event={event}
                             retrying={isLoading && event.status === 'failed'}
                             onRetry={() => void retrySummarization()}
-                            onLogs={(log) => {
-                              setActiveLog(log)
-                              setLogTab('request')
-                            }}
                           />
                         ))}
                     {entry.transcriptIndex != null &&
                       factsEvents
                         .filter((event) => event.after_message_index === entry.transcriptIndex)
-                        .map((event) => (
-                          <FactsUpdateIndicator
-                            key={event.id}
-                            event={event}
-                            onLogs={(log) => {
-                              setActiveLog(log)
-                              setLogTab('request')
-                            }}
-                          />
-                        ))}
+                        .map((event) => <FactsUpdateIndicator key={event.id} event={event} />)}
                   </Fragment>
                 ))}
                 {forkError && <div className="fork-error">{forkError}</div>}
@@ -849,11 +1106,20 @@ export function App() {
                 <div ref={settingsRef}>
                   {isProfileSession && activeSession ? (
                     <ProfileSessionSettings
+                      sessionId={activeSession.id}
+                      profileName={activeSession.profile_name!}
                       value={activeSession.config.context_management}
                       facts={facts}
+                      provider={activeSession.config.provider}
+                      longTermMemoryEnabled={activeSession.long_term_memory_enabled}
+                      longTermMemory={longTermMemory}
                       saving={profileSettingsSaving}
                       error={profileSettingsError}
                       onChange={setProfileContextManagement}
+                      onLongTermMemoryEnabled={setLongTermMemoryEnabled}
+                      onAddLongTermMemory={addLongTermMemory}
+                      onEditLongTermMemory={editLongTermMemory}
+                      onDeleteLongTermMemory={removeLongTermMemory}
                     />
                   ) : (
                     <Settings
@@ -914,6 +1180,18 @@ export function App() {
                 >
                   ☷
                 </button>
+                {activeSession && (
+                  <button
+                    type="button"
+                    className={`memory-toggle ${memoryPanelOpen ? 'active' : ''}`}
+                    aria-label="Открыть память"
+                    aria-expanded={memoryPanelOpen}
+                    onClick={() => setMemoryPanelOpen(true)}
+                  >
+                    <span aria-hidden="true">◈</span>
+                    <span className="memory-toggle-label">Память</span>
+                  </button>
+                )}
                 <textarea
                   ref={composerRef}
                   value={message}
@@ -938,6 +1216,11 @@ export function App() {
               </form>
               <p className="hint">Copia может допускать ошибки. Проверяйте важную информацию.</p>
             </div>
+            {activeSession && memoryPanelOpen && memoryPanelContent && (
+              <MemoryModal onClose={() => setMemoryPanelOpen(false)}>
+                {memoryPanelContent}
+              </MemoryModal>
+            )}
           </>
         )}
       </section>
@@ -993,24 +1276,82 @@ function ContextProgress({
 }
 
 function ProfileSessionSettings({
+  sessionId,
+  profileName,
   value,
   facts,
+  provider,
+  longTermMemoryEnabled,
+  longTermMemory,
   saving,
   error,
   onChange,
+  onLongTermMemoryEnabled,
+  onAddLongTermMemory,
+  onEditLongTermMemory,
+  onDeleteLongTermMemory,
 }: {
+  sessionId: string
+  profileName: string
   value: ContextManagementConfig
   facts: Record<string, string>
+  provider: Provider
+  longTermMemoryEnabled: boolean
+  longTermMemory: LongTermMemoryItem[]
   saving: boolean
   error: string | null
   onChange: (value: ContextManagementConfig) => Promise<void>
+  onLongTermMemoryEnabled: (enabled: boolean) => Promise<void>
+  onAddLongTermMemory: (
+    sessionId: string,
+    profileName: string,
+    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+  ) => Promise<void>
+  onEditLongTermMemory: (
+    sessionId: string,
+    profileName: string,
+    itemId: string,
+    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+  ) => Promise<void>
+  onDeleteLongTermMemory: (sessionId: string, profileName: string, itemId: string) => Promise<void>
 }) {
   return (
     <section className="settings-popover">
       <header>
         <b>Настройки диалога</b>
-        <span>Изменения действуют только в текущем диалоге</span>
+        <span>
+          {provider} · long-term memory {longTermMemoryEnabled ? 'активна' : 'выключена'}
+        </span>
       </header>
+      <MemoryLayerStatus longTermState={longTermMemoryEnabled ? 'enabled' : 'disabled'} />
+      <label className="toggle-row">
+        <span>
+          <b>Long-term memory</b>
+          <small>
+            При включении память профиля отправляется с запросами провайдеру {provider}. Только для
+            этого чата; записи профиля не изменяются.
+          </small>
+        </span>
+        <input
+          type="checkbox"
+          checked={longTermMemoryEnabled}
+          disabled={saving}
+          onChange={(event) => void onLongTermMemoryEnabled(event.target.checked)}
+        />
+      </label>
+      <section className="facts-panel long-term-memory-panel">
+        <header>
+          <b>Long-term memory · {longTermMemory.length}</b>
+          <span>Профиль</span>
+        </header>
+        <LongTermMemoryEditor
+          key={`${sessionId}:${profileName}`}
+          items={longTermMemory}
+          onAdd={(value) => onAddLongTermMemory(sessionId, profileName, value)}
+          onEdit={(itemId, value) => onEditLongTermMemory(sessionId, profileName, itemId, value)}
+          onDelete={(itemId) => onDeleteLongTermMemory(sessionId, profileName, itemId)}
+        />
+      </section>
       <StrategySettings
         value={value}
         facts={facts}
@@ -1018,6 +1359,21 @@ function ProfileSessionSettings({
         onChange={(next) => void onChange(next)}
       />
       {error && <p className="model-note">{error}</p>}
+    </section>
+  )
+}
+
+function MemoryLayerStatus({
+  longTermState,
+}: {
+  longTermState: 'enabled' | 'disabled' | 'unavailable'
+}) {
+  const workingActive = true
+  return (
+    <section className="memory-layer-status" aria-label="Статус слоёв памяти">
+      <span>Short-term dialogue · active</span>
+      <span>Working context · {workingActive ? 'active' : 'inactive'}</span>
+      <span>Long-term memory · {longTermState}</span>
     </section>
   )
 }
@@ -1060,6 +1416,8 @@ function Settings(props: SettingsProps) {
         <b>Настройки запроса</b>
         <span>Конфигурация применяется к обычному чату</span>
       </header>
+      <MemoryLayerStatus longTermState="unavailable" />
+      <p className="model-note">Long-term memory недоступна без профиля.</p>
       <div className="settings-grid">
         <label>
           Провайдер
@@ -1313,12 +1671,10 @@ function SummarizationIndicator({
   event,
   retrying,
   onRetry,
-  onLogs,
 }: {
   event: SummarizationEvent
   retrying: boolean
   onRetry: () => void
-  onLogs: (log: RequestLog) => void
 }) {
   const failed = event.status === 'failed'
   return (
@@ -1333,7 +1689,6 @@ function SummarizationIndicator({
         <span>{failed ? event.error : `${event.provider} · ${event.model}`}</span>
       </div>
       {event.usage && <TokenUsageSummary usage={event.usage} />}
-      <button onClick={() => onLogs(summarizationEventLog(event))}>Логи</button>
       {failed && (
         <button className="summary-retry" disabled={retrying} onClick={onRetry}>
           {retrying ? 'Повторяем…' : 'Retry'}
@@ -1462,13 +1817,7 @@ function FactsPanel({ facts }: { facts: Record<string, string> }) {
   )
 }
 
-function FactsUpdateIndicator({
-  event,
-  onLogs,
-}: {
-  event: FactsUpdateEvent
-  onLogs: (log: RequestLog) => void
-}) {
+function FactsUpdateIndicator({ event }: { event: FactsUpdateEvent }) {
   const failed = event.status === 'failed'
   const changed = Object.keys(event.updates).length
   return (
@@ -1483,7 +1832,6 @@ function FactsUpdateIndicator({
         <span>{failed ? event.error : `${event.provider} · ${event.model}`}</span>
       </div>
       {event.usage && <TokenUsageSummary usage={event.usage} />}
-      <button onClick={() => onLogs(factsEventLog(event))}>Логи</button>
     </div>
   )
 }
@@ -1988,40 +2336,33 @@ function StrategySelect({
   )
 }
 
-function summarizationEventLog(event: SummarizationEvent): RequestLog {
-  return {
-    provider: event.provider,
-    model: event.model,
-    status: event.trace?.status_code ?? (event.status === 'completed' ? 200 : 0),
-    duration: `${event.duration_seconds.toFixed(2)}s`,
-    request: event.trace?.request_body ?? {
-      start_message_index: event.start_message_index,
-      message_count: event.message_count,
-    },
-    response: event.trace?.response_body ?? (event.error ? { error: event.error } : {}),
-  }
-}
-
-function factsEventLog(event: FactsUpdateEvent): RequestLog {
-  return {
-    provider: event.provider,
-    model: event.model,
-    status: event.trace?.status_code ?? (event.status === 'completed' ? 200 : 0),
-    duration: `${event.duration_seconds.toFixed(2)}s`,
-    request: event.trace?.request_body ?? {},
-    response:
-      event.trace?.response_body ??
-      (event.error
-        ? { error: event.error }
-        : {
-            updates: event.updates,
-            deletions: event.deletions,
-          }),
-  }
-}
-
 function now() {
-  return `Сегодня, ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date())}`
+  return formatMessageTimestamp(new Date())
+}
+
+function formatMessageTimestamp(value: string | Date | null | undefined) {
+  const date = value instanceof Date ? value : value ? new Date(value) : null
+  if (date == null || Number.isNaN(date.getTime())) return ''
+
+  const current = new Date()
+  const time = new Intl.DateTimeFormat('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+  if (
+    date.getFullYear() === current.getFullYear() &&
+    date.getMonth() === current.getMonth() &&
+    date.getDate() === current.getDate()
+  ) {
+    return `Сегодня, ${time}`
+  }
+
+  const day = new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date)
+  return `${day}, ${time}`
 }
 
 function formatTokens(value?: number) {

@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
+from ..services.agent_log_context import agent_log_operation
 from ..services.context_strategy import FactsUpdateFailed as FactsUpdateFailed
 from ..services.context_strategy import context_strategy_for
+from ..services.memory_classifier import MemoryClassifier
+from ..services.memory_policy import HybridMemoryPolicy, WorkingMemoryStore
 from ..services.router import LLMRouter, ProviderError
 from .config import (
     AgentConfig,
@@ -17,6 +21,7 @@ from .config import (
     LLMResponse,
     ProviderTrace,
 )
+from .memory import LongTermMemoryItem, MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem
 from .session import ConversationContext, FactsUpdateEvent, SummarizationEvent
 
 
@@ -44,6 +49,14 @@ class Agent:
         history: list[ChatMessage] | None = None,
         context: ConversationContext | None = None,
         facts: dict[str, str] | None = None,
+        long_term_memory: list[LongTermMemoryItem] | None = None,
+        long_term_memory_loader: Callable[[], list[LongTermMemoryItem]] | None = None,
+        context_window: int | None = None,
+        working_memory: list[WorkingMemoryItem] | None = None,
+        working_memory_store: WorkingMemoryStore | None = None,
+        session_id: str | None = None,
+        memory_classifier: MemoryClassifier | None = None,
+        pending_memory: list[PendingMemorySuggestion] | None = None,
     ) -> None:
         self.config = config
         self._router = router
@@ -51,7 +64,23 @@ class Agent:
         self._context = (context or ConversationContext()).model_copy(deep=True)
         self._operation_events: list[SummarizationEvent] = []
         self._facts_operation_events: list[FactsUpdateEvent] = []
-        self._strategy = context_strategy_for(config, router, facts)
+        self._long_term_memory = list(long_term_memory or [])
+        self._long_term_memory_loader = long_term_memory_loader
+        self._context_window = context_window
+        self._working_memory = list(working_memory or [])
+        self._working_memory_store = working_memory_store
+        self._session_id = session_id
+        self._memory_classifier = memory_classifier
+        self._memory_events: list[MemoryEvent] = []
+        self._pending_memory = list(pending_memory or [])
+        self._strategy = context_strategy_for(
+            config,
+            router,
+            facts,
+            self._long_term_memory,
+            self._context_window,
+            self._working_memory,
+        )
 
     @property
     def history(self) -> list[ChatMessage]:
@@ -73,7 +102,30 @@ class Agent:
     def facts_operation_events(self) -> list[FactsUpdateEvent]:
         return [event.model_copy(deep=True) for event in self._facts_operation_events]
 
-    def ask(self, content: str) -> LLMResponse:
+    @property
+    def working_memory(self) -> list[WorkingMemoryItem]:
+        return [item.model_copy(deep=True) for item in self._working_memory]
+
+    @property
+    def memory_events(self) -> list[MemoryEvent]:
+        return [event.model_copy(deep=True) for event in self._memory_events]
+
+    @property
+    def pending_memory(self):
+        return [item.model_copy(deep=True) for item in self._pending_memory]
+
+    @property
+    def has_long_term_memory(self) -> bool:
+        return bool(self._long_term_memory)
+
+    @property
+    def has_sensitive_memory(self) -> bool:
+        return bool(
+            self._long_term_memory or self._working_memory or self._pending_memory or self.facts
+        )
+
+    def ask(self, content: str, *, agent_log_id: str | None = None) -> LLMResponse:
+        self._refresh_long_term_memory()
         if self._pending_event() is not None:
             raise SummarizationRetryRequired(
                 "Retry the failed summarization before sending another message"
@@ -81,9 +133,16 @@ class Agent:
 
         self._operation_events = []
         self._facts_operation_events = []
+        self._memory_events = []
         context_before_turn = self._context.model_copy(deep=True)
         facts_event_count = len(self._context.facts_events)
-        self._history.append(ChatMessage(role="user", content=content))
+        self._history.append(
+            ChatMessage(role="user", content=content, created_at=datetime.now(UTC))
+        )
+        self._memory_events.append(
+            MemoryEvent(id=str(uuid.uuid4()), scope="short_term", action="saved")
+        )
+        self._classify_memory(content)
         try:
             self._strategy.update_after_user_message(self._history, self._context)
             self._facts_operation_events = [
@@ -101,9 +160,14 @@ class Agent:
             raise
 
         try:
-            response = self._router.complete(
-                self._strategy.messages_for_request(self._history, self._context), self.config
-            )
+            with agent_log_operation(
+                "primary",
+                provider=self.config.provider,
+                model=self.config.model,
+            ):
+                response = self._router.complete(
+                    self._strategy.messages_for_request(self._history, self._context), self.config
+                )
         except Exception:
             self._history.pop()
             self._context = context_before_turn
@@ -111,11 +175,12 @@ class Agent:
             self._facts_operation_events = []
             self._strategy.rollback_turn()
             raise
-        self._append_response(response)
+        self._append_response(response, agent_log_id)
         self._strategy.commit_turn()
-        return response
+        return self._redact_long_term_trace(response)
 
-    def retry_summarization(self) -> LLMResponse:
+    def retry_summarization(self, *, agent_log_id: str | None = None) -> LLMResponse:
+        self._refresh_long_term_memory()
         event = self._pending_event()
         if event is None:
             raise SummarizationRetryRequired("There is no failed summarization to retry")
@@ -127,13 +192,18 @@ class Agent:
         self._summarize(event)
         self._compact_eligible_messages()
         try:
-            response = self._router.complete(self._messages_for_request(), self.config)
+            with agent_log_operation(
+                "retry",
+                provider=self.config.provider,
+                model=self.config.model,
+            ):
+                response = self._router.complete(self._messages_for_request(), self.config)
         except Exception:
             self._context = context_before_retry
             self._operation_events = []
             raise
-        self._append_response(response)
-        return response
+        self._append_response(response, agent_log_id)
+        return self._redact_long_term_trace(response)
 
     def _compact_eligible_messages(self) -> None:
         policy = self.config.context_management
@@ -180,13 +250,18 @@ class Agent:
         }
         started_at = time.perf_counter()
         try:
-            response = self._router.complete(
-                [
-                    ChatMessage(role="system", content=config.system_prompt or ""),
-                    ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-                ],
-                config,
-            )
+            with agent_log_operation(
+                "summarization",
+                provider=config.provider,
+                model=config.model,
+            ):
+                response = self._router.complete(
+                    [
+                        ChatMessage(role="system", content=config.system_prompt or ""),
+                        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+                    ],
+                    config,
+                )
             summary = response.content.strip()
             if not summary:
                 raise ValueError("Summarizer returned an empty summary")
@@ -194,7 +269,7 @@ class Agent:
             event.status = "failed"
             event.duration_seconds = time.perf_counter() - started_at
             event.error = str(error)
-            event.trace = self._error_trace(error)
+            event.trace = self._error_trace(error, redact=self.has_sensitive_memory)
             event.updated_at = datetime.now(UTC)
             self._operation_events.append(event.model_copy(deep=True))
             raise SummarizationFailed(event.model_copy(deep=True)) from error
@@ -202,7 +277,11 @@ class Agent:
         event.status = "completed"
         event.duration_seconds = time.perf_counter() - started_at
         event.usage = response.usage
-        event.trace = response.trace
+        event.trace = (
+            self._redact_trace(response).trace
+            if self.has_sensitive_memory and response.trace is not None
+            else response.trace
+        )
         event.error = None
         event.updated_at = datetime.now(UTC)
         self._context.summary = summary
@@ -229,18 +308,123 @@ class Agent:
     def _messages_for_request(self) -> list[ChatMessage]:
         return self._strategy.messages_for_request(self._history, self._context)
 
-    def _append_response(self, response: LLMResponse) -> None:
+    def _append_response(self, response: LLMResponse, agent_log_id: str | None = None) -> None:
         self._history.append(
             ChatMessage(
                 role="assistant",
                 content=response.content,
+                created_at=datetime.now(UTC),
                 usage=response.usage,
                 context_window=response.context_window,
+                agent_log_id=agent_log_id,
             )
         )
 
+    def _refresh_long_term_memory(self) -> None:
+        if self._long_term_memory_loader is None:
+            return
+        facts = self._strategy.persistent_facts()
+        self._long_term_memory = list(self._long_term_memory_loader())
+        self._strategy = context_strategy_for(
+            self.config,
+            self._router,
+            facts,
+            self._long_term_memory,
+            self._context_window,
+            self._working_memory,
+        )
+
+    def _classify_memory(self, content: str) -> None:
+        if (
+            self._memory_classifier is None
+            or self._working_memory_store is None
+            or self._session_id is None
+        ):
+            return
+        try:
+            candidates = self._memory_classifier.classify(
+                content,
+                self._history[-7:],
+                self._working_memory,
+                self._history[-2].content if len(self._history) > 1 else None,
+            )
+            classifier_error = getattr(self._memory_classifier, "last_error", None)
+            memory_trace = getattr(self._memory_classifier, "last_trace", None)
+            memory_duration = getattr(self._memory_classifier, "last_duration_seconds", None)
+            if memory_trace is None and memory_duration is not None:
+                memory_trace = ProviderTrace(
+                    status_code=0 if classifier_error is not None else 200,
+                    request_body=getattr(self._memory_classifier, "last_request_body", None)
+                    or {
+                        "operation": "memory_classification",
+                        "message": content,
+                        "working_memory": [
+                            item.model_dump(mode="json") for item in self._working_memory
+                        ],
+                    },
+                    response_body={"error": classifier_error}
+                    if classifier_error is not None
+                    else {"status": "completed"},
+                )
+            memory_details = {
+                "provider": self.config.provider.value,
+                "model": self.config.model,
+                "duration_seconds": memory_duration,
+                "trace": memory_trace,
+            }
+            if self._memory_events and self._memory_events[-1].action == "saved":
+                self._memory_events[-1] = self._memory_events[-1].model_copy(update=memory_details)
+            if classifier_error is not None:
+                self._memory_events.append(
+                    MemoryEvent(
+                        id=str(uuid.uuid4()),
+                        scope="working",
+                        action="error",
+                        message=classifier_error,
+                        **memory_details,
+                    )
+                )
+                return
+            # Validate the complete classifier result before policy application so a
+            # malformed later candidate cannot partially mutate working memory.
+            candidates = [candidate.model_copy(deep=True) for candidate in candidates]
+            self._working_memory, self._pending_memory, events = HybridMemoryPolicy().apply(
+                self._session_id,
+                candidates,
+                self._working_memory_store,
+                self._pending_memory,
+            )
+            self._memory_events.extend(event.model_copy(update=memory_details) for event in events)
+            self._strategy = context_strategy_for(
+                self.config,
+                self._router,
+                self.facts,
+                self._long_term_memory,
+                self._context_window,
+                self._working_memory,
+            )
+        except Exception as error:
+            self._memory_events.append(
+                MemoryEvent(
+                    id=str(uuid.uuid4()),
+                    scope="working",
+                    action="error",
+                    message=(
+                        "Memory update failed: "
+                        f"{type(error).__name__}: {str(error) or type(error).__name__}"
+                    ),
+                )
+            )
+
+    def _redact_long_term_trace(self, response: LLMResponse) -> LLMResponse:
+        if not self.has_sensitive_memory or response.trace is None:
+            return response
+        result = response.model_copy(deep=True)
+        result.trace = None
+        return result
+
     @staticmethod
-    def _error_trace(error: Exception) -> ProviderTrace | None:
+    def _error_trace(error: Exception, *, redact: bool = False) -> ProviderTrace | None:
         if not isinstance(error, ProviderError):
             return None
         response_body = error.response_body
@@ -248,8 +432,12 @@ class Agent:
             response_body = {"raw": response_body}
         return ProviderTrace(
             status_code=error.status_code,
-            request_body=error.request_body,
-            response_body=response_body,
+            request_body={"redacted": "Memory is not included in traces."}
+            if redact
+            else error.request_body,
+            response_body={"redacted": "Memory is not included in traces."}
+            if redact
+            else response_body,
         )
 
 

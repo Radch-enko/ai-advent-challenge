@@ -12,6 +12,10 @@ Copia is a personal multi-provider AI assistant built with a Python/FastAPI back
 - Explain AI concepts and unfamiliar Python or TypeScript details concisely, using Kotlin/Android analogies when useful.
 - Before implementing a new substantial task, present meaningful solution options and wait for the user's explicit choice.
 
+## Temporary Course Context
+
+While this repository is developed as part of the AI Advent Challenge, consult [SUBAGENTS.md](SUBAGENTS.md) for temporary project-specific guidance and the course's learning context. It complements this file while the course context is active.
+
 ## Source Of Truth
 
 Use this precedence order:

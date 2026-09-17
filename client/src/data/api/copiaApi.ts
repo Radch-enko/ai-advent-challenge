@@ -1,35 +1,64 @@
 import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
-import { FactsUpdateEvent, SummarizationEvent, TokenUsage } from '../../domain/models/chat'
+import {
+  AgentLogDetail,
+  FactsUpdateEvent,
+  ProviderTrace,
+  SummarizationEvent,
+  TokenUsage,
+} from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
+import {
+  LongTermMemoryItem,
+  MemoryEvent,
+  PendingMemorySuggestion,
+  WorkingMemoryItem,
+} from '../../domain/models/memory'
 
 export type { AgentConfig, CompletionConfig, Provider, ProviderModel }
 
+type ChatResponseData = {
+  content: string
+  provider: Provider
+  model: string
+  usage?: TokenUsage | null
+  context_window?: number | null
+  trace?: ProviderTrace | null
+}
+
+type SessionChatResponseData = Omit<ChatResponseData, 'trace'> & { trace?: null }
+
 export type ChatResponse = {
-  response: {
-    content: string
-    provider: Provider
-    model: string
-    usage?: TokenUsage | null
-    context_window?: number | null
-    trace?: SummarizationEvent['trace']
-  }
+  response: ChatResponseData
+  agent_log_id?: string
   summarization_events: SummarizationEvent[]
   facts_events: FactsUpdateEvent[]
   facts: Record<string, string>
+  memory_events: MemoryEvent[]
+  pending_memory: PendingMemorySuggestion[]
+  working_memory: WorkingMemoryItem[]
+}
+
+export type SessionChatResponse = Omit<ChatResponse, 'response' | 'agent_log_id'> & {
+  response: SessionChatResponseData
+  agent_log_id: string
 }
 
 export type ApiResult<T> = { data: T; status: number }
+export type MemoryMutationResponse = LongTermMemoryItem & { memory_events: MemoryEvent[] }
 
 export type StoredMessage = {
   role: 'user' | 'assistant'
   content: string
+  created_at?: string | null
   usage?: TokenUsage | null
   context_window?: number | null
+  agent_log_id?: string | null
 }
 export type ChatSession = {
   id: string
   title: string | null
   profile_name: string | null
+  long_term_memory_enabled: boolean
   config: AgentConfig
   messages: StoredMessage[]
   context: {
@@ -58,6 +87,19 @@ export class ApiRequestError extends Error {
     const detail = this.body.detail
     return typeof detail === 'object' && detail !== null && 'provider_trace' in detail
       ? (detail.provider_trace as ChatResponse['response']['trace'])
+      : undefined
+  }
+
+  get agentLogId(): string | undefined {
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
+      return undefined
+    }
+    const detail = this.body.detail
+    return typeof detail === 'object' &&
+      detail !== null &&
+      'agent_log_id' in detail &&
+      typeof detail.agent_log_id === 'string'
+      ? detail.agent_log_id
       : undefined
   }
 
@@ -168,6 +210,41 @@ export function getModels(provider: Provider): Promise<ProviderModel[]> {
 export function getProfiles(): Promise<Record<string, AgentConfig>> {
   return request('/profiles')
 }
+export function getProfileMemory(profileName: string): Promise<LongTermMemoryItem[]> {
+  return request(`/profiles/${encodeURIComponent(profileName)}/memory`)
+}
+export function createProfileMemory(
+  profileName: string,
+  value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+): Promise<LongTermMemoryItem> {
+  return request(`/profiles/${encodeURIComponent(profileName)}/memory`, {
+    method: 'POST',
+    body: JSON.stringify(value),
+  })
+}
+export function updateProfileMemory(
+  profileName: string,
+  itemId: string,
+  value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
+): Promise<LongTermMemoryItem> {
+  return request(
+    `/profiles/${encodeURIComponent(profileName)}/memory/${encodeURIComponent(itemId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(value),
+    },
+  )
+}
+export function deleteProfileMemory(profileName: string, itemId: string): Promise<void> {
+  return fetch(
+    `/api/profiles/${encodeURIComponent(profileName)}/memory/${encodeURIComponent(itemId)}`,
+    {
+      method: 'DELETE',
+    },
+  ).then((response) => {
+    if (!response.ok) throw new Error(`Could not delete memory item: ${response.status}`)
+  })
+}
 export async function createAgentFromProfile(profileName: string): Promise<string> {
   const result = await request<{ agent_id: string }>('/agents', {
     method: 'POST',
@@ -184,6 +261,57 @@ export function getSession(sessionId: string): Promise<ChatSession> {
 }
 export function getSessionFacts(sessionId: string): Promise<Record<string, string>> {
   return request(`/sessions/${sessionId}/facts`)
+}
+export function getAgentLog(sessionId: string, agentLogId: string): Promise<AgentLogDetail> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/agent-logs/${encodeURIComponent(agentLogId)}`,
+  )
+}
+export function getWorkingMemory(sessionId: string): Promise<WorkingMemoryItem[]> {
+  return request(`/sessions/${sessionId}/working-memory`)
+}
+export function deleteWorkingMemory(
+  sessionId: string,
+  itemId: string,
+): Promise<{ working_memory: WorkingMemoryItem[]; memory_events: MemoryEvent[] }> {
+  return request(`/sessions/${sessionId}/working-memory/${itemId}`, { method: 'DELETE' })
+}
+export function updateWorkingMemory(
+  sessionId: string,
+  itemId: string,
+  value: Pick<WorkingMemoryItem, 'key' | 'value'>,
+): Promise<WorkingMemoryItem & { memory_events: MemoryEvent[] }> {
+  return request(`/sessions/${sessionId}/working-memory/${itemId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(value),
+  })
+}
+export function clearWorkingMemory(sessionId: string): Promise<{ memory_events: MemoryEvent[] }> {
+  return request(`/sessions/${sessionId}/working-memory`, { method: 'DELETE' })
+}
+export function undoWorkingMemory(
+  sessionId: string,
+): Promise<{ working_memory: WorkingMemoryItem[]; memory_events: MemoryEvent[] }> {
+  return request(`/sessions/${sessionId}/working-memory/undo`, {
+    method: 'POST',
+  })
+}
+export function getPendingMemory(sessionId: string): Promise<PendingMemorySuggestion[]> {
+  return request(`/sessions/${sessionId}/memory/pending`)
+}
+export function approveMemory(
+  sessionId: string,
+  candidateId: string,
+): Promise<MemoryMutationResponse> {
+  return request(`/sessions/${sessionId}/memory/pending/${candidateId}/approve`, { method: 'POST' })
+}
+export function rejectMemory(
+  sessionId: string,
+  candidateId: string,
+): Promise<{ memory_events: MemoryEvent[] }> {
+  return request(`/sessions/${sessionId}/memory/pending/${candidateId}/reject`, {
+    method: 'POST',
+  })
 }
 export function createSession(config: AgentConfig): Promise<ChatSession> {
   return request('/sessions', { method: 'POST', body: JSON.stringify({ config }) })
@@ -207,6 +335,15 @@ export function updateSessionContextManagement(
     }),
   })
 }
+export function updateSessionLongTermMemory(
+  sessionId: string,
+  enabled: boolean,
+): Promise<ChatSession> {
+  return request(`/sessions/${sessionId}/long-term-memory`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
 export function forkSession(sessionId: string, messageIndex: number): Promise<ChatSession> {
   return request(`/sessions/${sessionId}/fork`, {
     method: 'POST',
@@ -222,7 +359,7 @@ export function sendSessionMessageWithMeta(
   sessionId: string,
   content: string,
   config?: AgentConfig,
-): Promise<ApiResult<ChatResponse>> {
+): Promise<ApiResult<SessionChatResponse>> {
   return requestWithMeta(`/sessions/${sessionId}/messages`, {
     method: 'POST',
     body: JSON.stringify({ content, config }),
@@ -230,6 +367,6 @@ export function sendSessionMessageWithMeta(
 }
 export function retrySessionSummarizationWithMeta(
   sessionId: string,
-): Promise<ApiResult<ChatResponse>> {
+): Promise<ApiResult<SessionChatResponse>> {
   return requestWithMeta(`/sessions/${sessionId}/summarization/retry`, { method: 'POST' })
 }

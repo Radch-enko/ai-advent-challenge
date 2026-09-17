@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..domain.models.config import ChatMessage
 from ..domain.models.session import BranchTranscript, ChatSession, ChatSessionSummary
+from .path_identifiers import validate_path_identifier
 
 
 class SessionsRepository:
@@ -63,6 +64,17 @@ class SessionsRepository:
             temporary.write(stored_session.model_dump_json(indent=2))
             temporary_path = Path(temporary.name)
         os.replace(temporary_path, path)
+
+    def load_transcript(self, session_id: str) -> list[ChatMessage]:
+        session = self.load(session_id)
+        return list(session.messages) if session is not None else []
+
+    def save_transcript(self, session_id: str, messages: list[ChatMessage]) -> None:
+        session = self.load(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        session.messages = list(messages)
+        self.save(session)
 
     def delete(self, session_id: str) -> bool:
         directory = self._path(session_id).parent
@@ -122,16 +134,14 @@ class SessionsRepository:
         os.replace(temporary_path, path)
 
     def _path(self, session_id: str) -> Path:
-        if Path(session_id).name != session_id:
-            raise ValueError("Invalid session ID")
+        validate_path_identifier(session_id, "session ID")
         return self._root / session_id / "session.json"
 
     def _facts_path(self, session_id: str) -> Path:
-        if Path(session_id).name != session_id:
-            raise ValueError("Invalid session ID")
+        validate_path_identifier(session_id, "session ID")
         return self._root / session_id / "facts.json"
 
     def _branch_path(self, session_id: str, branch_id: str) -> Path:
-        if Path(session_id).name != session_id or Path(branch_id).name != branch_id:
-            raise ValueError("Invalid session or branch ID")
+        validate_path_identifier(session_id, "session ID")
+        validate_path_identifier(branch_id, "branch ID")
         return self._root / session_id / "branches" / f"{branch_id}.json"

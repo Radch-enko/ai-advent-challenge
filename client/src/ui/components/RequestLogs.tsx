@@ -1,46 +1,92 @@
-import { RequestLog } from '../../domain/models/chat'
+import { AgentLogBody, AgentLogExchange } from '../../domain/models/chat'
 
 type Props = {
-  log: RequestLog
+  log: AgentLogExchange
   tab: 'request' | 'response'
   onTab: (tab: 'request' | 'response') => void
   onClose: () => void
 }
 
 export function RequestLogs({ log, tab, onTab, onClose }: Props) {
-  const content = tab === 'request' ? log.request : log.response
+  const isRequest = tab === 'request'
+  const body = isRequest ? log.request_body : log.response_body
+  const headers = isRequest ? log.request_headers : log.response_headers
+
   return (
-    <aside className="logs-panel">
+    <aside className="logs-panel" aria-label="HTTP logs">
       <header>
         <div>
-          <b>Request Logs</b>
-          <span>Детали последнего вызова</span>
+          <b>HTTP Logs</b>
+          <span>{log.operation}</span>
         </div>
-        <button onClick={onClose}>×</button>
+        <button type="button" aria-label="Закрыть логи" onClick={onClose}>
+          ×
+        </button>
       </header>
       <div className="log-meta">
         <span>
-          Provider <b>{log.provider}</b>
+          Provider <b>{log.provider ?? '—'}</b>
         </span>
         <span>
-          Model <b>{log.model}</b>
+          Model <b>{log.model ?? '—'}</b>
         </span>
-        <span className="success">
-          Status <b>{log.status}</b>
+        <span className={statusTone(log.status_code)}>
+          Status <b>{log.status_code ?? 'error'}</b>
         </span>
         <span>
-          Duration <b>{log.duration}</b>
+          Duration <b>{formatExchangeDuration(log.duration_seconds)}</b>
         </span>
       </div>
-      <div className="log-tabs">
-        <button className={tab === 'request' ? 'active' : ''} onClick={() => onTab('request')}>
+      <div className="log-endpoint">
+        <code>
+          {log.method} {log.url}
+        </code>
+      </div>
+      <div className="log-tabs" role="tablist" aria-label="HTTP log payload">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isRequest}
+          className={isRequest ? 'active' : ''}
+          onClick={() => onTab('request')}
+        >
           Request
         </button>
-        <button className={tab === 'response' ? 'active' : ''} onClick={() => onTab('response')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!isRequest}
+          className={!isRequest ? 'active' : ''}
+          onClick={() => onTab('response')}
+        >
           Response
         </button>
       </div>
-      <pre>{JSON.stringify(content, null, 2)}</pre>
+      <div className="log-payload-meta">
+        <b>{isRequest ? 'Headers' : `Headers · ${log.status_code ?? 'No response'}`}</b>
+        <pre>{JSON.stringify(headers, null, 2)}</pre>
+      </div>
+      <pre className="log-payload-body">{formatBody(body)}</pre>
     </aside>
   )
+}
+
+function statusTone(status?: number | null) {
+  return status != null && status >= 200 && status < 400 ? 'success' : 'error'
+}
+
+function formatExchangeDuration(seconds: number) {
+  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
+  return `${seconds.toFixed(1)}s`
+}
+
+function formatBody(body: AgentLogBody | null | undefined) {
+  if (!body) return 'No body'
+  if (body.encoding === 'base64')
+    return `[base64${body.truncated ? ', truncated' : ''}]\n${body.content}`
+  try {
+    return JSON.stringify(JSON.parse(body.content), null, 2)
+  } catch {
+    return `${body.content}${body.truncated ? '\n… [truncated]' : ''}`
+  }
 }

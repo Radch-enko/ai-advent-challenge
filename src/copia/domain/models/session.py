@@ -78,6 +78,7 @@ class ChatSession(BaseModel):
     branching: BranchingContext | None = None
     title: str | None = None
     profile_name: str | None = None
+    long_term_memory_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 

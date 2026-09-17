@@ -1,10 +1,41 @@
-export type RequestLog = {
-  provider: string
-  model: string
-  status: number
-  duration: string
-  request: object
-  response: object
+export type AgentLogBody = {
+  content: string
+  encoding: 'utf-8' | 'base64'
+  size_bytes: number
+  truncated: boolean
+}
+
+export type AgentLogExchange = {
+  id: string
+  agent_turn_id: string
+  operation: string
+  provider?: string | null
+  model?: string | null
+  method: string
+  url: string
+  request_headers: Record<string, string>
+  request_body?: AgentLogBody | null
+  status_code?: number | null
+  response_headers: Record<string, string>
+  response_body?: AgentLogBody | null
+  duration_seconds: number
+  error?: string | null
+  created_at: string
+}
+
+export type AgentLogDetail = {
+  agent_log_id: string
+  agent_turn_id: string
+  session_id: string
+  status: 'running' | 'completed' | 'failed'
+  provider?: string | null
+  model?: string | null
+  usage?: TokenUsage | null
+  started_at: string
+  completed_at?: string | null
+  duration_seconds: number
+  error?: string | null
+  exchanges: AgentLogExchange[]
 }
 
 export type TokenUsage = {
@@ -19,7 +50,7 @@ export type ChatMessage = {
   role: 'user' | 'assistant' | 'error'
   content: string
   timestamp: string
-  log?: RequestLog
+  agentLogId?: string
   usage?: TokenUsage | null
   contextWindow?: number | null
   transcriptIndex?: number

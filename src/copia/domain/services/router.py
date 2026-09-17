@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from ...data.model_catalog import context_window_for
 from ...data.providers.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
+from ..contracts import AgentLogSink
 from ..models.config import (
     ChatMessage,
     LLMConfig,
@@ -17,11 +18,16 @@ from ..models.config import (
 class LLMRouter:
     """Routes a provider-agnostic request to the configured LLM provider."""
 
-    def __init__(self, providers: dict[ProviderName, LLMProvider] | None = None) -> None:
+    def __init__(
+        self,
+        providers: dict[ProviderName, LLMProvider] | None = None,
+        agent_log_store: AgentLogSink | None = None,
+    ) -> None:
         load_dotenv()
+        self._agent_log_store = agent_log_store
         self._providers = providers or {
-            ProviderName.OPENAI: OpenAIProvider(),
-            ProviderName.GIGACHAT: GigaChatProvider(),
+            ProviderName.OPENAI: OpenAIProvider(log_store=agent_log_store),
+            ProviderName.GIGACHAT: GigaChatProvider(log_store=agent_log_store),
         }
 
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
