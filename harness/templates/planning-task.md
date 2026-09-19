@@ -1,33 +1,33 @@
-# Task
+# Задача
 
 ID:
 Status: Backlog
 Story:
 Title:
 
-## Goal
+## Цель
 
-## Context
+## Контекст
 
-## Functional Requirements
+## Функциональные требования
 
-## Non-Functional Requirements
+## Нефункциональные требования
 
-## Out Of Scope
+## Вне области задачи
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - [ ] 
 
 ## Definition Of Ready
 
-- [ ] Scope is explicit and small enough for the normal harness workflows.
-- [ ] Blocking questions are answered or represented as blocker tasks.
-- [ ] Dependencies are listed.
-- [ ] Acceptance criteria are testable.
-- [ ] No implementer must guess product, design, API, data, or architecture behavior.
+- [ ] Scope сформулирован явно и достаточно мал для обычных harness workflows.
+- [ ] Blocking questions разрешены или представлены как blocker tasks.
+- [ ] Dependencies перечислены.
+- [ ] Acceptance criteria можно проверить.
+- [ ] Implementer не должен угадывать product, design, API, data или architecture behavior.
 
-## Design Traceability
+## Трассируемость дизайна
 
 - Figma file:
 - Source nodes:
@@ -37,17 +37,17 @@ Title:
 - Token references:
 - Conflicts or missing design information:
 
-## Relevant Files And Modules
+## Связанные файлы и модули
 
-## Constraints
+## Ограничения
 
-## Verification
+## Проверка
 
-## Risks
+## Риски
 
-## Open Questions
+## Открытые вопросы
 
-## Planning Notes
+## Заметки по планированию
 
 - Source request:
 - Expert Council:

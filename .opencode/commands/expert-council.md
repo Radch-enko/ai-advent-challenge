@@ -1,23 +1,23 @@
 ---
-description: Run the Expert Council complexity gate, save artifacts, and launch the full council only when required.
+description: Запускай Expert Council complexity gate, сохраняй artifacts и запускай full council только при необходимости.
 agent: orchestrator
 ---
 
-Run the Expert Council protocol for this decision:
+Запусти протокол Expert Council для этого decision:
 
 ```text
 $ARGUMENTS
 ```
 
-Use the OpenCode subagent council protocol from `.agents/skills/expert-council/SKILL.md`.
+Используй OpenCode subagent council protocol из `.agents/skills/expert-council/SKILL.md`.
 
-Create a run directory under:
+Создай run directory в:
 
 ```text
 docs/reports/expert-council/<timestamp>-<task-slug>/
 ```
 
-First calculate and save `complexity-gate.md`:
+Сначала рассчитай и сохрани `complexity-gate.md`:
 
 ```yaml
 council_required: true
@@ -28,14 +28,18 @@ reasons:
   - irreversible migration
 ```
 
-Route by score:
+Маршрутизируй по score:
 
-- `score < 3`: single agent; do not launch the council.
-- `score 3-5`: lightweight review; do not launch the council.
+- `score < 3`: single agent; не запускай council.
+- `score 3-5`: lightweight review; не запускай council.
 - `score >= 6`: full council.
 
-Important: launch `visionary`, `skeptic`, `realist`, and `council-judge` directly from the orchestrator only when `score >= 6`.
+Важно: запускай `visionary`, `skeptic`, `realist` и `council-judge` напрямую из orchestrator только при `score >= 6`.
 
-Always create `task.md`, `complexity-gate.md`, and `verdict.md`. For `score < 6`, `verdict.md` must explain why the full council was not launched and which lighter route should be used. For `score >= 6`, launch `visionary`, `skeptic`, and `realist`, save their answers, run one critique round, pass all materials to `council-judge`, and write `verdict.md`.
+Всегда создавай `task.md`, `complexity-gate.md` и `verdict.md`. При `score < 6` `verdict.md` должен объяснять, почему
+full council не запускался, и какой lighter route следует использовать. При `score >= 6` запусти `visionary`, `skeptic`
+и `realist`, сохрани их ответы, проведи один critique round, передай все materials в `council-judge` и запиши
+`verdict.md`.
 
-All experts and the judge must remain read-only. Ground product and business reasoning in the user request, `AGENTS.md`, `README.md`, and `docs/product/` when present. Do not edit application code. Do not commit or push.
+Все experts и judge должны оставаться read-only. Основывай product и business reasoning на user request, `AGENTS.md`,
+`README.md` и `docs/product/`, если они есть. Не редактируй application code. Не выполняй commit или push.

@@ -1,20 +1,20 @@
-# <Short imperative summary>
+# <Краткое резюме в повелительном наклонении>
 
-Task: <task id or short request>
+Task: <идентификатор задачи или краткий запрос>
 
 Summary:
-- <behavior or harness change>
-- <important follow-up or compatibility note, if any>
+- <изменение поведения или harness>
+- <важное дальнейшее действие или замечание о совместимости, если есть>
 
 Verification:
-- <command>: <passed|failed|not run, with reason>
+- <команда>: <passed|failed|not run с причиной>
 
 Risks:
-- <none or remaining risk>
+- <none или оставшийся риск>
 
-# Commit message guidance:
-# - Keep the first line imperative and under 72 characters where practical.
-# - Mention the task or request that justified the change.
-# - Summarize behavior and verification, not every file touched.
-# - Do not include secrets, local paths, generated output, or unverifiable claims.
-# - Remove comment lines before committing if your Git client does not strip them.
+# Рекомендации для commit message:
+# - По возможности делай первую строку повелительной и короче 72 символов.
+# - Указывай задачу или запрос, обосновавший изменение.
+# - Резюмируй поведение и verification, а не каждый изменённый файл.
+# - Не включай secrets, local paths, generated output или непроверяемые утверждения.
+# - Удали строки-комментарии перед commit, если Git client не удаляет их автоматически.

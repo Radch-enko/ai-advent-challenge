@@ -1,26 +1,33 @@
-# Copia AI SDLC Harness
+# Harness Copia для AI SDLC
 
-The harness is Copia's repository-local operating system for AI-assisted development. It turns requests into scoped tasks, routes implementation and review, and provides deterministic quality gates.
+Harness — это локальная для репозитория операционная система Copia для разработки с помощью AI. Она превращает
+запросы в задачи с ограниченной областью, направляет реализацию и ревью, а также предоставляет детерминированные
+контрольные проверки качества.
 
-## Structure
+## Структура
 
-- `workflows/`: feature, bugfix, refactoring, planning, review, infrastructure, task authoring, and test-integrity procedures.
-- `policies/`: architecture, coding, testing, security, and Git rules.
-- `templates/`: task, plan, ADR, review, completion, and test-integrity artifacts.
-- `scripts/`: dependency setup, tests, frontend build, lint, security, architecture, and canonical checks.
-- `git-hooks/`: repository-managed pre-commit and pre-push gates.
-- `evals/`: smoke scenarios for agent process quality.
+- `workflows/`: процедуры feature, bugfix, refactoring, planning, review, infrastructure, task authoring и
+  test-integrity.
+- `policies/`: правила архитектуры, кодирования, тестирования, безопасности и Git.
+- `templates/`: артефакты задач, планов, ADR, ревью, завершения и test-integrity.
+- `scripts/`: настройка зависимостей, тесты, сборка frontend, lint, проверки безопасности, архитектуры и
+  канонические проверки.
+- `git-hooks/`: управляемые репозиторием pre-commit и pre-push проверки.
+- `evals/`: smoke-сценарии для проверки качества работы агента.
 
-## Lifecycle
+## Жизненный цикл
 
 ```text
 request -> task context -> plan -> scoped implementation -> focused checks
         -> full check -> diff review -> completion report
 ```
 
-Use a matching active task when one exists. Otherwise use the explicit user request as task context or author a task first when ambiguity would force implementation guesses.
+При реализации через strict feature route используй точную спецификацию задачи, переданную в `/feature`; допустимые
+расположения — `docs/tasks/active/` и `docs/tasks/backlog/`. В других workflow используй подходящую active task, если
+она существует. Иначе используй явный пользовательский запрос как контекст задачи или сначала создай задачу, если
+неоднозначность заставит делать предположения при реализации.
 
-## Commands
+## Команды
 
 ```bash
 ./harness/scripts/check-dependencies.sh
@@ -33,4 +40,5 @@ Use a matching active task when one exists. Otherwise use the explicit user requ
 ./utils/install-git-hooks.sh
 ```
 
-`check.sh` is the canonical gate. Scripts are non-interactive except dependency installation and must fail with a non-zero exit code when a required check fails.
+`check.sh` — каноническая контрольная проверка. Скрипты неинтерактивны, кроме установки зависимостей, и должны
+завершаться с ненулевым кодом, если обязательная проверка не пройдена.

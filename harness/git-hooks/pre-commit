@@ -18,9 +18,9 @@ fi
 
 production_pattern='^(src/|tests/|client/src/|client/public/|profiles\.json$|pyproject\.toml$|client/package(-lock)?\.json$)'
 if echo "$staged_files" | grep -E "$production_pattern" >/dev/null; then
-  active_task_count="$(find docs/tasks/active -maxdepth 1 -type f -name '*.md' ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ "$active_task_count" -eq 0 ]]; then
-    echo "ERROR: production changes require a matching active task under docs/tasks/active/" >&2
+  task_spec_count="$(find docs/tasks -type f \( -path '*/active/*.md' -o -path '*/backlog/*.md' \) 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$task_spec_count" -eq 0 ]]; then
+    echo "ERROR: production changes require a task specification under docs/tasks/active/ or docs/tasks/backlog/" >&2
     exit 1
   fi
 fi

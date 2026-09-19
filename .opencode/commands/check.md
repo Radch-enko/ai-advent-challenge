@@ -1,14 +1,15 @@
 ---
-description: Run canonical Copia validation and report exact command results without production edits.
+description: Запускай каноническую Copia validation и сообщай точные результаты команд без изменений production code.
 agent: orchestrator
 ---
 
-Route this validation request through the Copia orchestrator.
+Направь этот validation request через Copia orchestrator.
 
-Scope or notes:
+Scope или notes:
 
 ```text
 $ARGUMENTS
 ```
 
-Delegate validation to `tester`. Run `./harness/scripts/check.sh` unless the user narrows the scope. Report exact commands, results, failures, likely causes, and residual risk. Do not modify production code. Do not commit or push.
+Делегируй validation к `tester`. Запусти `./harness/scripts/check.sh`, если пользователь не сузил scope. Сообщи точные
+commands, results, failures, вероятные причины и residual risk. Не изменяй production code. Не выполняй commit или push.

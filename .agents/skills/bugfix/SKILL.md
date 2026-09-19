@@ -1,12 +1,16 @@
 ---
 name: bugfix
-description: Use when fixing broken Copia behavior or failing checks through the bugfix workflow.
+description: Используй при исправлении сломанного поведения Copia или неуспешных проверок по bugfix workflow.
 ---
 
 # Bugfix
 
-Use `harness/workflows/bugfix.md` as the authoritative workflow.
+Используй `harness/workflows/bugfix.md` как нормативный workflow.
 
-Reproduce or document inability to reproduce, isolate root cause, add regression coverage where practical, make the minimal fix, apply `harness/workflows/test-integrity-gate.md` when tests change, run focused checks plus `./harness/scripts/check.sh` when feasible, and report root cause, fix, evidence, and residual risk.
+Воспроизведи проблему или зафиксируй невозможность воспроизведения, изолируй корневую причину, добавь regression
+coverage, когда это практически возможно, внеси минимальное исправление, применяй
+`harness/workflows/test-integrity-gate.md` при изменении tests, запускай focused checks и `./harness/scripts/check.sh`,
+если это возможно, и сообщай корневую причину, исправление, evidence и остаточный риск.
 
-Do not suppress failures, weaken checks, change existing tests without Test Integrity Gate justification, broaden scope into refactoring, or commit/push unless explicitly requested.
+Не подавляй failures, не ослабляй checks, не изменяй существующие tests без обоснования по Test Integrity Gate, не
+расширяй scope до refactoring и не выполняй commit/push без явного запроса.

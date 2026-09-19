@@ -1,6 +1,6 @@
-# Test Integrity Report
+# Отчёт Test Integrity
 
-## Summary
+## Резюме
 
 - Task:
 - Report Type: `ACTUAL` or `SYNTHETIC_EXAMPLE`
@@ -9,7 +9,7 @@
 - Reviewer Verdict: `PENDING`, `APPROVED`, `APPROVED_WITH_NOTES`, or `REJECTED`
 - Final Outcome: `PENDING`, `MERGED`, `REWORK_REQUIRED`, `BLOCKED_WAITING_FOR_HUMAN_APPROVAL`, or `ABANDONED`
 
-## Justification
+## Обоснование
 
 - Reason Category: `SPECIFICATION_CHANGED`, `ACCEPTANCE_CRITERIA_CHANGED`, `TEST_BUG`, `FLAKY_TEST`, `IMPLEMENTATION_DETAIL_TO_BEHAVIOR`, `EXPANDED_COVERAGE`, or `REFACTORING_NO_BEHAVIOR_CHANGE`
 - Why The Test Changed:
@@ -19,14 +19,14 @@
 - Specification Changed: `YES` or `NO`
 - Incorrect Artifact: `PRODUCTION_CODE`, `TEST`, `BOTH`, or `UNCLEAR`
 
-## Deletion Approval
+## Согласование удаления
 
 - Existing Test Deleted: `YES` or `NO`
 - Human Approval Required: `YES` or `NO`
 - Human Approval Status: `NOT_REQUIRED`, `REQUESTED`, `APPROVED`, or `DENIED`
 - Approval Evidence:
 
-## Reviewer Assessment
+## Оценка ревьюера
 
 - Is The Justification Valid:
 - Does The Test Still Protect The Same Behavior:

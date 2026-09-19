@@ -1,9 +1,9 @@
 ---
-description: Create a scoped Copia task spec from an informal request without modifying production code.
+description: Создавай Copia task spec с ограниченной областью из неформального request без изменения production code.
 agent: orchestrator
 ---
 
-Route this task-authoring request through the Copia orchestrator.
+Направь этот task-authoring request через Copia orchestrator.
 
 Request:
 
@@ -11,4 +11,6 @@ Request:
 $ARGUMENTS
 ```
 
-Have `architect` identify scope and relevant repository facts, then have `implementer` use the `task-authoring` skill and `harness/workflows/task-authoring.md`. Save the result under `docs/tasks/active/` unless the request explicitly says backlog. Do not modify production code. Do not commit or push.
+Попроси `architect` определить scope и релевантные repository facts, затем попроси `implementer` использовать
+`task-authoring` skill и `harness/workflows/task-authoring.md`. Сохрани result в `docs/tasks/active/`, если request явно
+не указывает backlog. Не изменяй production code. Не выполняй commit или push.

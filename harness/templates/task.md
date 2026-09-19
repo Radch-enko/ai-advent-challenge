@@ -1,29 +1,29 @@
-# Task
+# Задача
 
 ID:
 Status:
 Title:
 
-## Goal
+## Цель
 
-## Context
+## Контекст
 
-## Functional Requirements
+## Функциональные требования
 
-## Non-Functional Requirements
+## Нефункциональные требования
 
-## Out Of Scope
+## Вне области задачи
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - [ ] 
 
-## Relevant Files And Modules
+## Связанные файлы и модули
 
-## Constraints
+## Ограничения
 
-## Verification
+## Проверка
 
-## Risks
+## Риски
 
-## Open Questions
+## Открытые вопросы

@@ -1,22 +1,29 @@
 # Agent Evals
 
-Agent evals are repository-local smoke scenarios for agent process quality. Product tests verify Copia behavior; these evals keep a small set of checks for scope control, architecture discipline, regression-test discipline, and test-suppression resistance.
+Agent evals — это repository-local smoke scenarios для качества процесса работы agent. Product tests проверяют behavior
+Copia; эти evals поддерживают небольшой набор checks для scope control, architecture discipline, regression-test
+discipline и resistance к test suppression.
 
-## Evals Component
+## Компоненты evals
 
 `cases/`
 
-- Main components: one Markdown file per eval case, with front matter fields for `id`, `title`, `task`, `fixture`, `allowed_scope`, `forbidden_changes`, `expected_commands`, `deterministic_assertions`, and `hard_failure_conditions`.
-- Reason to change: add a new case when a recurring agent failure mode needs coverage, or update an existing case when repository policy, module boundaries, required commands, or acceptance expectations change.
+- Основные components: один Markdown file на eval case с front matter fields `id`, `title`, `task`, `fixture`,
+  `allowed_scope`, `forbidden_changes`, `expected_commands`, `deterministic_assertions` и `hard_failure_conditions`.
+- Причина изменения: добавляй новый case, когда recurring agent failure mode требует coverage, или обновляй existing
+  case, когда изменились repository policy, module boundaries, required commands или acceptance expectations.
 
 `run-evals.sh`
 
-- Main components: deterministic catalog validator for eval case structure. It checks required fields, unique case IDs, current-repository fixtures, supported expected commands, executable repository scripts, and known deterministic assertion identifiers.
-- Reason to change: update the runner when the case schema changes, a new deterministic assertion identifier is introduced, or validation needs to become stricter.
+- Основные components: deterministic catalog validator для структуры eval cases. Он проверяет required fields, unique case
+  IDs, current-repository fixtures, supported expected commands, executable repository scripts и known deterministic
+  assertion identifiers.
+- Причина изменения: обновляй runner при изменении case schema, добавлении нового deterministic assertion identifier или
+  необходимости ужесточить validation.
 
-## Case Format
+## Формат case
 
-Each case is a Markdown file with YAML-like front matter. Required fields are:
+Каждый case — Markdown file с YAML-like front matter. Required fields:
 
 - `id`
 - `title`
@@ -28,19 +35,19 @@ Each case is a Markdown file with YAML-like front matter. Required fields are:
 - `deterministic_assertions`
 - `hard_failure_conditions`
 
-Supported deterministic assertion identifiers are defined in `run-evals.sh`.
+Поддерживаемые deterministic assertion identifiers определены в `run-evals.sh`.
 
-## Running
+## Запуск
 
-Validate the eval catalog:
+Проверь eval catalog:
 
 ```bash
 ./harness/evals/run-evals.sh
 ```
 
-The runner does not execute Codex end to end. It validates that the minimal eval catalog is internally consistent.
+Runner не выполняет Codex end to end. Он проверяет внутреннюю согласованность minimal eval catalog.
 
-## Evals Process
+## Процесс evals
 
 ```mermaid
 flowchart TD
@@ -51,15 +58,22 @@ flowchart TD
     E --> F[Report result]
 ```
 
-1. Select eval case: choose the case that matches the process behavior being tested, such as scope control, test discipline, or architecture compliance.
-2. Prepare isolated workspace when manually running a case: use a temporary worktree, disposable branch, or copy so the eval cannot damage the main workspace.
-3. Give case task to agent: provide the case task and any referenced fixture while keeping repository policies and active task rules as the normative instructions.
-4. Run expected commands: execute the commands listed by the case, such as `./harness/scripts/test.sh`, `./harness/scripts/check.sh`, or `./harness/evals/run-evals.sh`.
-5. Validate deterministic assertions: inspect whether required objective evidence exists, such as unchanged forbidden paths, command evidence, regression-test rationale, or no generated file edits.
-6. Report the outcome, command evidence, assumptions, and unresolved risks in the review or completion report.
+1. Select eval case: выбери case, соответствующий проверяемому process behavior, например scope control, test
+   discipline или architecture compliance.
+2. Prepare isolated workspace при manual run case: используй temporary worktree, disposable branch или copy, чтобы eval
+   не повредил main workspace.
+3. Give case task to agent: передай agent case task и referenced fixture, сохраняя repository policies и active task
+   rules как нормативные instructions.
+4. Run expected commands: выполни commands, перечисленные case, например `./harness/scripts/test.sh`,
+   `./harness/scripts/check.sh` или `./harness/evals/run-evals.sh`.
+5. Validate deterministic assertions: проверь наличие required objective evidence, например unchanged forbidden paths,
+   command evidence, regression-test rationale или отсутствие generated file edits.
+6. Report outcome, command evidence, assumptions и unresolved risks в review или completion report.
 
-## Deterministic And Manual Parts
+## Deterministic и manual части
 
-Deterministic validation covers catalog structure, required file presence, supported expected commands, duplicate IDs, known assertion identifiers, and fixture values.
+Deterministic validation покрывает catalog structure, required file presence, supported expected commands, duplicate IDs,
+known assertion identifiers и fixture values.
 
-Manual review covers reasoning quality, sufficiency of tests, scope judgment, architecture judgment beyond static checks, and reporting quality.
+Manual review покрывает reasoning quality, sufficiency of tests, scope judgment, architecture judgment beyond static checks
+и reporting quality.

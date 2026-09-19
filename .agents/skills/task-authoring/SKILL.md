@@ -1,12 +1,15 @@
 ---
 name: task-authoring
-description: Use when converting an informal Copia request into a scoped task spec through the task-authoring workflow.
+description: Используй при преобразовании неформального запроса Copia в task spec с ограниченной областью через task-authoring workflow.
 ---
 
 # Task Authoring
 
-Use `harness/workflows/task-authoring.md` as the authoritative workflow.
+Используй `harness/workflows/task-authoring.md` как нормативный workflow.
 
-Read `AGENTS.md`, inspect relevant repository modules, state assumptions, define requirements and out-of-scope behavior, write testable acceptance criteria, confirm verification commands exist, and save the task using `harness/templates/task.md`.
+Прочитай `AGENTS.md`, изучи релевантные repository modules, зафиксируй assumptions, определи requirements и out-of-scope
+behavior, напиши testable acceptance criteria, проверь существование verification commands и сохрани task по шаблону
+`harness/templates/task.md`.
 
-Do not silently expand scope, invent modules or tools, modify production code, or commit/push unless explicitly requested.
+Не расширяй scope молча, не выдумывай modules или tools, не изменяй production code и не выполняй commit/push без
+явного запроса.

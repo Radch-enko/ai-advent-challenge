@@ -1,4 +1,4 @@
-# Task
+# Задача
 
 ID:
 Status: Backlog
@@ -7,27 +7,27 @@ Title:
 Type: Blocker
 Owner: Human
 
-## Blocking Reason
+## Причина блокировки
 
-## Required Human Action
+## Требуемое действие человека
 
-## Output Expected
+## Ожидаемый результат
 
-## Unblocks
+## Что разблокирует
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - [ ] 
 
-## Relevant Files And Modules
+## Связанные файлы и модули
 
-## Constraints
+## Ограничения
 
-## Verification
+## Проверка
 
-## Risks
+## Риски
 
-## Planning Notes
+## Заметки по планированию
 
 - Source request:
 - Expert Council:

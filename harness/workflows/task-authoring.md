@@ -1,43 +1,43 @@
 # Task Authoring Workflow
 
-## Use When
+## Когда использовать
 
-Turning an informal request into a complete task specification under `docs/tasks/active/` or `docs/tasks/backlog/`.
+При преобразовании неформального request в полную task specification в `docs/tasks/active/` или `docs/tasks/backlog/`.
 
-## Purpose
+## Назначение
 
-Create a scoped, testable task specification without modifying production code.
+Создать task specification с ограниченной областью и проверяемыми требованиями без изменения production code.
 
-## Required Inputs
+## Обязательные входные данные
 
 - Informal request.
 - `AGENTS.md`.
-- Repository assessment and relevant product or architecture docs.
+- Repository assessment и relevant product/architecture docs.
 - `harness/templates/task.md`.
 
-## Procedure
+## Процедура
 
-1. Identify goal and context.
-2. Inspect actual repository modules related to the request.
-3. State assumptions.
-4. Capture functional and non-functional requirements.
-5. Define out-of-scope behavior.
-6. Write testable acceptance criteria.
-7. Identify relevant modules and files.
-8. Confirm verification commands exist before listing them.
-9. List risks and open questions.
-10. Save the task file in the requested task directory.
+1. Определи goal и context.
+2. Изучи actual repository modules, связанные с request.
+3. Зафиксируй assumptions.
+4. Опиши functional и non-functional requirements.
+5. Определи out-of-scope behavior.
+6. Напиши testable acceptance criteria.
+7. Определи relevant modules и files.
+8. До перечисления проверь существование verification commands.
+9. Перечисли risks и open questions.
+10. Сохрани task file в requested task directory.
 
-## Required Checks
+## Обязательные проверки
 
-- Confirm commands exist before listing them as required verification.
+- Проверь существование commands до того, как перечислять их как required verification.
 
-## Prohibited Behavior
+## Запрещённое поведение
 
-- Silently expanding ambiguous scope.
-- Inventing modules or tools.
-- Modifying production code.
+- Молчаливое расширение ambiguous scope.
+- Выдумывание modules или tools.
+- Изменение production code.
 
-## Output
+## Результат
 
-A task file using `harness/templates/task.md`.
+Task file по шаблону `harness/templates/task.md`.

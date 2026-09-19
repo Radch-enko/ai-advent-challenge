@@ -1,51 +1,53 @@
 # Feature Workflow
 
-## Use When
+## Когда использовать
 
-Adding small user-visible behavior or extending existing behavior without changing architecture.
+Для добавления небольшого user-visible behavior или расширения существующего behavior без изменения architecture.
 
-## Purpose
+## Назначение
 
-Implement a small feature through the repository SDLC harness.
+Реализовать небольшую feature через repository SDLC harness.
 
-## Required Inputs
+## Обязательные входные данные
 
-- Confirmed matching active task spec with testable acceptance criteria, or current user request plus task context
-  created through the task-authoring workflow.
+- Явный path к task specification в `docs/tasks/active/` или `docs/tasks/backlog/`, переданный через `/feature`, с
+  testable acceptance criteria.
 - `AGENTS.md`.
-- Relevant product and architecture docs.
-- Known constraints and out-of-scope items.
-- Applicable policies in `harness/policies/`.
-- `harness/workflows/test-integrity-gate.md` when tests are changed.
+- Relevant product и architecture docs.
+- Известные constraints и out-of-scope items.
+- Applicable policies в `harness/policies/`.
+- `harness/workflows/test-integrity-gate.md` при изменении tests.
 
-## Task Matching
+## Сопоставление задачи
 
-Before using any task from `docs/tasks/active/`, compare its goal, scope, affected area, and acceptance criteria with
-the current user request.
+Перед использованием переданной task specification изучи её goal, scope, affected area и acceptance criteria. Явный
+`/feature` path в `docs/tasks/active/` или `docs/tasks/backlog/` является authoritative для этого route; не сопоставляй
+его с unrelated или implicit user request.
 
-- If it clearly matches, use it as the authoritative task specification.
-- If it does not match, ignore it for the current run. Do not inherit its acceptance criteria, constraints, scope, or
-  verification commands; use the current user request as task context or create a new task specification through
-  `harness/workflows/task-authoring.md`.
-- If the match is ambiguous, record the ambiguity instead of silently adopting the task. Prefer creating a new task
-  context when the user request is sufficiently detailed.
+При вызове через `/feature` command работает только со specification: требуй ровно один существующий Markdown path в
+`docs/tasks/active/` или `docs/tasks/backlog/`. Отклоняй missing, ambiguous, outside-directory или nonexistent paths.
+Не заменяй specification inline request text или произвольной backlog task. Явный `/feature` route также пропускает
+Expert Council complexity gate и сам Expert Council.
 
-## Procedure
+- Если explicit path valid, используй этот file как authoritative task specification.
+- Если specification неполна или оставляет blocking questions нерешёнными, остановись и сообщи blocker вместо guesses.
 
-1. Establish task context.
-2. Read relevant documentation and repository facts.
-3. Create the implementation plan.
-4. Implement the smallest change that satisfies the task.
-5. Apply the Test Integrity Gate if tests changed:
-   - new tests are allowed automatically;
-   - existing test modifications require a Test Change Report before review continues;
-   - existing test deletions require explicit human approval before implementation continues.
-6. Self-review the diff for scope, architecture, tests, and hidden failures.
-7. Run focused checks for affected modules or behavior.
-8. Run `./harness/scripts/check.sh` when feasible.
-9. Produce a completion report.
+## Процедура
 
-Stage order:
+1. Установи task context.
+2. Прочитай relevant documentation и repository facts.
+3. Создай implementation plan.
+4. Реализуй минимальное change, удовлетворяющее task.
+5. Примени Test Integrity Gate, если tests изменялись:
+   - новые tests разрешены автоматически;
+   - изменение существующих tests требует Test Change Report до продолжения review;
+   - удаление существующих tests требует явного human approval до продолжения implementation.
+6. Выполни self-review diff на scope, architecture, tests и hidden failures.
+7. Запусти focused checks для affected modules или behavior.
+8. Запусти `./harness/scripts/check.sh`, если это возможно.
+9. Подготовь completion report.
+
+Порядок этапов:
 
 ```text
 Task context
@@ -56,25 +58,25 @@ Task context
 -> Verification
 ```
 
-## Required Checks
+## Обязательные проверки
 
-- Focused tests for affected code where available.
-- `./harness/scripts/check.sh` or exact failure and limitation.
+- Focused tests для affected code, если доступны.
+- `./harness/scripts/check.sh` или точное описание failure и limitation.
 
-## Boundaries
+## Границы
 
-- Do not introduce feature-to-feature dependencies.
-- Keep backend/client contracts and provider-agnostic models consistent when integration changes.
-- Do not rework UI, dependency wiring, or package structure unless required by the task.
-- Do not redesign architecture without task scope.
-- Do not hide failing checks.
-- Do not modify existing tests without following `harness/workflows/test-integrity-gate.md`.
+- Не вводи feature-to-feature dependencies.
+- При integration changes сохраняй согласованность backend/client contracts и provider-agnostic models.
+- Не переделывай UI, dependency wiring или package structure, если это не требуется task.
+- Не redesign architecture вне task scope.
+- Не скрывай failing checks.
+- Не изменяй существующие tests без соблюдения `harness/workflows/test-integrity-gate.md`.
 
-## Completion Criteria
+## Критерии завершения
 
-Acceptance criteria are satisfied, verification evidence is recorded, no unrelated changes are present, and unresolved
-risks are stated.
+Acceptance criteria выполнены, verification evidence зафиксирован, unrelated changes отсутствуют, unresolved risks
+описаны.
 
-## Output
+## Результат
 
-Use `harness/templates/completion-report.md`.
+Используй `harness/templates/completion-report.md`.

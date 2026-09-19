@@ -1,12 +1,12 @@
-# Completion Report
+# Отчёт о завершении
 
-## Task
+## Задача
 
-## Implementation Summary
+## Резюме реализации
 
-## Files Changed
+## Изменённые файлы
 
-## Tests Added Or Updated
+## Добавленные или обновлённые tests
 
 ## Test Integrity Gate
 
@@ -16,15 +16,15 @@
 - Human Approval For Deletion:
 - Reviewer Verdict:
 
-## Commands Executed
+## Выполненные команды
 
 | Command | Result | Notes |
 |---|---|---|
 
-## Acceptance Criteria Status
+## Статус acceptance criteria
 
-## Assumptions
+## Допущения
 
-## Unresolved Risks
+## Нерешённые риски
 
-## Follow-Up Work
+## Дальнейшая работа

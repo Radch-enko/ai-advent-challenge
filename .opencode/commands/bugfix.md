@@ -1,14 +1,16 @@
 ---
-description: Fix an Copia defect with reproduction evidence, regression coverage, and full verification.
+description: Исправляй defect Copia с reproduction evidence, regression coverage и full verification.
 agent: orchestrator
 ---
 
-Route this request through the Copia multi-agent delivery loop.
+Направь этот request через Copia multi-agent delivery loop.
 
-Bugfix task, failure, or path:
+Bugfix task, failure или path:
 
 ```text
 $ARGUMENTS
 ```
 
-Have `architect` confirm the bugfix workflow and verification plan, `implementer` make the minimal fix, `tester` verify it, and `reviewer` review the final diff. Rework through `implementer` when tester or reviewer reports actionable issues. Do not commit or push unless explicitly requested.
+Попроси `architect` подтвердить bugfix workflow и verification plan, `implementer` внести минимальное исправление,
+`tester` проверить его, а `reviewer` проверить финальный diff. При actionable issues от tester или reviewer вернись к
+`implementer` для rework. Не выполняй commit или push без явного запроса.

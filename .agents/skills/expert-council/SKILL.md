@@ -1,15 +1,16 @@
 ---
 name: expert-council
-description: Use when evaluating a non-trivial Copia product, business, architecture, planning, or trade-off decision through the OpenCode subagent Expert Council v3 protocol with a complexity gate, product/business grounding in docs/product, Visionary/Skeptic/Realist/Judge roles, and artifacts saved under docs/reports/expert-council.
+description: Используй для оценки нетривиальных product, business, architecture, planning или trade-off решений Copia через OpenCode subagent Expert Council v3.
 ---
 
 # Expert Council
 
-Use this skill to run the OpenCode subagent Expert Council v3 protocol for planning, design, architecture, review, or trade-off decisions.
+Используй этот skill для запуска протокола OpenCode subagent Expert Council v3 при planning, design, architecture,
+review или trade-off decisions.
 
 ## Complexity gate
 
-The council must not run for every task. Before launching council experts, calculate and record:
+Council не должен запускаться для каждой задачи. Перед запуском экспертов council рассчитай и зафиксируй:
 
 ```yaml
 council_required: true
@@ -20,97 +21,105 @@ reasons:
   - irreversible migration
 ```
 
-Use this scoring rubric:
+Используй следующую шкалу оценки:
 
-| Criterion | Points |
+| Критерий | Баллы |
 | --- | ---: |
-| Public API change | 2 |
-| Architectural migration | 2 |
-| Security/privacy impact | 3 |
-| Multiple equally viable solutions | 2 |
-| More than three modules affected | 1 |
-| Irreversible decision | 2 |
-| High uncertainty | 2 |
+| Изменение public API | 2 |
+| Архитектурная миграция | 2 |
+| Влияние на security/privacy | 3 |
+| Несколько равнозначных решений | 2 |
+| Затронуто более трёх модулей | 1 |
+| Необратимое решение | 2 |
+| Высокая неопределённость | 2 |
 
-Routing thresholds:
+Пороги маршрутизации:
 
-- `score < 3`: use a single agent; do not run the council.
-- `score 3-5`: use lightweight review; do not run the council.
-- `score >= 6`: run the full council.
+- `score < 3`: используй одного агента; council не запускай.
+- `score 3-5`: используй lightweight review; council не запускай.
+- `score >= 6`: запускай полный council.
 
-Important rule: the full Expert Council may run only when `score >= 6`.
+Важное правило: полный Expert Council можно запускать только при `score >= 6`.
 
-## OpenCode council orchestration
+## Оркестрация council в OpenCode
 
-The default `orchestrator` must calculate the complexity gate for every user request before normal routing.
+Стандартный `orchestrator` должен рассчитывать complexity gate для каждого пользовательского запроса, кроме
+`FEATURE_SPEC_ONLY`, до обычной маршрутизации. Strict route `FEATURE_SPEC_ONLY` из `.opencode/commands/feature.md` —
+явное исключение: он должен проверить переданную спецификацию задачи, а затем пропустить gate и весь протокол Expert
+Council.
 
-When `score >= 6`, the `orchestrator` must run the full Expert Council directly by calling `visionary`, `skeptic`, `realist`, and `council-judge`.
+При `score >= 6` `orchestrator` должен напрямую запустить полный Expert Council, вызвав `visionary`, `skeptic`,
+`realist` и `council-judge`.
 
-Do not route requests with `score >= 6` to `architect`, `reviewer`, `general`, or the normal delivery loop before the council verdict exists.
+Не направляй requests с `score >= 6` к `architect`, `reviewer`, `general` или в обычный delivery loop до появления
+вердикта council.
 
-The orchestrator must:
+Orchestrator должен:
 
-- Create `docs/reports/expert-council/<timestamp>-<task-slug>/task.md`.
-- Calculate and save the complexity gate result before launching experts.
-- Launch `visionary`, `skeptic`, and `realist` only when `score >= 6`.
-- Save expert answers only when `score >= 6`.
-- Run one critique round only when `score >= 6`.
-- Pass all materials to `council-judge` only when `score >= 6`.
-- Create `docs/reports/expert-council/<timestamp>-<task-slug>/verdict.md`.
+- создать `docs/reports/expert-council/<timestamp>-<task-slug>/task.md`;
+- рассчитать и сохранить результат complexity gate до запуска экспертов;
+- запускать `visionary`, `skeptic` и `realist` только при `score >= 6`;
+- сохранять ответы экспертов только при `score >= 6`;
+- проводить один critique round только при `score >= 6`;
+- передавать все материалы в `council-judge` только при `score >= 6`;
+- создать `docs/reports/expert-council/<timestamp>-<task-slug>/verdict.md`.
 
-Experts:
+Эксперты:
 
 - `visionary`: use `openrouter/google/gemini-3-flash-preview`.
 - `skeptic`: use `openrouter/deepseek/deepseek-v4-flash`.
 - `realist`: use `openrouter/z-ai/glm-5.2`.
 
-All experts and the judge must remain read-only. The orchestrator may edit only council artifacts under `docs/reports/expert-council/**`.
+Все эксперты и judge должны оставаться read-only. Orchestrator может редактировать только council artifacts в
+`docs/reports/expert-council/**`.
 
-## Product and business context
+## Product и business context
 
-- Before producing perspectives, inspect relevant product and business documents under `docs/product/`.
-- Prefer reading all files in `docs/product/` when the decision affects roadmap, scope, users, positioning, prioritization, monetization, or MVP trade-offs.
-- Ground the perspectives, disagreements, critique, and final decision in the product/business information found there.
-- If `docs/product/` has no relevant information for the task, state that explicitly in the report and continue from the best available sources.
-- Do not invent product or business facts that are not supported by the user request or `docs/product/`.
+- Перед подготовкой perspectives изучи релевантные product и business documents в `docs/product/`.
+- Предпочитай читать все files в `docs/product/`, если решение затрагивает roadmap, scope, users, positioning,
+  prioritization, monetization или MVP trade-offs.
+- Основывай perspectives, disagreements, critique и final decision на найденной там product/business information.
+- Если в `docs/product/` нет релевантной информации, явно укажи это в report и продолжи с лучшими доступными sources.
+- Не выдумывай product или business facts, которые не подтверждены user request или `docs/product/`.
 
-## Protocol
+## Протокол
 
-1. Calculate the complexity gate score.
-   - If `score < 3`, route to single-agent handling and do not launch council experts.
-   - If `score 3-5`, route to lightweight review and do not launch council experts.
-   - If `score >= 6`, continue with the full council.
-2. Create the report directory when `score >= 6`, or when the user explicitly invokes `/expert-council`.
-3. Save the complexity gate result in `complexity-gate.md` and summarize it in `task.md`.
-4. Gather product and business context from `docs/product/`.
-5. Produce three independent expert perspectives through `visionary`, `skeptic`, and `realist`.
-6. Save expert answers.
-7. List disagreements.
-8. Run one critique round.
-9. Pass all materials to `council-judge`.
-10. Produce `verdict.md`.
+1. Рассчитай score complexity gate.
+   - Не рассчитывай gate для `FEATURE_SPEC_ONLY`; проверь task path и продолжи напрямую в feature delivery loop.
+   - При `score < 3` используй single-agent handling и не запускай экспертов council.
+   - При `score 3-5` используй lightweight review и не запускай экспертов council.
+   - При `score >= 6` продолжи с полным council.
+2. Создай report directory при `score >= 6` или когда пользователь явно вызывает `/expert-council`.
+3. Сохрани результат complexity gate в `complexity-gate.md` и кратко изложи его в `task.md`.
+4. Собери product и business context из `docs/product/`.
+5. Подготовь три независимые expert perspectives через `visionary`, `skeptic` и `realist`.
+6. Сохрани ответы экспертов.
+7. Перечисли disagreements.
+8. Проведи один critique round.
+9. Передай все материалы в `council-judge`.
+10. Подготовь `verdict.md`.
 
-## Report format
+## Формат отчёта
 
-For full council runs, save the result as a markdown artifact set in:
+Для запусков full council сохраняй результат как набор Markdown-артефактов в:
 
 ```text
 docs/reports/expert-council/<timestamp>-<task-slug>/
 ```
 
-Use a 4-5 word lowercase hyphenated task slug, for example:
+Используй task slug из 4–5 слов в lowercase через hyphen, например:
 
 ```text
 20260727-153012-navigation-state-policy/
 ```
 
-Required files for every explicit `/expert-council` run and every full council run:
+Обязательные files для каждого явного запуска `/expert-council` и каждого full council run:
 
 - `task.md`
 - `complexity-gate.md`
 - `verdict.md`
 
-Required files for a full council run with `score >= 6`:
+Обязательные files для full council run с `score >= 6`:
 
 - `visionary.md`
 - `skeptic.md`
@@ -118,7 +127,7 @@ Required files for a full council run with `score >= 6`:
 - `critique.md`
 - `judge.md`
 
-`verdict.md` must include:
+`verdict.md` должен включать:
 
 - `## Complexity Gate`
 - `## Decision`

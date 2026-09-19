@@ -1,9 +1,9 @@
 ---
-description: Run a focused read-only Copia security review.
+description: Запускай focused read-only security review Copia.
 agent: orchestrator
 ---
 
-Route this security review request through the Copia orchestrator.
+Направь этот security review request через Copia orchestrator.
 
 Security review target:
 
@@ -11,4 +11,7 @@ Security review target:
 $ARGUMENTS
 ```
 
-Delegate read-only review to `security-reviewer`. Use `harness/policies/security.md` as the primary policy source, inspect the active task when relevant, inspect the current diff and related files, run `./harness/scripts/security-check.sh` when allowed, and report findings first. Do not edit files. Do not inspect or print real secrets. Do not commit or push.
+Делегируй read-only review к `security-reviewer`. Используй `harness/policies/security.md` как primary policy source,
+изучи active task при необходимости, current diff и связанные files, запусти
+`./harness/scripts/security-check.sh`, если это разрешено, и сначала сообщи findings. Не редактируй files. Не
+просматривай и не выводи реальные secrets. Не выполняй commit или push.

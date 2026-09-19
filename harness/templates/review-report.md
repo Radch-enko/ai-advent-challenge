@@ -1,8 +1,8 @@
-# Review Report
+# Отчёт о ревью
 
-## Scope Reviewed
+## Проверенная область
 
-## Findings By Severity
+## Findings по severity
 
 ### Critical
 
@@ -12,9 +12,9 @@
 
 ### Low
 
-## Requirements Coverage
+## Покрытие требований
 
-## Test Assessment
+## Оценка tests
 
 ## Test Integrity Gate
 
@@ -26,8 +26,8 @@
 - Production Code Should Have Been Fixed Instead:
 - Verdict: `NOT_APPLICABLE`, `APPROVED`, `APPROVED_WITH_NOTES`, or `REJECTED`
 
-## Architecture Assessment
+## Оценка архитектуры
 
-## Residual Risk
+## Остаточный риск
 
-## Verdict
+## Вердикт

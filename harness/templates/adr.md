@@ -1,17 +1,17 @@
-# ADR: Title
+# ADR: Заголовок
 
-## Status
+## Статус
 
 Proposed
 
-## Context
+## Контекст
 
-## Decision
+## Решение
 
-## Considered Alternatives
+## Рассмотренные альтернативы
 
-## Consequences
+## Последствия
 
-## Validation
+## Проверка
 
-## Follow-Up
+## Дальнейшие действия

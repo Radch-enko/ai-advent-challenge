@@ -1,11 +1,13 @@
-# Architecture Policy
+# Политика архитектуры
 
-- `src/copia/api` owns FastAPI routes, HTTP models, and application composition.
-- `src/copia/data` owns provider adapters, model metadata, profiles, and persistence.
-- `src/copia/domain` owns agent, session, routing, and context-management concepts; domain and data must not depend on the API package.
-- Provider-specific HTTP and credential handling stays under `src/copia/data/providers`.
-- `client/src/domain` contains framework-independent frontend types and must not depend on React, data, or UI code.
-- `client/src/data` may depend on frontend domain types but must not depend on UI components.
-- `client/src/ui` may depend on domain types; `client/src/App.tsx` is the client composition layer.
-- Public provider-agnostic contracts must not expose adapter-specific payloads without an explicit API decision.
-- Run `./harness/scripts/architecture-check.sh` for every production change.
+- `src/copia/api` отвечает за FastAPI routes, HTTP models и composition приложения.
+- `src/copia/data` отвечает за provider adapters, model metadata, profiles и persistence.
+- `src/copia/domain` отвечает за понятия agent, session, routing и context management; domain и data не должны зависеть
+  от API package.
+- Provider-specific HTTP и обработка credentials должны оставаться в `src/copia/data/providers`.
+- `client/src/domain` содержит frontend types, независимые от framework, и не должен зависеть от React, data или UI
+  code.
+- `client/src/data` может зависеть от frontend domain types, но не должен зависеть от UI components.
+- `client/src/ui` может зависеть от domain types; `client/src/App.tsx` — composition layer клиента.
+- Public provider-agnostic contracts не должны раскрывать adapter-specific payloads без явного API decision.
+- Для каждого production change запускай `./harness/scripts/architecture-check.sh`.

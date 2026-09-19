@@ -1,9 +1,9 @@
 ---
-description: Review the current Copia diff or task output without editing files.
+description: Выполняй ревью текущего Copia diff или task output без редактирования files.
 agent: orchestrator
 ---
 
-Route this review request through the Copia orchestrator.
+Направь этот review request через Copia orchestrator.
 
 Review target:
 
@@ -11,4 +11,7 @@ Review target:
 $ARGUMENTS
 ```
 
-Delegate read-only review to `reviewer`. Follow `harness/workflows/review.md` and use `harness/templates/review-report.md`. Read the active task, plan when present, current diff, tests, and verification claims. Do not edit files. Report findings first, ordered by severity, with file references. Do not commit or push.
+Делегируй read-only review к `reviewer`. Следуй `harness/workflows/review.md` и используй
+`harness/templates/review-report.md`. Прочитай active task, plan при наличии, current diff, tests и verification claims.
+Не редактируй files. Сначала сообщай findings, упорядоченные по severity, с file references. Не выполняй commit или
+push.

@@ -1,14 +1,16 @@
 ---
-description: Execute behavior-preserving Copia refactoring with explicit invariants and verification.
+description: Выполняй behavior-preserving refactoring Copia с явными invariants и verification.
 agent: orchestrator
 ---
 
-Route this request through the Copia multi-agent delivery loop.
+Направь этот request через Copia multi-agent delivery loop.
 
-Refactoring task or scope:
+Refactoring task или scope:
 
 ```text
 $ARGUMENTS
 ```
 
-Have `architect` define invariants and refactoring scope, `implementer` make the smallest behavior-preserving change, `tester` verify the invariants/checks, and `reviewer` review the final diff. Rework through `implementer` when tester or reviewer reports actionable issues. Do not commit or push unless explicitly requested.
+Попроси `architect` определить invariants и refactoring scope, `implementer` внести минимальное behavior-preserving
+change, `tester` проверить invariants/checks, а `reviewer` проверить финальный diff. При actionable issues от tester или
+reviewer вернись к `implementer` для rework. Не выполняй commit или push без явного запроса.

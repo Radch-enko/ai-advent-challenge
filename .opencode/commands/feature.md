@@ -1,14 +1,28 @@
 ---
-description: Implement an active Copia feature task through the feature skill and harness workflow.
+description: Реализуй существующую Copia feature task specification через feature skill и harness workflow.
 agent: orchestrator
 ---
 
-Route this request through the Copia multi-agent delivery loop.
+Route marker: `FEATURE_SPEC_ONLY`
 
-Task ID or path:
+Это strict specification-driven implementation route. Он никогда не должен запускать Expert Council или Expert Council
+complexity gate.
+
+Input contract:
+
+- `$ARGUMENTS` должен содержать ровно один repository-relative path.
+- Path должен указывать на существующую Markdown task specification в `docs/tasks/active/` или `docs/tasks/backlog/`.
+- Не принимай inline task text, natural-language implementation request или inferred/arbitrary task file вместо path.
+- Если argument отсутствует, содержит более одного path, находится вне allowed directories, не заканчивается на `.md`
+  или не существует, остановись и верни actionable error без делегирования работы.
+
+Task specification path:
 
 ```text
 $ARGUMENTS
 ```
 
-Have `architect` confirm the feature workflow and verification plan, `implementer` make the minimal scoped change, `tester` verify it, and `reviewer` review the final diff. Rework through `implementer` when tester or reviewer reports actionable issues. Do not commit or push unless explicitly requested.
+После проверки и чтения specification используй её как единственный task context. Попроси `architect` подтвердить
+feature workflow и verification plan, `implementer` внести минимальное scoped change, `tester` проверить его, а
+`reviewer` проверить final diff. При actionable issues от tester или reviewer вернись к `implementer` для rework. Не
+выполняй commit или push без явного запроса.

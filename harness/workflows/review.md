@@ -1,55 +1,55 @@
 # Review Workflow
 
-## Use When
+## Когда использовать
 
-Reviewing a task plan, implementation diff, or completed agent work.
+При ревью task plan, implementation diff или завершённой работы agent.
 
-## Purpose
+## Назначение
 
-Independently review work for defects.
+Независимо проверить работу на defects.
 
-## Required Inputs
+## Обязательные входные данные
 
-- Task and acceptance criteria.
-- Diff or changed files.
+- Task и acceptance criteria.
+- Diff или changed files.
 - Verification claims.
 
-## Priorities
+## Приоритеты
 
 1. Correctness.
-2. Unmet requirements.
+2. Невыполненные requirements.
 3. Regressions.
 4. Security.
-5. Concurrency and lifecycle.
+5. Concurrency и lifecycle.
 6. Architecture boundaries.
 7. Missing tests.
 8. Unnecessary complexity.
-9. Accidental unrelated changes.
+9. Случайные unrelated changes.
 
-## Procedure
+## Процедура
 
-1. Read the task, plan, and relevant architecture docs.
-2. Inspect the diff and changed tests.
-3. If existing tests were modified, apply `harness/workflows/test-integrity-gate.md`:
-   - verify that a Test Change Report exists;
-   - answer the Test Integrity Review questions;
-   - produce `APPROVED`, `APPROVED_WITH_NOTES`, or `REJECTED`;
-   - if rejected, return implementation to the implementer.
-4. If an existing test was deleted, verify explicit human approval before approving the work.
-5. Verify claims against files and command output.
-6. Report concrete findings with severity and file references.
-7. Include open questions and residual risk.
+1. Прочитай task, plan и relevant architecture docs.
+2. Изучи diff и changed tests.
+3. Если изменялись существующие tests, примени `harness/workflows/test-integrity-gate.md`:
+   - проверь наличие Test Change Report;
+   - ответь на Test Integrity Review questions;
+   - вынеси `APPROVED`, `APPROVED_WITH_NOTES` или `REJECTED`;
+   - при rejection верни implementation к implementer.
+4. Если existing test удалён, проверь explicit human approval до approval работы.
+5. Сверь claims с files и command output.
+6. Сообщи concrete findings с severity и file references.
+7. Включи open questions и residual risk.
 
-## Required Checks
+## Обязательные проверки
 
-- At minimum, inspect changed tests and related production code.
-- For existing test modifications, inspect the Test Change Report and record a Test Integrity verdict.
+- Как минимум изучи changed tests и связанный production code.
+- При изменении existing tests изучи Test Change Report и зафиксируй Test Integrity verdict.
 
-## Prohibited Behavior
+## Запрещённое поведение
 
-- Editing files unless explicitly requested.
-- Style-only findings unless they affect maintainability or policy.
+- Редактирование files без явного запроса.
+- Style-only findings, если они не влияют на maintainability или policy.
 
-## Output
+## Результат
 
-Use `harness/templates/review-report.md`. Review should be read-only unless edits are explicitly requested.
+Используй `harness/templates/review-report.md`. Review должно быть read-only, если edits явно не запрошены.
