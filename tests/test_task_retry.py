@@ -102,6 +102,14 @@ def test_retry_validation_restarts_execution_with_feedback(monkeypatch, tmp_path
             started = await client.post(
                 f"/sessions/{session['id']}/tasks", json={"instruction": "Test task"}
             )
+            await _wait_for_task_status(
+                client, session["id"], started.json()["id"], "waiting_for_approval"
+            )
+            assert (
+                await client.post(
+                    f"/sessions/{session['id']}/tasks/{started.json()['id']}/approve-plan"
+                )
+            ).status_code == 202
             failed = await _wait_for_task(client, session["id"], started.json()["id"])
 
             assert failed["status"] == "failed"
@@ -159,3 +167,14 @@ async def _wait_for_task(client: httpx.AsyncClient, session_id: str, task_id: st
             return task
         await asyncio.sleep(0.01)
     raise AssertionError("task did not finish")
+
+
+async def _wait_for_task_status(
+    client: httpx.AsyncClient, session_id: str, task_id: str, status_value: str
+) -> dict:
+    for _ in range(100):
+        task = (await client.get(f"/sessions/{session_id}/tasks/{task_id}")).json()
+        if task["status"] == status_value:
+            return task
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"task did not reach {status_value}")

@@ -10,6 +10,7 @@ from .config import ProviderName
 
 class TaskStage(StrEnum):
     PLANNING = "planning"
+    PLAN_REVIEW = "plan_review"
     EXECUTION = "execution"
     VALIDATION = "validation"
     REPORT = "report"
@@ -20,6 +21,7 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     PAUSE_REQUESTED = "pause_requested"
     PAUSED = "paused"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -83,6 +85,7 @@ class TaskState(BaseModel):
     stage: TaskStage = TaskStage.PLANNING
     current_step: int | None = Field(default=None, ge=0)
     expected_action: str | None = None
+    plan_feedback: str | None = None
     plan: TaskPlan | None = None
     validation_result: TaskValidationResult | None = None
     completion_report: str | None = None

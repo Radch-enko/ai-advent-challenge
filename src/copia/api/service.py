@@ -461,6 +461,17 @@ class TaskStartRequest(BaseModel):
     instruction: str = Field(min_length=1)
 
 
+class TaskPlanFeedbackRequest(BaseModel):
+    feedback: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_non_blank_feedback(self) -> TaskPlanFeedbackRequest:
+        if not self.feedback.strip():
+            raise ValueError("Plan change feedback cannot be blank")
+        self.feedback = self.feedback.strip()
+        return self
+
+
 class _PlannerStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -480,6 +491,7 @@ TASK_REPORT_SECTIONS = (
     "### Детали",
     "### Ограничения",
 )
+TASK_REPORT_MAX_ATTEMPTS = 2
 
 
 def _task_prompt_message(content: str) -> ChatMessage:
@@ -565,6 +577,7 @@ def _task_active(task: TaskState | None) -> bool:
         TaskStatus.RUNNING,
         TaskStatus.PAUSE_REQUESTED,
         TaskStatus.PAUSED,
+        TaskStatus.WAITING_FOR_APPROVAL,
     }
 
 
@@ -667,10 +680,16 @@ def _task_validation_schema() -> dict[str, object]:
 
 
 def _task_plan_payload(task: TaskState) -> str:
+    feedback = (
+        "\n\nUser feedback on the previous plan:\n" + task.plan_feedback
+        if task.plan_feedback
+        else ""
+    )
     return (
         "Create an actionable plan for the task below. Return only the structured output. "
         "Use a small number of independent, sequential steps.\n\n"
         f"Task:\n{task.original_instruction}"
+        f"{feedback}"
     )
 
 
@@ -724,13 +743,30 @@ def _task_validation_payload(task: TaskState, invariants: list[Invariant]) -> st
 def _finalize_task_validation(
     validation: TaskValidationResult,
     invariants: list[Invariant],
+    expected_step_ids: set[str] | None = None,
 ) -> TaskValidationResult:
+    step_issues: list[str] = []
+    if expected_step_ids is not None:
+        checked_step_ids = set(validation.checked_step_ids)
+        missing_step_ids = sorted(expected_step_ids - checked_step_ids)
+        unknown_step_ids = sorted(checked_step_ids - expected_step_ids)
+        if missing_step_ids:
+            step_issues.append("Steps were not checked: " + ", ".join(missing_step_ids))
+        if unknown_step_ids:
+            step_issues.append(
+                "Validation referenced unknown step IDs: " + ", ".join(unknown_step_ids)
+            )
+
     expected_ids = {item.id for item in invariants}
     checked_ids = set(validation.checked_invariant_ids)
     missing = [item for item in invariants if item.id not in checked_ids]
     unknown_ids = sorted(checked_ids - expected_ids)
     invariant_issues = list(validation.invariant_issues)
     issues = list(validation.issues)
+
+    for issue in step_issues:
+        if issue not in issues:
+            issues.append(issue)
 
     for item in missing:
         invariant_issues.append(f"Invariant was not checked: {item.name} ({item.id})")
@@ -746,7 +782,7 @@ def _finalize_task_validation(
 
     return validation.model_copy(
         update={
-            "passed": validation.passed and not invariant_issues,
+            "passed": validation.passed and not invariant_issues and not step_issues,
             "issues": issues,
             "invariant_issues": invariant_issues,
         }
@@ -1017,6 +1053,7 @@ async def _run_task_validation(session_id: str, task_id: str, task: TaskState) -
     validation = _finalize_task_validation(
         TaskValidationResult.model_validate(response.structured_data),
         invariants,
+        expected_step_ids={step.id for step in task.plan.steps} if task.plan else None,
     )
 
     def save_validation(latest: ChatSession) -> None:
@@ -1033,18 +1070,34 @@ async def _run_task_validation(session_id: str, task_id: str, task: TaskState) -
 async def _run_task_report(session_id: str, task_id: str, task: TaskState) -> None:
     session = await _get_session(session_id)
     config = _task_llm_config(session)
-    response = await _task_complete_call(
-        session_id,
-        task_id,
-        stage=TaskStage.REPORT,
-        kind="task_report",
-        step_id=None,
-        messages=_task_system_messages(session, "You are the Copia completion report writer.")
-        + [_task_prompt_message(_task_report_payload(task))],
-        config=config,
-    )
-    if not _valid_task_report(response.content):
+    response: LLMResponse | None = None
+    for attempt in range(TASK_REPORT_MAX_ATTEMPTS):
+        report_payload = _task_report_payload(task)
+        if attempt > 0:
+            report_payload += (
+                "\n\nThis is a format correction attempt. The previous report was rejected "
+                "because its headings did not exactly match the required template. "
+                "Return exactly these three headings and no other Markdown headings: "
+                + ", ".join(TASK_REPORT_SECTIONS)
+                + ". Preserve the useful answer content, but do not add any heading "
+                "starting with # outside those three headings."
+            )
+        response = await _task_complete_call(
+            session_id,
+            task_id,
+            stage=TaskStage.REPORT,
+            kind="task_report",
+            step_id=None,
+            messages=_task_system_messages(session, "You are the Copia completion report writer.")
+            + [_task_prompt_message(report_payload)],
+            config=config,
+        )
+        if _valid_task_report(response.content):
+            break
+    else:
         raise ValueError("Report does not match the required template")
+
+    assert response is not None
     latest_task = await run_in_threadpool(_task_state, session_id, task_id)
     report_log_id = next(
         call.agent_log_id for call in reversed(latest_task.llm_calls) if call.kind == "task_report"
@@ -1509,7 +1562,9 @@ def get_session(session_id: str) -> ChatSession:
     orphaned_tasks = [
         task
         for task in _session_tasks(session)
-        if _task_active(task) and not _task_worker_running(session_id, task.id)
+        if _task_active(task)
+        and task.status not in {TaskStatus.PAUSED, TaskStatus.WAITING_FOR_APPROVAL}
+        and not _task_worker_running(session_id, task.id)
     ]
     if orphaned_tasks:
         for task in orphaned_tasks:
@@ -1588,7 +1643,7 @@ async def get_task(session_id: str, task_id: str) -> TaskState:
     task = await run_in_threadpool(_task_state, session_id, task_id)
     if (
         _task_active(task)
-        and task.status != TaskStatus.PAUSED
+        and task.status not in {TaskStatus.PAUSED, TaskStatus.WAITING_FOR_APPROVAL}
         and not _task_worker_running(session_id, task_id)
     ):
 
@@ -1597,6 +1652,62 @@ async def get_task(session_id: str, task_id: str) -> TaskState:
 
         recovered_session = await run_in_threadpool(_task_checkpoint, session_id, recover)
         task = _session_task(recovered_session, task_id)
+    return task
+
+
+@app.post(
+    "/sessions/{session_id}/tasks/{task_id}/approve-plan",
+    response_model=TaskState,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_task_plan(session_id: str, task_id: str) -> TaskState:
+    def approve() -> TaskState:
+        with session_lifecycle_lock:
+            session = _get_session_locked(session_id)
+            task = _session_task(session, task_id)
+            try:
+                task_state_machine.apply(task, TaskEvent.PLAN_APPROVED)
+            except InvalidTaskTransition as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            task.recovered = False
+            task.updated_at = datetime.now(UTC)
+            session.updated_at = task.updated_at
+            sessions.save(session)
+            return task
+
+    task = await run_in_threadpool(approve)
+    _start_task_worker(session_id, task_id)
+    return task
+
+
+@app.post(
+    "/sessions/{session_id}/tasks/{task_id}/request-plan-changes",
+    response_model=TaskState,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_task_plan_changes(
+    session_id: str, task_id: str, request: TaskPlanFeedbackRequest
+) -> TaskState:
+    def request_changes() -> TaskState:
+        with session_lifecycle_lock:
+            session = _get_session_locked(session_id)
+            task = _session_task(session, task_id)
+            try:
+                task_state_machine.apply(
+                    task,
+                    TaskEvent.PLAN_CHANGES_REQUESTED,
+                    feedback=request.feedback,
+                )
+            except InvalidTaskTransition as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            task.recovered = False
+            task.updated_at = datetime.now(UTC)
+            session.updated_at = task.updated_at
+            sessions.save(session)
+            return task
+
+    task = await run_in_threadpool(request_changes)
+    _start_task_worker(session_id, task_id)
     return task
 
 

@@ -416,6 +416,22 @@ export function startTask(sessionId: string, instruction: string): Promise<TaskS
 export function getTask(sessionId: string, taskId: string): Promise<TaskState> {
   return request(`/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}`)
 }
+export function approveTaskPlan(sessionId: string, taskId: string): Promise<TaskState> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/approve-plan`,
+    { method: 'POST' },
+  )
+}
+export function requestTaskPlanChanges(
+  sessionId: string,
+  taskId: string,
+  feedback: string,
+): Promise<TaskState> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/request-plan-changes`,
+    { method: 'POST', body: JSON.stringify({ feedback }) },
+  )
+}
 export function pauseTask(sessionId: string, taskId: string): Promise<TaskState> {
   return request(
     `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/pause`,

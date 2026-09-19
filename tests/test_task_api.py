@@ -120,6 +120,13 @@ def test_task_pipeline_persists_calls_and_report(monkeypatch, tmp_path: Path) ->
                 f"/sessions/{session['id']}/tasks", json={"instruction": "Test task"}
             )
             assert started.status_code == 202
+            review = await _wait_for_task_status(
+                client, session["id"], started.json()["id"], "waiting_for_approval"
+            )
+            approved = await client.post(
+                f"/sessions/{session['id']}/tasks/{review['id']}/approve-plan"
+            )
+            assert approved.status_code == 202
             task = await _wait_for_task(client, session["id"], started.json()["id"])
             assert task["status"] == "completed"
             assert task["stage"] == "done"
@@ -166,10 +173,26 @@ def test_task_history_keeps_multiple_tasks_in_one_session(monkeypatch, tmp_path:
             first = await client.post(
                 f"/sessions/{session['id']}/tasks", json={"instruction": "First task"}
             )
+            first_review = await _wait_for_task_status(
+                client, session["id"], first.json()["id"], "waiting_for_approval"
+            )
+            assert (
+                await client.post(
+                    f"/sessions/{session['id']}/tasks/{first_review['id']}/approve-plan"
+                )
+            ).status_code == 202
             first_task = await _wait_for_task(client, session["id"], first.json()["id"])
             second = await client.post(
                 f"/sessions/{session['id']}/tasks", json={"instruction": "Second task"}
             )
+            second_review = await _wait_for_task_status(
+                client, session["id"], second.json()["id"], "waiting_for_approval"
+            )
+            assert (
+                await client.post(
+                    f"/sessions/{session['id']}/tasks/{second_review['id']}/approve-plan"
+                )
+            ).status_code == 202
             second_task = await _wait_for_task(client, session["id"], second.json()["id"])
 
             stored = (await client.get(f"/sessions/{session['id']}")).json()
@@ -283,3 +306,14 @@ async def _wait_for_task(client: httpx.AsyncClient, session_id: str, task_id: st
             return task
         await asyncio.sleep(0.01)
     raise AssertionError("task did not finish")
+
+
+async def _wait_for_task_status(
+    client: httpx.AsyncClient, session_id: str, task_id: str, status_value: str
+) -> dict:
+    for _ in range(80):
+        task = (await client.get(f"/sessions/{session_id}/tasks/{task_id}")).json()
+        if task["status"] == status_value:
+            return task
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"task did not reach {status_value}")

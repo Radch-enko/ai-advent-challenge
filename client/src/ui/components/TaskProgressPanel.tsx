@@ -2,6 +2,7 @@ import { TaskLlmCall, TaskPlanStep, TaskState } from '../../domain/models/task'
 
 const stages = [
   ['planning', 'Планирование'],
+  ['plan_review', 'Согласование'],
   ['execution', 'Выполнение'],
   ['validation', 'Проверка'],
   ['done', 'Готово'],
@@ -92,9 +93,11 @@ export function TaskProgressPanel({
           <h2>
             {task.stage === 'done'
               ? 'Задача завершена'
-              : validationFailed
-                ? 'Проверка не пройдена'
-                : 'План задачи'}
+              : task.stage === 'plan_review'
+                ? 'План готов'
+                : validationFailed
+                  ? 'Проверка не пройдена'
+                  : 'План задачи'}
           </h2>
           <p>{task.expected_action ?? taskStatusLabel(task)}</p>
         </div>
@@ -257,9 +260,10 @@ function TaskSubtask({
 
 function stageForStepper(stage: TaskState['stage']) {
   if (stage === 'planning') return 0
-  if (stage === 'execution') return 1
-  if (stage === 'validation' || stage === 'report') return 2
-  return 3
+  if (stage === 'plan_review') return 1
+  if (stage === 'execution') return 2
+  if (stage === 'validation' || stage === 'report') return 3
+  return 4
 }
 
 function statusLabel(status: TaskState['status']) {
@@ -267,6 +271,7 @@ function statusLabel(status: TaskState['status']) {
     running: 'Выполняется',
     pause_requested: 'Остановка…',
     paused: 'Пауза',
+    waiting_for_approval: 'Ждёт утверждения',
     completed: 'Готово',
     failed: 'Ошибка',
   }[status]
@@ -283,6 +288,7 @@ function collapsedLabel(task: TaskState, stepTitle?: string) {
   if (task.stage === 'validation' && task.status === 'failed') return 'Проверка не пройдена'
   if (task.status === 'failed') return 'Задача завершилась с ошибкой'
   if (task.status === 'paused') return 'Задача приостановлена'
+  if (task.status === 'waiting_for_approval') return 'Ожидает утверждения плана'
   if (task.status === 'pause_requested') return 'Остановка задачи…'
   return `Выполняется ${stepTitle ?? stageLabel(task.stage)}…`
 }
@@ -297,12 +303,16 @@ function collapsedDetail(task: TaskState, stepTitle?: string) {
     )
   if (task.status === 'failed') return task.expected_action ?? 'Откройте, чтобы посмотреть ошибку'
   if (task.status === 'paused') return stepTitle ?? task.expected_action ?? 'Можно продолжить'
+  if (task.status === 'waiting_for_approval') {
+    return task.expected_action ?? 'Проверьте план перед выполнением'
+  }
   return task.expected_action ?? stageLabel(task.stage)
 }
 
 function stageLabel(stage: TaskState['stage']) {
   return {
     planning: 'планирование',
+    plan_review: 'утверждение плана',
     execution: 'текущий шаг',
     validation: 'проверка результата',
     report: 'подготовка отчёта',

@@ -1,5 +1,6 @@
-export type TaskStage = 'planning' | 'execution' | 'validation' | 'report' | 'done'
-export type TaskStatus = 'running' | 'pause_requested' | 'paused' | 'completed' | 'failed'
+export type TaskStage = 'planning' | 'plan_review' | 'execution' | 'validation' | 'report' | 'done'
+export type TaskStatus =
+  'running' | 'pause_requested' | 'paused' | 'waiting_for_approval' | 'completed' | 'failed'
 export type TaskPlanStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 export type TaskLlmCallStatus = 'running' | 'completed' | 'failed'
 
@@ -45,6 +46,7 @@ export type TaskState = {
   stage: TaskStage
   current_step?: number | null
   expected_action?: string | null
+  plan_feedback?: string | null
   plan?: TaskPlan | null
   validation_result?: TaskValidationResult | null
   completion_report?: string | null

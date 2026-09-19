@@ -12,6 +12,7 @@ import {
 import {
   ApiRequestError,
   approveMemory,
+  approveTaskPlan,
   ChatSession,
   ChatSessionSummary,
   createSession,
@@ -47,6 +48,7 @@ import {
   deleteInvariant,
   updateInvariant,
   pauseTask,
+  requestTaskPlanChanges,
   retryTask,
   resumeTask,
   startTask,
@@ -75,6 +77,7 @@ import { MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
 import { RequestLogs } from './ui/components/RequestLogs'
 import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
 import { TaskProgressPanel } from './ui/components/TaskProgressPanel'
+import { TaskPlanApprovalBar } from './ui/components/TaskPlanApprovalBar'
 
 const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
@@ -89,7 +92,7 @@ function tasksForSession(session: ChatSession | null): TaskState[] {
 }
 
 function isActiveTask(task: TaskState): boolean {
-  return ['running', 'pause_requested', 'paused'].includes(task.status)
+  return ['running', 'pause_requested', 'paused', 'waiting_for_approval'].includes(task.status)
 }
 
 const defaultSummaryPrompt = `Update the compact summary of the conversation using the existing summary
@@ -204,6 +207,9 @@ export function App() {
     taskId: string
     message: string
   } | null>(null)
+  const [planFeedback, setPlanFeedback] = useState('')
+  const [planApprovalSubmitting, setPlanApprovalSubmitting] = useState(false)
+  const [planApprovalError, setPlanApprovalError] = useState<string | null>(null)
   const [profileSettingsSaving, setProfileSettingsSaving] = useState(false)
   const [profileSettingsError, setProfileSettingsError] = useState<string | null>(null)
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
@@ -434,7 +440,7 @@ export function App() {
     if (
       !sessionId ||
       !taskId ||
-      !['running', 'pause_requested', 'paused'].includes(taskStatus ?? '')
+      !['running', 'pause_requested', 'paused', 'waiting_for_approval'].includes(taskStatus ?? '')
     )
       return
     let cancelled = false
@@ -468,6 +474,13 @@ export function App() {
       window.clearInterval(interval)
     }
   }, [activeSession?.id, activeTask?.id, activeTask?.status, activeTask?.stage])
+
+  useEffect(() => {
+    if (activeTask?.status !== 'waiting_for_approval') {
+      setPlanFeedback('')
+      setPlanApprovalError(null)
+    }
+  }, [activeTask?.id, activeTask?.status])
 
   const baseConfig = useMemo<AgentConfig>(
     () => ({
@@ -1146,6 +1159,52 @@ export function App() {
     />
   )
 
+  function applyTaskUpdate(updated: TaskState, sessionId: string) {
+    if (activeSessionIdRef.current !== sessionId) return
+    setActiveSession((current) =>
+      current
+        ? {
+            ...current,
+            task: updated,
+            tasks: current.tasks.map((item) => (item.id === updated.id ? updated : item)),
+          }
+        : current,
+    )
+  }
+
+  async function approveActiveTaskPlan() {
+    const session = activeSession
+    const task = activeTask
+    if (!session || !task || task.status !== 'waiting_for_approval') return
+    setPlanApprovalSubmitting(true)
+    setPlanApprovalError(null)
+    try {
+      const updated = await approveTaskPlan(session.id, task.id)
+      applyTaskUpdate(updated, session.id)
+    } catch (error) {
+      setPlanApprovalError(error instanceof Error ? error.message : 'Не удалось утвердить план')
+    } finally {
+      setPlanApprovalSubmitting(false)
+    }
+  }
+
+  async function requestActiveTaskPlanChanges() {
+    const session = activeSession
+    const task = activeTask
+    const feedback = planFeedback.trim()
+    if (!session || !task || task.status !== 'waiting_for_approval' || !feedback) return
+    setPlanApprovalSubmitting(true)
+    setPlanApprovalError(null)
+    try {
+      const updated = await requestTaskPlanChanges(session.id, task.id, feedback)
+      applyTaskUpdate(updated, session.id)
+    } catch (error) {
+      setPlanApprovalError(error instanceof Error ? error.message : 'Не удалось отправить правки')
+    } finally {
+      setPlanApprovalSubmitting(false)
+    }
+  }
+
   async function pauseActiveTask() {
     const session = activeSession
     const task = activeTask
@@ -1686,6 +1745,17 @@ export function App() {
                     />
                   )}
                 </div>
+              )}
+              {activeTask?.status === 'waiting_for_approval' && (
+                <TaskPlanApprovalBar
+                  task={activeTask}
+                  feedback={planFeedback}
+                  submitting={planApprovalSubmitting}
+                  error={planApprovalError}
+                  onFeedbackChange={setPlanFeedback}
+                  onApprove={() => void approveActiveTaskPlan()}
+                  onRequestChanges={() => void requestActiveTaskPlanChanges()}
+                />
               )}
               <form className="composer" ref={formRef} onSubmit={submit}>
                 <span

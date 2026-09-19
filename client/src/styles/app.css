@@ -2203,6 +2203,87 @@ button {
   background: #1c1c24;
   box-shadow: 0 12px 28px rgb(0 0 0 / 18%);
 }
+.task-plan-approval {
+  display: grid;
+  gap: 10px;
+  width: min(720px, 100%);
+  margin: 0 auto 10px;
+  padding: 12px 14px;
+  border: 1px solid #514a83;
+  border-radius: 10px;
+  background: #211e32;
+}
+.task-plan-approval-copy {
+  display: grid;
+  gap: 3px;
+}
+.task-plan-approval-copy b {
+  color: #e8e6f2;
+  font-size: 12px;
+}
+.task-plan-approval-copy span {
+  color: #aaa6bd;
+  font-size: 11px;
+}
+.task-plan-approval-actions {
+  display: grid;
+  gap: 8px;
+}
+.task-plan-approve,
+.task-plan-request-changes {
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid #655bd0;
+  border-radius: 7px;
+  color: white;
+  background: #5147ad;
+  font-size: 11px;
+  font-weight: 600;
+}
+.task-plan-approve:hover:not(:disabled) {
+  background: #6459c8;
+}
+.task-plan-feedback-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.task-plan-feedback-row textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 7px 9px;
+  border: 1px solid #3c3759;
+  border-radius: 7px;
+  outline: 0;
+  resize: vertical;
+  color: #f4f4f6;
+  background: #18181f;
+  font: inherit;
+  font-size: 11px;
+}
+.task-plan-feedback-row textarea:focus {
+  border-color: #7b6ef6;
+}
+.task-plan-request-changes {
+  flex: 0 0 auto;
+  border-color: #6b4b59;
+  color: #f0b1bc;
+  background: #39232c;
+}
+.task-plan-request-changes:hover:not(:disabled) {
+  background: #4a2a37;
+}
+.task-plan-approve:disabled,
+.task-plan-request-changes:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.task-plan-approval-error {
+  margin: 0;
+  color: #ef8998;
+  font-size: 11px;
+}
 .task-progress-panel.collapsed {
   gap: 0;
   padding: 0;
@@ -2261,7 +2342,8 @@ button {
   box-shadow: 0 0 0 3px rgb(125 211 169 / 14%);
 }
 .task-collapsed-dot.paused,
-.task-collapsed-dot.pause_requested {
+.task-collapsed-dot.pause_requested,
+.task-collapsed-dot.waiting_for_approval {
   background: #e5b96a;
   box-shadow: 0 0 0 3px rgb(229 185 106 / 14%);
 }
@@ -2362,13 +2444,14 @@ button {
   background: #1d332b;
 }
 .task-status-badge.paused,
-.task-status-badge.pause_requested {
+.task-status-badge.pause_requested,
+.task-status-badge.waiting_for_approval {
   color: #e5b96a;
   background: #332c1e;
 }
 .task-stage-stepper {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 8px;
 }
 .task-stage {
@@ -2889,6 +2972,12 @@ button {
   .task-progress-panel {
     margin-top: 8px;
     padding: 13px;
+  }
+  .task-plan-feedback-row {
+    flex-direction: column;
+  }
+  .task-plan-request-changes {
+    width: 100%;
   }
   .task-progress-footer {
     flex-wrap: wrap;
