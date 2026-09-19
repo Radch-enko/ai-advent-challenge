@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..data.agent_log_repository import JsonAgentLogRepository
 from ..data.agent_log_store import AgentLogStore
+from ..data.invariants_repository import InvariantsRepository
 from ..data.model_catalog import context_window_for
 from ..data.path_identifiers import validate_path_identifier
 from ..data.pending_memory_repository import PendingMemoryRepository
@@ -58,6 +59,7 @@ from ..domain.models.config import (
     ProviderTrace,
     StructuredOutputConfig,
 )
+from ..domain.models.invariant import Invariant, InvariantCreate, InvariantUpdate
 from ..domain.models.memory import (
     LongTermMemoryCreate,
     LongTermMemoryItem,
@@ -86,7 +88,7 @@ from ..domain.models.task import (
 )
 from ..domain.models.user_profile import UserProfile, UserProfileCreate, UserProfileUpdate
 from ..domain.services.agent_log_context import agent_log_operation, agent_log_turn
-from ..domain.services.context_strategy import _render_user_profile_block
+from ..domain.services.context_strategy import _render_user_profile_block, render_invariants_context
 from ..domain.services.credential_sanitizer import sanitize_error, sanitize_text, sanitize_value
 from ..domain.services.memory_classifier import LLMMemoryClassifier
 from ..domain.services.router import LLMRouter
@@ -101,6 +103,7 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 profiles_path = Path(os.getenv("COPIA_PROFILES_PATH", PROJECT_ROOT / "profiles.json"))
 sessions_path = Path(os.getenv("COPIA_SESSIONS_PATH", "~/.copia/sessions"))
+invariants_path = Path(os.getenv("COPIA_INVARIANTS_PATH", sessions_path.parent / "invariants.json"))
 agent_log_store = AgentLogStore(repository=JsonAgentLogRepository(sessions_path))
 router = LLMRouter(agent_log_store=agent_log_store)
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
@@ -110,6 +113,10 @@ profile_memory = ProfileMemoryRepository(Path(os.getenv("COPIA_MEMORY_PATH", "~/
 working_memory = WorkingMemoryRepository(sessions_path)
 pending_memory: dict[str, list[PendingMemorySuggestion]] = {}
 pending_memory_repository = PendingMemoryRepository(sessions_path)
+invariants_repository = InvariantsRepository(
+    invariants_path,
+    legacy_sessions_root=sessions_path,
+)
 user_profiles = JsonUserProfilesRepository()
 session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
@@ -479,10 +486,19 @@ def _task_prompt_message(content: str) -> ChatMessage:
     return ChatMessage(role="user", content=content)
 
 
-def _task_system_messages(session: ChatSession, role_prompt: str) -> list[ChatMessage]:
+def _task_system_messages(
+    session: ChatSession,
+    role_prompt: str,
+    invariants: list[Invariant] | None = None,
+) -> list[ChatMessage]:
     messages: list[ChatMessage] = []
     if session.config.system_prompt:
         messages.append(ChatMessage(role="system", content=session.config.system_prompt))
+    invariant_context = render_invariants_context(
+        invariants if invariants is not None else invariants_repository.load()
+    )
+    if invariant_context:
+        messages.append(ChatMessage(role="system", content=invariant_context))
     messages.append(ChatMessage(role="system", content=role_prompt))
     return messages
 
@@ -644,6 +660,12 @@ def _task_plan_schema() -> dict[str, object]:
     return _PlannerResponse.model_json_schema()
 
 
+def _task_validation_schema() -> dict[str, object]:
+    schema = TaskValidationResult.model_json_schema()
+    schema["required"] = list(schema["properties"])
+    return schema
+
+
 def _task_plan_payload(task: TaskState) -> str:
     return (
         "Create an actionable plan for the task below. Return only the structured output. "
@@ -679,17 +701,55 @@ def _task_execution_payload(task: TaskState, step: TaskPlanStep) -> str:
     )
 
 
-def _task_validation_payload(task: TaskState) -> str:
+def _task_validation_payload(task: TaskState, invariants: list[Invariant]) -> str:
     assert task.plan is not None
     steps = "\n".join(
         f"{step.id}: {step.title}\nResult: {step.result or step.error or 'No result'}\n"
         f"Criteria: {step.success_criteria}"
         for step in task.plan.steps
     )
+    invariant_items = "\n".join(
+        f"{item.id}: {item.name}\nConstraint: {item.text}" for item in invariants
+    )
     return (
-        "Validate the completed task against every success criterion. Return only structured "
-        "output with passed, issues, and checked_step_ids.\n\n"
+        "Validate the completed task against every success criterion and every invariant. "
+        "Return only structured output with passed, issues, checked_step_ids, "
+        "checked_invariant_ids, and invariant_issues. Add a concise explanation to "
+        "invariant_issues for each violated invariant.\n\n"
         f"Original task:\n{task.original_instruction}\n\n{steps}"
+        f"\n\nInvariants to check:\n{invariant_items or 'None'}"
+    )
+
+
+def _finalize_task_validation(
+    validation: TaskValidationResult,
+    invariants: list[Invariant],
+) -> TaskValidationResult:
+    expected_ids = {item.id for item in invariants}
+    checked_ids = set(validation.checked_invariant_ids)
+    missing = [item for item in invariants if item.id not in checked_ids]
+    unknown_ids = sorted(checked_ids - expected_ids)
+    invariant_issues = list(validation.invariant_issues)
+    issues = list(validation.issues)
+
+    for item in missing:
+        invariant_issues.append(f"Invariant was not checked: {item.name} ({item.id})")
+    if unknown_ids:
+        invariant_issues.append(
+            "Validation referenced unknown invariant IDs: " + ", ".join(unknown_ids)
+        )
+
+    for issue in invariant_issues:
+        formatted = f"Invariant validation: {issue}"
+        if formatted not in issues:
+            issues.append(formatted)
+
+    return validation.model_copy(
+        update={
+            "passed": validation.passed and not invariant_issues,
+            "issues": issues,
+            "invariant_issues": invariant_issues,
+        }
     )
 
 
@@ -938,18 +998,26 @@ async def _run_task_execution(session_id: str, task_id: str, task: TaskState) ->
 
 async def _run_task_validation(session_id: str, task_id: str, task: TaskState) -> None:
     session = await _get_session(session_id)
-    config = _task_llm_config(session, structured_schema=TaskValidationResult.model_json_schema())
+    invariants = await run_in_threadpool(invariants_repository.load)
+    config = _task_llm_config(session, structured_schema=_task_validation_schema())
     response = await _task_complete_call(
         session_id,
         task_id,
         stage=TaskStage.VALIDATION,
         kind="task_validation",
         step_id=None,
-        messages=_task_system_messages(session, "You are the Copia task validator.")
-        + [_task_prompt_message(_task_validation_payload(task))],
+        messages=_task_system_messages(
+            session,
+            "You are the Copia task validator.",
+            invariants=invariants,
+        )
+        + [_task_prompt_message(_task_validation_payload(task, invariants))],
         config=config,
     )
-    validation = TaskValidationResult.model_validate(response.structured_data)
+    validation = _finalize_task_validation(
+        TaskValidationResult.model_validate(response.structured_data),
+        invariants,
+    )
 
     def save_validation(latest: ChatSession) -> None:
         assert latest.task is not None
@@ -1232,8 +1300,15 @@ async def models(provider_name: ProviderName) -> list[ProviderModel]:
 @app.post("/completions", response_model=MessageResponse)
 async def completion(request: CompletionRequest) -> MessageResponse:
     messages = list(request.messages)
-    if request.config.system_prompt:
-        messages.insert(0, ChatMessage(role="system", content=request.config.system_prompt))
+    try:
+        invariant_context = render_invariants_context(invariants_repository.load())
+    except (OSError, ValueError) as error:
+        raise _memory_storage_error() from error
+    system_content = "\n\n".join(
+        part for part in (request.config.system_prompt, invariant_context) if part
+    )
+    if system_content:
+        messages.insert(0, ChatMessage(role="system", content=system_content))
     try:
         response = await run_in_threadpool(router.complete, messages, request.config)
     except ProviderError as error:
@@ -1246,6 +1321,7 @@ async def completion(request: CompletionRequest) -> MessageResponse:
 @app.post("/agents", response_model=CreateAgentResponse, status_code=status.HTTP_201_CREATED)
 def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     try:
+        loaded_invariants = invariants_repository.load()
         if request.profile_name is not None:
             agent = factory.create_from_profile(request.profile_name)
             agent = Agent(
@@ -1260,6 +1336,7 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
             )
         else:
             agent = factory.create(request.config)  # type: ignore[arg-type]
+        agent.set_invariants(loaded_invariants)
     except KeyError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     except (OSError, ValueError) as error:
@@ -1280,6 +1357,8 @@ async def send_message(agent_id: str, request: MessageRequest) -> MessageRespons
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown agent")
     try:
+        loaded_invariants = await run_in_threadpool(invariants_repository.load)
+        agent.set_invariants(loaded_invariants)
         response = await run_in_threadpool(agent.ask, request.content)
     except ProviderError as error:
         raise HTTPException(
@@ -1661,6 +1740,83 @@ async def get_session_facts(session_id: str) -> dict[str, str]:
         ) from error
 
 
+@app.get("/invariants", response_model=list[Invariant])
+async def list_invariants() -> list[Invariant]:
+    try:
+        return await run_in_threadpool(invariants_repository.load)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Invariants are unavailable") from error
+
+
+@app.get("/sessions/{session_id}/invariants", response_model=list[Invariant])
+async def list_session_invariants(session_id: str) -> list[Invariant]:
+    await _get_session(session_id)
+    return await list_invariants()
+
+
+@app.post("/invariants", response_model=Invariant, status_code=status.HTTP_201_CREATED)
+async def create_invariant(request: InvariantCreate) -> Invariant:
+    return await run_in_threadpool(_create_invariant, request)
+
+
+def _create_invariant(request: InvariantCreate) -> Invariant:
+    now = datetime.now(UTC)
+    invariant = Invariant(
+        id=str(uuid.uuid4()), **request.model_dump(), created_at=now, updated_at=now
+    )
+    try:
+        return invariants_repository.create(invariant)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail="Invariant limit reached") from error
+
+
+@app.post("/sessions/{session_id}/invariants", response_model=Invariant, status_code=201)
+async def create_session_invariant(session_id: str, request: InvariantCreate) -> Invariant:
+    await _get_session(session_id)
+    return await create_invariant(request)
+
+
+@app.patch("/invariants/{item_id}", response_model=Invariant)
+async def update_invariant(item_id: str, request: InvariantUpdate) -> Invariant:
+    return await run_in_threadpool(_update_invariant, item_id, request)
+
+
+def _update_invariant(item_id: str, request: InvariantUpdate) -> Invariant:
+    try:
+        return invariants_repository.update(
+            item_id,
+            {**request.model_dump(exclude_none=True), "updated_at": datetime.now(UTC)},
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Unknown invariant") from error
+
+
+@app.patch("/sessions/{session_id}/invariants/{item_id}", response_model=Invariant)
+async def update_session_invariant(
+    session_id: str, item_id: str, request: InvariantUpdate
+) -> Invariant:
+    await _get_session(session_id)
+    return await update_invariant(item_id, request)
+
+
+@app.delete("/invariants/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_invariant(item_id: str) -> None:
+    return await run_in_threadpool(_delete_invariant, item_id)
+
+
+def _delete_invariant(item_id: str) -> None:
+    try:
+        invariants_repository.delete_item(item_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Unknown invariant") from error
+
+
+@app.delete("/sessions/{session_id}/invariants/{item_id}", status_code=204)
+async def delete_session_invariant(session_id: str, item_id: str) -> None:
+    await _get_session(session_id)
+    return await delete_invariant(item_id)
+
+
 @app.patch("/sessions/{session_id}/context-management", response_model=ChatSession)
 def update_session_context_management(
     session_id: str, request: ContextManagementUpdate
@@ -1847,6 +2003,12 @@ async def _send_session_message_locked(
             agent_log_id, "Pending memory is unavailable", "pending_memory_unavailable"
         ) from error
     try:
+        loaded_invariants = await run_in_threadpool(invariants_repository.load)
+    except (OSError, ValueError) as error:
+        raise _session_initialization_error(
+            agent_log_id, "Invariants are unavailable", "invariants_unavailable"
+        ) from error
+    try:
         agent = Agent(
             config=session.config,
             router=router,
@@ -1858,9 +2020,14 @@ async def _send_session_message_locked(
             working_memory=loaded_working_memory,
             working_memory_store=working_memory,
             session_id=session.id,
-            memory_classifier=LLMMemoryClassifier(router, session.config),
+            memory_classifier=(
+                LLMMemoryClassifier(router, session.config, loaded_invariants)
+                if loaded_invariants
+                else LLMMemoryClassifier(router, session.config)
+            ),
             pending_memory=loaded_pending_memory,
             user_profile=user_profile,
+            invariants=loaded_invariants,
         )
     except (OSError, TypeError, ValueError) as error:
         raise _session_initialization_error(
@@ -2004,9 +2171,10 @@ async def retry_session_summarization(session_id: str) -> SessionMessageResponse
             loaded_pending_memory = await run_in_threadpool(
                 pending_memory_repository.load, session.id
             )
+            loaded_invariants = await run_in_threadpool(invariants_repository.load)
         except (OSError, ValueError) as error:
             raise _session_initialization_error(
-                agent_log_id, "Session memory is unavailable", "session_memory_unavailable"
+                agent_log_id, "Session context is unavailable", "session_context_unavailable"
             ) from error
         try:
             agent = Agent(
@@ -2020,9 +2188,14 @@ async def retry_session_summarization(session_id: str) -> SessionMessageResponse
                 working_memory=loaded_working_memory,
                 working_memory_store=working_memory,
                 session_id=session.id,
-                memory_classifier=LLMMemoryClassifier(router, session.config),
+                memory_classifier=(
+                    LLMMemoryClassifier(router, session.config, loaded_invariants)
+                    if loaded_invariants
+                    else LLMMemoryClassifier(router, session.config)
+                ),
                 pending_memory=loaded_pending_memory,
                 user_profile=user_profile,
+                invariants=loaded_invariants,
             )
         except (OSError, TypeError, ValueError) as error:
             raise _session_initialization_error(
@@ -2386,6 +2559,10 @@ def generate_session_title(
     session = sessions.load(session_id)
     if session is None or session.title is not None or len(session.messages) < 2:
         return
+    try:
+        invariant_context = render_invariants_context(invariants_repository.load())
+    except (OSError, ValueError):
+        return
     source = session.messages[:2]
     title_request = ChatMessage(
         role="user",
@@ -2409,9 +2586,13 @@ def generate_session_title(
             strict=True,
         ),
     )
+    title_messages = (
+        [ChatMessage(role="system", content=invariant_context)] if invariant_context else []
+    )
+    title_messages.append(title_request)
     try:
         if agent_log_id is None:
-            response = router.complete([title_request], config)
+            response = router.complete(title_messages, config)
         else:
             with agent_log_turn(
                 session_id,
@@ -2425,7 +2606,7 @@ def generate_session_title(
                     provider=config.provider,
                     model=config.model,
                 ):
-                    response = router.complete([title_request], config)
+                    response = router.complete(title_messages, config)
     except ProviderError:
         return
     data = response.structured_data

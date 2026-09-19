@@ -20,6 +20,8 @@ export type TaskValidationResult = {
   passed: boolean
   issues: string[]
   checked_step_ids: string[]
+  checked_invariant_ids?: string[]
+  invariant_issues?: string[]
 }
 
 export type TaskLlmCall = {

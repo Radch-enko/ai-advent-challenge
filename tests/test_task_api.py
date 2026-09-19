@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 
 from copia.api import service
+from copia.data.invariants_repository import InvariantsRepository
 from copia.data.pending_memory_repository import PendingMemoryRepository
 from copia.data.sessions_repository import SessionsRepository
 from copia.data.working_memory_repository import WorkingMemoryRepository
@@ -43,7 +44,13 @@ class FakeTaskRouter:
                 model=config.model,
             )
         if "passed" in properties:
-            data = {"passed": True, "issues": [], "checked_step_ids": ["step-1", "step-2"]}
+            data = {
+                "passed": True,
+                "issues": [],
+                "checked_step_ids": ["step-1", "step-2"],
+                "checked_invariant_ids": [],
+                "invariant_issues": [],
+            }
             return LLMResponse(
                 content=json.dumps(data),
                 structured_data=data,
@@ -85,13 +92,16 @@ def test_task_structured_output_schemas_are_strict() -> None:
     assert planner_step_schema["additionalProperties"] is False
     assert set(planner_step_schema["required"]) == set(planner_step_schema["properties"])
 
-    validation_schema = service.TaskValidationResult.model_json_schema()
+    validation_schema = service._task_validation_schema()
     assert validation_schema["additionalProperties"] is False
     assert set(validation_schema["required"]) == set(validation_schema["properties"])
 
 
 def test_task_pipeline_persists_calls_and_report(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(
+        service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
+    )
     monkeypatch.setattr(service, "router", FakeTaskRouter())
 
     async def run() -> None:
@@ -135,6 +145,9 @@ def test_task_pipeline_persists_calls_and_report(monkeypatch, tmp_path: Path) ->
 
 def test_task_history_keeps_multiple_tasks_in_one_session(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(
+        service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
+    )
     monkeypatch.setattr(service, "router", FakeTaskRouter())
 
     async def run() -> None:
@@ -179,6 +192,9 @@ def test_task_history_keeps_multiple_tasks_in_one_session(monkeypatch, tmp_path:
 
 def test_task_mode_off_preserves_regular_message_route(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(
+        service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
+    )
     monkeypatch.setattr(service, "working_memory", WorkingMemoryRepository(tmp_path / "sessions"))
     monkeypatch.setattr(
         service,
@@ -223,6 +239,9 @@ def test_task_mode_off_preserves_regular_message_route(monkeypatch, tmp_path: Pa
 def test_active_task_rejects_regular_message(monkeypatch, tmp_path: Path) -> None:
     repository = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", repository)
+    monkeypatch.setattr(
+        service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
+    )
 
     async def run() -> None:
         async with httpx.AsyncClient(

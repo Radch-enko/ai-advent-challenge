@@ -9,7 +9,7 @@ from typing import Protocol
 
 from ..services.agent_log_context import agent_log_operation
 from ..services.context_strategy import FactsUpdateFailed as FactsUpdateFailed
-from ..services.context_strategy import context_strategy_for
+from ..services.context_strategy import context_strategy_for, render_invariants_context
 from ..services.credential_sanitizer import sanitize_error, sanitize_value
 from ..services.memory_classifier import MemoryClassifier
 from ..services.memory_policy import HybridMemoryPolicy, WorkingMemoryStore
@@ -22,6 +22,7 @@ from .config import (
     LLMResponse,
     ProviderTrace,
 )
+from .invariant import Invariant
 from .memory import LongTermMemoryItem, MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem
 from .session import ConversationContext, FactsUpdateEvent, SummarizationEvent
 from .user_profile import UserProfile
@@ -60,6 +61,7 @@ class Agent:
         memory_classifier: MemoryClassifier | None = None,
         pending_memory: list[PendingMemorySuggestion] | None = None,
         user_profile: UserProfile | None = None,
+        invariants: list[Invariant] | None = None,
     ) -> None:
         self.config = config
         self._router = router
@@ -77,6 +79,7 @@ class Agent:
         self._memory_events: list[MemoryEvent] = []
         self._pending_memory = list(pending_memory or [])
         self._user_profile = user_profile
+        self._invariants = list(invariants or [])
         self._strategy = context_strategy_for(
             config,
             router,
@@ -85,6 +88,7 @@ class Agent:
             self._context_window,
             self._working_memory,
             self._user_profile,
+            self._invariants,
         )
 
     @property
@@ -118,6 +122,14 @@ class Agent:
     @property
     def pending_memory(self):
         return [item.model_copy(deep=True) for item in self._pending_memory]
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
+        self._strategy.set_invariants(self._invariants)
+        if self._memory_classifier is not None:
+            update_invariants = getattr(self._memory_classifier, "set_invariants", None)
+            if callable(update_invariants):
+                update_invariants(self._invariants)
 
     @property
     def has_long_term_memory(self) -> bool:
@@ -177,9 +189,7 @@ class Agent:
                 provider=self.config.provider,
                 model=self.config.model,
             ):
-                response = self._router.complete(
-                    self._strategy.messages_for_request(self._history, self._context), self.config
-                )
+                response = self._router.complete(self._messages_for_request(), self.config)
         except Exception:
             self._history.pop()
             self._context = context_before_turn
@@ -269,7 +279,17 @@ class Agent:
             ):
                 response = self._router.complete(
                     [
-                        ChatMessage(role="system", content=config.system_prompt or ""),
+                        ChatMessage(
+                            role="system",
+                            content="\n\n".join(
+                                part
+                                for part in (
+                                    config.system_prompt,
+                                    render_invariants_context(self._invariants),
+                                )
+                                if part
+                            ),
+                        ),
                         ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
                     ],
                     config,
@@ -318,7 +338,20 @@ class Agent:
         return None
 
     def _messages_for_request(self) -> list[ChatMessage]:
-        return self._strategy.messages_for_request(self._history, self._context)
+        messages = self._strategy.messages_for_request(self._history, self._context)
+        invariant_context = render_invariants_context(self._invariants)
+        if not invariant_context or any(
+            message.role == "system" and invariant_context in message.content
+            for message in messages
+        ):
+            return messages
+        if messages and messages[0].role == "system":
+            messages[0] = messages[0].model_copy(
+                update={"content": f"{messages[0].content}\n\n{invariant_context}"}
+            )
+        else:
+            messages.insert(0, ChatMessage(role="system", content=invariant_context))
+        return messages
 
     def _append_response(self, response: LLMResponse, agent_log_id: str | None = None) -> None:
         self._history.append(
@@ -345,6 +378,7 @@ class Agent:
             self._context_window,
             self._working_memory,
             self._user_profile,
+            self._invariants,
         )
 
     def _classify_memory(self, content: str) -> None:

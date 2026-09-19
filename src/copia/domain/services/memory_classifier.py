@@ -11,8 +11,10 @@ from ..models.config import (
     ProviderTrace,
     StructuredOutputConfig,
 )
+from ..models.invariant import Invariant
 from ..models.memory import MemoryCandidate, WorkingMemoryItem
 from .agent_log_context import agent_log_operation
+from .context_strategy import render_invariants_context
 from .credential_sanitizer import sanitize_error
 from .router import LLMRouter
 
@@ -77,13 +79,22 @@ class MemoryClassifier(Protocol):
 class LLMMemoryClassifier:
     """Provider-agnostic structured classifier routed through the configured LLM."""
 
-    def __init__(self, router: LLMRouter, config: AgentConfig) -> None:
+    def __init__(
+        self,
+        router: LLMRouter,
+        config: AgentConfig,
+        invariants: list[Invariant] | None = None,
+    ) -> None:
         self._router = router
         self._config = config
+        self._invariants = list(invariants or [])
         self.last_error: str | None = None
         self.last_trace: ProviderTrace | None = None
         self.last_duration_seconds: float | None = None
         self.last_request_body: dict = {}
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
 
     def classify(self, message, transcript, working_memory, previous_assistant=None):
         self.last_error = None
@@ -104,7 +115,14 @@ class LLMMemoryClassifier:
             messages = [
                 ChatMessage(
                     role="system",
-                    content=MEMORY_CLASSIFIER_SYSTEM_PROMPT,
+                    content="\n\n".join(
+                        part
+                        for part in (
+                            MEMORY_CLASSIFIER_SYSTEM_PROMPT,
+                            render_invariants_context(self._invariants),
+                        )
+                        if part
+                    ),
                 ),
                 ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
             ]

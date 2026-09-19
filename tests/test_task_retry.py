@@ -9,6 +9,7 @@ import pytest
 from copia.api import service
 from copia.data.agent_log_repository import JsonAgentLogRepository
 from copia.data.agent_log_store import AgentLogStore
+from copia.data.invariants_repository import InvariantsRepository
 from copia.data.sessions_repository import SessionsRepository
 from copia.domain.models.config import LLMResponse
 from copia.domain.models.task import TaskStage, TaskState, TaskStatus
@@ -52,6 +53,8 @@ class RetryTaskRouter:
                 "passed": self.validation_calls > 1,
                 "issues": [] if self.validation_calls > 1 else ["First is not complete"],
                 "checked_step_ids": ["step-1"],
+                "checked_invariant_ids": [],
+                "invariant_issues": [],
             }
             return LLMResponse(
                 content=json.dumps(data),
@@ -73,6 +76,9 @@ class RetryTaskRouter:
 
 def test_retry_validation_restarts_execution_with_feedback(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(
+        service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
+    )
     monkeypatch.setattr(
         service,
         "agent_log_store",

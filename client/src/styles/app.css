@@ -1664,6 +1664,162 @@ button {
   border-color: #7b6ef6;
   color: #f4f4f6;
 }
+.invariants-screen {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  padding: 72px 24px 36px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.invariants-screen > .invariant-panel {
+  width: min(760px, 100%);
+  max-height: none;
+  margin: 0 auto;
+  padding: 0;
+}
+.invariant-panel {
+  display: grid;
+  gap: 12px;
+  max-height: min(780px, calc(100vh - 32px));
+  padding: 20px;
+  overflow-y: auto;
+}
+.invariant-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 34px;
+  border-bottom: 1px solid #2a2a36;
+}
+.invariant-panel-heading > div {
+  display: grid;
+  gap: 3px;
+}
+.invariant-panel-heading small,
+.invariant-explanation,
+.invariant-empty span {
+  color: #888896;
+  font-size: 12px;
+}
+.invariant-count {
+  padding: 4px 7px;
+  border: 1px solid #47416a;
+  border-radius: 999px;
+  color: #c8c2ff;
+  background: #242135;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.invariant-explanation {
+  margin: 0;
+  line-height: 1.45;
+}
+.invariant-list {
+  display: grid;
+  gap: 8px;
+}
+.invariant-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid #302f3a;
+  border-radius: 8px;
+  background: #19191f;
+}
+.invariant-item p {
+  margin: 7px 0 0;
+  color: #dedee5;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.invariant-name {
+  display: inline-flex;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #c8c2ff;
+  background: #28243d;
+  font-size: 10px;
+  font-weight: 600;
+}
+.invariant-actions,
+.invariant-edit-form > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.invariant-actions button,
+.invariant-edit-form button,
+.invariant-form button {
+  padding: 6px 9px;
+  border: 1px solid #343440;
+  border-radius: 5px;
+  color: #d9d9e0;
+  background: #24242d;
+  font-size: 11px;
+}
+.invariant-actions button:hover,
+.invariant-edit-form button:hover,
+.invariant-form button:hover {
+  border-color: #6d64ca;
+  color: #fff;
+}
+.invariant-empty {
+  display: grid;
+  gap: 5px;
+  padding: 18px 12px;
+  border: 1px dashed #474454;
+  border-radius: 8px;
+  text-align: center;
+}
+.invariant-form,
+.invariant-edit-form {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #302f3a;
+  border-radius: 8px;
+  background: #17171d;
+}
+.invariant-form label {
+  display: grid;
+  gap: 5px;
+  color: #aaaab5;
+  font-size: 11px;
+}
+.invariant-form input,
+.invariant-form textarea,
+.invariant-edit-form input,
+.invariant-edit-form textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #343440;
+  border-radius: 6px;
+  color: #ededf2;
+  background: #24242d;
+  font-size: 12px;
+}
+.invariant-form textarea,
+.invariant-edit-form textarea {
+  resize: vertical;
+}
+.invariant-submit {
+  justify-self: start;
+  border-color: transparent !important;
+  color: #fff !important;
+  background: #7b6ef6 !important;
+}
+.invariant-edit-form b {
+  color: #d8d8df;
+  font-size: 12px;
+}
+.invariant-error {
+  margin: 0;
+  color: #ef8795;
+  font-size: 12px;
+}
 
 .settings-popover {
   position: absolute;

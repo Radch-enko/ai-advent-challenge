@@ -16,6 +16,7 @@ from ..models.config import (
     ProviderTrace,
     StructuredOutputConfig,
 )
+from ..models.invariant import Invariant
 from ..models.memory import LongTermMemoryItem, WorkingMemoryItem
 from ..models.session import ConversationContext, FactsUpdateEvent
 from ..models.user_profile import (
@@ -51,6 +52,8 @@ class ContextStrategy(Protocol):
         context: ConversationContext,
     ) -> list[ChatMessage]: ...
 
+    def set_invariants(self, invariants: list[Invariant]) -> None: ...
+
     def commit_turn(self) -> None: ...
 
     def rollback_turn(self) -> None: ...
@@ -66,12 +69,14 @@ class FullTranscriptStrategy:
         context_window: int | None,
         working_memory: list[WorkingMemoryItem] | None = None,
         user_profile: UserProfile | None = None,
+        invariants: list[Invariant] | None = None,
     ) -> None:
         self._config = config
         self._long_term_memory = long_term_memory
         self._context_window = context_window
         self._working_memory = working_memory or []
         self._user_profile = user_profile
+        self._invariants = invariants or []
 
     def update_after_user_message(
         self,
@@ -93,6 +98,7 @@ class FullTranscriptStrategy:
             self._context_window,
             self._working_memory,
             user_profile=self._user_profile,
+            invariants=self._invariants,
         )
 
     def commit_turn(self) -> None:
@@ -100,6 +106,9 @@ class FullTranscriptStrategy:
 
     def rollback_turn(self) -> None:
         pass
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
 
     def persistent_facts(self) -> dict[str, str]:
         return {}
@@ -113,6 +122,7 @@ class SlidingWindowStrategy:
         context_window: int | None,
         working_memory: list[WorkingMemoryItem] | None = None,
         user_profile: UserProfile | None = None,
+        invariants: list[Invariant] | None = None,
     ) -> None:
         self._config = config
         self._message_limit = config.context_management.recent_message_limit
@@ -120,6 +130,7 @@ class SlidingWindowStrategy:
         self._context_window = context_window
         self._working_memory = working_memory or []
         self._user_profile = user_profile
+        self._invariants = invariants or []
 
     def update_after_user_message(
         self,
@@ -141,6 +152,7 @@ class SlidingWindowStrategy:
             self._context_window,
             self._working_memory,
             user_profile=self._user_profile,
+            invariants=self._invariants,
         )
 
     def commit_turn(self) -> None:
@@ -148,6 +160,9 @@ class SlidingWindowStrategy:
 
     def rollback_turn(self) -> None:
         pass
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
 
     def persistent_facts(self) -> dict[str, str]:
         return {}
@@ -167,12 +182,14 @@ class SummaryStrategy:
         context_window: int | None,
         working_memory: list[WorkingMemoryItem] | None = None,
         user_profile: UserProfile | None = None,
+        invariants: list[Invariant] | None = None,
     ) -> None:
         self._config = config
         self._long_term_memory = long_term_memory
         self._context_window = context_window
         self._working_memory = working_memory or []
         self._user_profile = user_profile
+        self._invariants = invariants or []
 
     def update_after_user_message(
         self,
@@ -202,6 +219,7 @@ class SummaryStrategy:
             self._context_window,
             self._working_memory,
             self._user_profile,
+            self._invariants,
         )
         return messages
 
@@ -210,6 +228,9 @@ class SummaryStrategy:
 
     def rollback_turn(self) -> None:
         pass
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
 
     def persistent_facts(self) -> dict[str, str]:
         return {}
@@ -225,6 +246,7 @@ class StickyFactsStrategy:
         context_window: int | None,
         working_memory: list[WorkingMemoryItem] | None = None,
         user_profile: UserProfile | None = None,
+        invariants: list[Invariant] | None = None,
     ) -> None:
         self._config = config
         self._router = router
@@ -234,6 +256,7 @@ class StickyFactsStrategy:
         self._context_window = context_window
         self._working_memory = working_memory or []
         self._user_profile = user_profile
+        self._invariants = invariants or []
 
     def update_after_user_message(
         self,
@@ -269,7 +292,17 @@ class StickyFactsStrategy:
             ):
                 response = self._router.complete(
                     [
-                        ChatMessage(role="system", content=updater_config.system_prompt or ""),
+                        ChatMessage(
+                            role="system",
+                            content="\n\n".join(
+                                part
+                                for part in (
+                                    updater_config.system_prompt,
+                                    render_invariants_context(self._invariants),
+                                )
+                                if part
+                            ),
+                        ),
                         ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
                     ],
                     updater_config,
@@ -318,6 +351,7 @@ class StickyFactsStrategy:
             self._context_window,
             self._working_memory,
             self._user_profile,
+            self._invariants,
         )
         return messages
 
@@ -328,6 +362,9 @@ class StickyFactsStrategy:
 
     def rollback_turn(self) -> None:
         self._candidate_facts = None
+
+    def set_invariants(self, invariants: list[Invariant]) -> None:
+        self._invariants = list(invariants)
 
     def persistent_facts(self) -> dict[str, str]:
         return dict(self._facts)
@@ -393,9 +430,11 @@ def context_strategy_for(
     context_window: int | None = None,
     working_memory: list[WorkingMemoryItem] | None = None,
     user_profile: UserProfile | None = None,
+    invariants: list[Invariant] | None = None,
 ) -> ContextStrategy:
     long_term_memory = long_term_memory or []
     working_memory = working_memory or []
+    invariants = invariants or []
     if not config.context_management.enabled:
         return FullTranscriptStrategy(
             config,
@@ -403,6 +442,7 @@ def context_strategy_for(
             context_window,
             working_memory,
             user_profile=user_profile,
+            invariants=invariants,
         )
     if config.context_management.strategy == ContextStrategyName.SLIDING_WINDOW:
         return SlidingWindowStrategy(
@@ -411,6 +451,7 @@ def context_strategy_for(
             context_window,
             working_memory,
             user_profile=user_profile,
+            invariants=invariants,
         )
     if config.context_management.strategy == ContextStrategyName.STICKY_FACTS:
         if router is None:
@@ -423,6 +464,7 @@ def context_strategy_for(
             context_window,
             working_memory,
             user_profile=user_profile,
+            invariants=invariants,
         )
     if config.context_management.strategy == ContextStrategyName.BRANCHING:
         return BranchingStrategy(
@@ -431,6 +473,7 @@ def context_strategy_for(
             context_window,
             working_memory,
             user_profile=user_profile,
+            invariants=invariants,
         )
     return SummaryStrategy(
         config,
@@ -438,6 +481,7 @@ def context_strategy_for(
         context_window,
         working_memory,
         user_profile=user_profile,
+        invariants=invariants,
     )
 
 
@@ -458,6 +502,24 @@ def _escape_untrusted_prompt_text(value: str) -> str:
     return value.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
+def render_invariants_context(items: list[Invariant]) -> str | None:
+    if not items:
+        return None
+    values = json.dumps(
+        [{"name": item.name, "text": item.text} for item in items],
+        ensure_ascii=False,
+        indent=2,
+    )
+    values = _escape_untrusted_prompt_text(values)
+    return (
+        "The following invariants are binding constraints for this Copia session. "
+        "Apply them to every request and task. If the current request conflicts with an "
+        "invariant, do not propose a violating solution; name the violated invariant, "
+        "explain the conflict briefly, and offer a compliant alternative when possible.\n"
+        f"<invariants>\n{values}\n</invariants>"
+    )
+
+
 def _with_system_context(
     config: AgentConfig,
     long_term_memory: list[LongTermMemoryItem],
@@ -466,6 +528,7 @@ def _with_system_context(
     context_window: int | None,
     working_items: list[WorkingMemoryItem] | None = None,
     user_profile: UserProfile | None = None,
+    invariants: list[Invariant] | None = None,
 ) -> list[ChatMessage]:
     recent_keys = _keys_represented_by_transcript(history)
     effective_working = _latest_items(
@@ -489,6 +552,7 @@ def _with_system_context(
                 effective_working,
                 history,
                 user_profile,
+                invariants,
             ),
             config,
             context_window,
@@ -505,6 +569,7 @@ def _with_system_context(
                 effective_working,
                 history,
                 user_profile,
+                invariants,
             ),
             config,
             context_window,
@@ -516,7 +581,13 @@ def _with_system_context(
         _render_long_term_memory_block(selected_long_term) if selected_long_term else None
     )
     rendered_working = _combined_working_context(working_context, effective_working)
-    parts = _system_parts(config.system_prompt, user_profile, long_term_block, rendered_working)
+    parts = _system_parts(
+        config.system_prompt,
+        user_profile,
+        render_invariants_context(invariants or []),
+        long_term_block,
+        rendered_working,
+    )
     messages = [ChatMessage(role="system", content="\n\n".join(parts))] if parts else []
     messages.extend(history)
     return messages
@@ -529,10 +600,17 @@ def _context_messages(
     working_items: list[WorkingMemoryItem],
     history: list[ChatMessage],
     user_profile: UserProfile | None = None,
+    invariants: list[Invariant] | None = None,
 ) -> list[ChatMessage]:
     long_term_block = _render_long_term_memory_block(long_term_items) if long_term_items else None
     rendered_working = _combined_working_context(working_context, working_items)
-    parts = _system_parts(config.system_prompt, user_profile, long_term_block, rendered_working)
+    parts = _system_parts(
+        config.system_prompt,
+        user_profile,
+        render_invariants_context(invariants or []),
+        long_term_block,
+        rendered_working,
+    )
     return [ChatMessage(role="system", content="\n\n".join(parts)), *history]
 
 
@@ -601,7 +679,13 @@ def _bounded_long_term_memory_block(
                 ChatMessage(
                     role="system",
                     content="\n\n".join(
-                        _system_parts(config.system_prompt, None, block, working_context)
+                        _system_parts(
+                            config.system_prompt,
+                            None,
+                            None,
+                            block,
+                            working_context,
+                        )
                     ),
                 ),
                 *history,
@@ -617,10 +701,13 @@ def _bounded_long_term_memory_block(
 def _system_parts(
     system_prompt: str | None,
     user_profile: UserProfile | None,
+    invariant_block: str | None,
     long_term_block: str | None,
     working_context: str | None,
 ) -> list[str]:
     parts = [part for part in (system_prompt,) if part]
+    if invariant_block:
+        parts.append(invariant_block)
     if user_profile is not None:
         parts.append(_render_user_profile_block(user_profile))
     if long_term_block:

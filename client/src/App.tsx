@@ -28,6 +28,7 @@ import {
   getProfileMemory,
   getSession,
   getSessionFacts,
+  getInvariants,
   getWorkingMemory,
   getPendingMemory,
   getSessions,
@@ -42,6 +43,9 @@ import {
   updateSessionTaskMode,
   updateProfileMemory,
   updateSessionUserProfile,
+  createInvariant,
+  deleteInvariant,
+  updateInvariant,
   pauseTask,
   retryTask,
   resumeTask,
@@ -50,6 +54,7 @@ import {
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
 import { UserProfile } from './domain/models/userProfile'
+import { Invariant, InvariantInput } from './domain/models/invariant'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -65,6 +70,7 @@ import {
 } from './domain/models/chat'
 import { TaskPlanStep, TaskState } from './domain/models/task'
 import { AgentLogBlock } from './ui/components/AgentLogBlock'
+import { InvariantPanel } from './ui/components/InvariantPanel'
 import { MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
 import { RequestLogs } from './ui/components/RequestLogs'
 import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
@@ -154,7 +160,7 @@ function defaultContextManagement(provider: Provider, model: string): ContextMan
 }
 
 export function App() {
-  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles'>('chat')
+  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles' | 'invariants'>('chat')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState(providerModels.openai)
   const [systemPrompt, setSystemPrompt] = useState('You are Copia, a helpful personal assistant.')
@@ -177,6 +183,7 @@ export function App() {
   const [memoryEvents, setMemoryEvents] = useState<MemoryEvent[]>([])
   const [pendingMemory, setPendingMemory] = useState<PendingMemorySuggestion[]>([])
   const [workingMemory, setWorkingMemory] = useState<WorkingMemoryItem[]>([])
+  const [invariants, setInvariants] = useState<Invariant[]>([])
   const [memoryEventsByAgentLogId, setMemoryEventsByAgentLogId] = useState<
     Record<string, MemoryEvent[]>
   >({})
@@ -310,6 +317,18 @@ export function App() {
       return false
     }
   }, [])
+  const refreshInvariants = useCallback(async (): Promise<boolean> => {
+    try {
+      setInvariants(await getInvariants())
+      return true
+    } catch {
+      setInvariants([])
+      return false
+    }
+  }, [])
+  useEffect(() => {
+    void refreshInvariants()
+  }, [refreshInvariants])
   useEffect(() => {
     queueMicrotask(() => void refreshUserProfiles())
   }, [refreshUserProfiles])
@@ -397,6 +416,7 @@ export function App() {
             }
           },
         )
+        void refreshInvariants()
         setProfileSettingsError(null)
         setForkError(null)
         setMemoryPanelOpen(false)
@@ -405,7 +425,7 @@ export function App() {
         localStorage.removeItem('copia.activeSessionId')
       }
     })()
-  }, [refreshSessions])
+  }, [refreshInvariants, refreshSessions])
 
   useEffect(() => {
     const sessionId = activeSession?.id
@@ -736,6 +756,7 @@ export function App() {
   }
 
   function openSession(session: ChatSession) {
+    setMode('chat')
     setActiveSession(session)
     setTaskModeDraft(session.task_mode_enabled)
     setRetryingTaskId(null)
@@ -782,6 +803,7 @@ export function App() {
       .catch(() => {
         if (activeSessionIdRef.current === session.id) setPendingMemory([])
       })
+    void refreshInvariants()
     setLongTermMemory([])
     void getSessionFacts(session.id)
       .then((loadedFacts) => {
@@ -1200,6 +1222,26 @@ export function App() {
     }))
   }
 
+  async function openInvariantsScreen() {
+    await refreshInvariants()
+    setMode('invariants')
+  }
+
+  async function addInvariant(value: InvariantInput) {
+    const created = await createInvariant(value)
+    setInvariants((current) => [...current, created])
+  }
+
+  async function editInvariant(itemId: string, value: InvariantInput) {
+    const updated = await updateInvariant(itemId, value)
+    setInvariants((current) => current.map((item) => (item.id === itemId ? updated : item)))
+  }
+
+  async function removeInvariant(itemId: string) {
+    await deleteInvariant(itemId)
+    setInvariants((current) => current.filter((item) => item.id !== itemId))
+  }
+
   const memoryPanelContent = activeSession ? (
     <MemoryPanel
       open={true}
@@ -1233,6 +1275,15 @@ export function App() {
       }
     />
   ) : null
+
+  const invariantPanelContent = (
+    <InvariantPanel
+      items={invariants}
+      onAdd={addInvariant}
+      onEdit={editInvariant}
+      onDelete={removeInvariant}
+    />
+  )
 
   return (
     <main
@@ -1272,6 +1323,12 @@ export function App() {
             >
               Профили общения
             </button>
+            <button
+              className={`agents-nav ${mode === 'invariants' ? 'active' : ''}`}
+              onClick={() => void openInvariantsScreen()}
+            >
+              Инварианты
+            </button>
             <div className="saved-chats">
               {savedSessions.map((session) => (
                 <div className="saved-chat" key={session.id}>
@@ -1307,7 +1364,9 @@ export function App() {
       )}
 
       <section className="chat-stage">
-        {mode === 'profiles' ? (
+        {mode === 'invariants' ? (
+          <section className="invariants-screen">{invariantPanelContent}</section>
+        ) : mode === 'profiles' ? (
           <UserProfilesScreen
             profiles={userProfiles}
             loading={userProfilesLoading}

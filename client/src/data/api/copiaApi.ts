@@ -9,6 +9,7 @@ import {
 import { Provider, ProviderModel } from '../../domain/models/provider'
 import { TaskState } from '../../domain/models/task'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
+import { Invariant, InvariantInput } from '../../domain/models/invariant'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -312,6 +313,28 @@ export function getSession(sessionId: string): Promise<ChatSession> {
 }
 export function getSessionFacts(sessionId: string): Promise<Record<string, string>> {
   return request(`/sessions/${sessionId}/facts`)
+}
+export function getInvariants(): Promise<Invariant[]> {
+  return request('/invariants')
+}
+export function createInvariant(value: InvariantInput): Promise<Invariant> {
+  return request('/invariants', {
+    method: 'POST',
+    body: JSON.stringify(value),
+  })
+}
+export function updateInvariant(itemId: string, value: InvariantInput): Promise<Invariant> {
+  return request(`/invariants/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(value),
+  })
+}
+export function deleteInvariant(itemId: string): Promise<void> {
+  return fetch(`/api/invariants/${encodeURIComponent(itemId)}`, { method: 'DELETE' }).then(
+    (response) => {
+      if (!response.ok) throw new Error(`Could not delete invariant: ${response.status}`)
+    },
+  )
 }
 export function getAgentLog(sessionId: string, agentLogId: string): Promise<AgentLogDetail> {
   return request(
