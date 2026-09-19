@@ -1,45 +1,64 @@
+import { useState } from 'react'
 import { AgentLogBody, AgentLogExchange } from '../../domain/models/chat'
 
 type Props = {
   log: AgentLogExchange
+  logs?: AgentLogExchange[]
   tab: 'request' | 'response'
   onTab: (tab: 'request' | 'response') => void
   onClose: () => void
 }
 
-export function RequestLogs({ log, tab, onTab, onClose }: Props) {
+export function RequestLogs({ log, logs = [], tab, onTab, onClose }: Props) {
+  const [selectedId, setSelectedId] = useState(log.id)
+  const selectedLog = logs.find((item) => item.id === selectedId) ?? log
   const isRequest = tab === 'request'
-  const body = isRequest ? log.request_body : log.response_body
-  const headers = isRequest ? log.request_headers : log.response_headers
+  const body = isRequest ? selectedLog.request_body : selectedLog.response_body
+  const headers = isRequest ? selectedLog.request_headers : selectedLog.response_headers
 
   return (
     <aside className="logs-panel" aria-label="HTTP logs">
       <header>
         <div>
           <b>HTTP Logs</b>
-          <span>{log.operation}</span>
+          <span>{logs.length > 1 ? `${logs.length} HTTP calls` : selectedLog.operation}</span>
         </div>
         <button type="button" aria-label="Закрыть логи" onClick={onClose}>
           ×
         </button>
       </header>
+      {logs.length > 1 && (
+        <div className="logs-call-list" aria-label="HTTP calls">
+          {logs.map((item) => (
+            <button
+              type="button"
+              className={item.id === selectedLog.id ? 'active' : ''}
+              key={item.id}
+              onClick={() => setSelectedId(item.id)}
+            >
+              <span>{item.operation}</span>
+              <b>{item.status_code ?? '…'}</b>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="log-meta">
         <span>
-          Provider <b>{log.provider ?? '—'}</b>
+          Provider <b>{selectedLog.provider ?? '—'}</b>
         </span>
         <span>
-          Model <b>{log.model ?? '—'}</b>
+          Model <b>{selectedLog.model ?? '—'}</b>
         </span>
-        <span className={statusTone(log.status_code)}>
-          Status <b>{log.status_code ?? 'error'}</b>
+        <span className={statusTone(selectedLog.status_code)}>
+          Status <b>{selectedLog.status_code ?? 'error'}</b>
         </span>
         <span>
-          Duration <b>{formatExchangeDuration(log.duration_seconds)}</b>
+          Duration <b>{formatExchangeDuration(selectedLog.duration_seconds)}</b>
         </span>
       </div>
       <div className="log-endpoint">
         <code>
-          {log.method} {log.url}
+          {selectedLog.method} {selectedLog.url}
         </code>
       </div>
       <div className="log-tabs" role="tablist" aria-label="HTTP log payload">
@@ -63,7 +82,7 @@ export function RequestLogs({ log, tab, onTab, onClose }: Props) {
         </button>
       </div>
       <div className="log-payload-meta">
-        <b>{isRequest ? 'Headers' : `Headers · ${log.status_code ?? 'No response'}`}</b>
+        <b>{isRequest ? 'Headers' : `Headers · ${selectedLog.status_code ?? 'No response'}`}</b>
         <pre>{JSON.stringify(headers, null, 2)}</pre>
       </div>
       <pre className="log-payload-body">{formatBody(body)}</pre>

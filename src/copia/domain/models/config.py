@@ -166,6 +166,8 @@ class ChatMessage(BaseModel):
     usage: dict[str, int] | None = None
     context_window: int | None = Field(default=None, gt=0)
     agent_log_id: str | None = None
+    task_id: str | None = None
+    task_step_id: str | None = None
 
 
 class ProviderTrace(BaseModel):

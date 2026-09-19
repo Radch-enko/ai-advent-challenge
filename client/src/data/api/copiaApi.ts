@@ -7,6 +7,7 @@ import {
   TokenUsage,
 } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
+import { TaskState } from '../../domain/models/task'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import {
   LongTermMemoryItem,
@@ -54,6 +55,8 @@ export type StoredMessage = {
   usage?: TokenUsage | null
   context_window?: number | null
   agent_log_id?: string | null
+  task_id?: string | null
+  task_step_id?: string | null
 }
 export type ChatSession = {
   id: string
@@ -61,6 +64,9 @@ export type ChatSession = {
   profile_name: string | null
   user_profile_id: string | null
   long_term_memory_enabled: boolean
+  task_mode_enabled: boolean
+  task: TaskState | null
+  tasks: TaskState[]
   config: AgentConfig
   messages: StoredMessage[]
   context: {
@@ -361,11 +367,49 @@ export function rejectMemory(
 export function createSession(
   config: AgentConfig,
   userProfileId: string | null = null,
+  taskModeEnabled = false,
 ): Promise<ChatSession> {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ config, user_profile_id: userProfileId }),
+    body: JSON.stringify({
+      config,
+      user_profile_id: userProfileId,
+      task_mode_enabled: taskModeEnabled,
+    }),
   })
+}
+export function updateSessionTaskMode(sessionId: string, enabled: boolean): Promise<ChatSession> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/task-mode`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
+export function startTask(sessionId: string, instruction: string): Promise<TaskState> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/tasks`, {
+    method: 'POST',
+    body: JSON.stringify({ instruction }),
+  })
+}
+export function getTask(sessionId: string, taskId: string): Promise<TaskState> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}`)
+}
+export function pauseTask(sessionId: string, taskId: string): Promise<TaskState> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/pause`,
+    { method: 'POST' },
+  )
+}
+export function resumeTask(sessionId: string, taskId: string): Promise<TaskState> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/resume`,
+    { method: 'POST' },
+  )
+}
+export function retryTask(sessionId: string, taskId: string): Promise<TaskState> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/retry`,
+    { method: 'POST' },
+  )
 }
 export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
   return request('/sessions', {

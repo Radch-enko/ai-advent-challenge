@@ -31,6 +31,7 @@ import {
   getWorkingMemory,
   getPendingMemory,
   getSessions,
+  getAgentLog,
   rejectMemory,
   undoWorkingMemory,
   updateWorkingMemory,
@@ -38,8 +39,13 @@ import {
   sendSessionMessageWithMeta,
   updateSessionContextManagement,
   updateSessionLongTermMemory,
+  updateSessionTaskMode,
   updateProfileMemory,
   updateSessionUserProfile,
+  pauseTask,
+  retryTask,
+  resumeTask,
+  startTask,
 } from './data/api/copiaApi'
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
@@ -57,10 +63,12 @@ import {
   SummarizationEvent,
   TokenUsage,
 } from './domain/models/chat'
+import { TaskPlanStep, TaskState } from './domain/models/task'
 import { AgentLogBlock } from './ui/components/AgentLogBlock'
-import { LongTermMemoryEditor, MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
+import { MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
 import { RequestLogs } from './ui/components/RequestLogs'
 import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
+import { TaskProgressPanel } from './ui/components/TaskProgressPanel'
 
 const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
@@ -68,6 +76,16 @@ const providerModels: Record<Provider, string> = {
 }
 
 const starterMessages: ChatMessage[] = []
+
+function tasksForSession(session: ChatSession | null): TaskState[] {
+  if (!session) return []
+  return session.tasks.length ? session.tasks : session.task ? [session.task] : []
+}
+
+function isActiveTask(task: TaskState): boolean {
+  return ['running', 'pause_requested', 'paused'].includes(task.status)
+}
+
 const defaultSummaryPrompt = `Update the compact summary of the conversation using the existing summary
 and the new messages provided in the user payload.
 
@@ -163,6 +181,7 @@ export function App() {
     Record<string, MemoryEvent[]>
   >({})
   const [activeLog, setActiveLog] = useState<AgentLogExchange | null>(null)
+  const [activeLogGroup, setActiveLogGroup] = useState<AgentLogExchange[] | null>(null)
   const [logTab, setLogTab] = useState<'request' | 'response'>('request')
   const [forkingMessageIndex, setForkingMessageIndex] = useState<number | null>(null)
   const [forkError, setForkError] = useState<string | null>(null)
@@ -172,6 +191,12 @@ export function App() {
   const [pendingSessionIds, setPendingSessionIds] = useState<string[]>([])
   const [summarizingSessionIds, setSummarizingSessionIds] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [taskModeDraft, setTaskModeDraft] = useState(false)
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null)
+  const [taskRetryError, setTaskRetryError] = useState<{
+    taskId: string
+    message: string
+  } | null>(null)
   const [profileSettingsSaving, setProfileSettingsSaving] = useState(false)
   const [profileSettingsError, setProfileSettingsError] = useState<string | null>(null)
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
@@ -205,6 +230,25 @@ export function App() {
   const factsSupportsSampling = supportsSamplingParameters(factsProvider, factsModel)
   const isProfileSession = activeSession?.profile_name != null
   const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
+  const taskModeEnabled = activeSession?.task_mode_enabled ?? taskModeDraft
+  const sessionTasks = useMemo(() => tasksForSession(activeSession), [activeSession])
+  const activeTask = sessionTasks.find(isActiveTask)
+  const taskIsActive = activeTask != null
+  const tasksById = useMemo(
+    () => new Map(sessionTasks.map((task) => [task.id, task])),
+    [sessionTasks],
+  )
+  const lastTaskSubtaskMessageIndexes = useMemo(() => {
+    const indexes = new Map<string, number>()
+    messages.forEach((entry, index) => {
+      if (entry.taskId && entry.taskStepId) indexes.set(entry.taskId, index)
+    })
+    return indexes
+  }, [messages])
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Record<string, boolean>>({})
+  const [expandedTaskMessageKeys, setExpandedTaskMessageKeys] = useState<Record<string, boolean>>(
+    {},
+  )
   const isSummarizing = activeSession != null && summarizingSessionIds.includes(activeSession.id)
   const effectiveContextManagement =
     isProfileSession && activeSession ? activeSession.config.context_management : contextManagement
@@ -294,6 +338,7 @@ export function App() {
         const session = await getSession(sessionId)
         if (activeSessionIdRef.current !== sessionId) return
         setActiveSession(session)
+        setTaskModeDraft(session.task_mode_enabled)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
         setSelectedUserProfileId(session.user_profile_id)
@@ -324,6 +369,8 @@ export function App() {
             usage: item.usage,
             contextWindow: item.context_window,
             agentLogId: item.agent_log_id ?? undefined,
+            taskId: item.task_id ?? undefined,
+            taskStepId: item.task_step_id ?? undefined,
             transcriptIndex: index,
           })),
         )
@@ -360,6 +407,48 @@ export function App() {
     })()
   }, [refreshSessions])
 
+  useEffect(() => {
+    const sessionId = activeSession?.id
+    const taskId = activeTask?.id
+    const taskStatus = activeTask?.status
+    if (
+      !sessionId ||
+      !taskId ||
+      !['running', 'pause_requested', 'paused'].includes(taskStatus ?? '')
+    )
+      return
+    let cancelled = false
+    const syncTask = async () => {
+      try {
+        const latest = await getSession(sessionId)
+        if (cancelled || activeSessionIdRef.current !== latest.id) return
+        setActiveSession(latest)
+        setMessages(
+          latest.messages.map((item, index) => ({
+            id: index,
+            role: item.role,
+            content: item.content,
+            timestamp: formatMessageTimestamp(item.created_at),
+            usage: item.usage,
+            contextWindow: item.context_window,
+            agentLogId: item.agent_log_id ?? undefined,
+            taskId: item.task_id ?? undefined,
+            taskStepId: item.task_step_id ?? undefined,
+            transcriptIndex: index,
+          })),
+        )
+      } catch {
+        // The next polling cycle retries a transient reload failure.
+      }
+    }
+    const interval = window.setInterval(() => void syncTask(), 900)
+    void syncTask()
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [activeSession?.id, activeTask?.id, activeTask?.status, activeTask?.stage])
+
   const baseConfig = useMemo<AgentConfig>(
     () => ({
       name: 'Copia',
@@ -392,10 +481,64 @@ export function App() {
     return result
   }
 
+  async function setTaskMode(enabled: boolean) {
+    if (taskIsActive) return
+    if (!activeSession) {
+      setTaskModeDraft(enabled)
+      return
+    }
+    try {
+      const updated = await updateSessionTaskMode(activeSession.id, enabled)
+      if (activeSessionIdRef.current === updated.id) {
+        setActiveSession(updated)
+        setTaskModeDraft(updated.task_mode_enabled)
+      }
+    } catch (error) {
+      setProfileSettingsError(
+        error instanceof Error ? error.message : 'Не удалось изменить Task mode',
+      )
+    }
+  }
+
+  async function submitTask(instruction: string) {
+    let session = activeSession
+    try {
+      const config = buildConfig()
+      if (!session) {
+        session = await createSession(config, selectedUserProfileId, true)
+        setActiveSession(session)
+        activeSessionIdRef.current = session.id
+        localStorage.setItem('copia.activeSessionId', session.id)
+        setTaskModeDraft(true)
+      }
+      await startTask(session.id, instruction)
+      const latest = await getSession(session.id)
+      if (activeSessionIdRef.current === latest.id) openSession(latest)
+      void refreshSessions()
+    } catch (error) {
+      if (activeSessionIdRef.current === session?.id) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: Date.now(),
+            role: 'error',
+            content: error instanceof Error ? error.message : 'Не удалось запустить задачу',
+            timestamp: now(),
+          },
+        ])
+      }
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     const content = message.trim()
-    if (!content || isLoading || failedSummarization) return
+    if (!content || isLoading || failedSummarization || taskIsActive) return
+    if (taskModeEnabled) {
+      setMessage('')
+      await submitTask(content)
+      return
+    }
 
     let session: ChatSession | null = null
     let requestSessionId: string | null = null
@@ -594,6 +737,9 @@ export function App() {
 
   function openSession(session: ChatSession) {
     setActiveSession(session)
+    setTaskModeDraft(session.task_mode_enabled)
+    setRetryingTaskId(null)
+    setTaskRetryError(null)
     setSelectedUserProfileId(session.user_profile_id)
     activeSessionIdRef.current = session.id
     localStorage.setItem('copia.activeSessionId', session.id)
@@ -607,6 +753,8 @@ export function App() {
         usage: item.usage,
         contextWindow: item.context_window,
         agentLogId: item.agent_log_id ?? undefined,
+        taskId: item.task_id ?? undefined,
+        taskStepId: item.task_step_id ?? undefined,
         transcriptIndex: index,
       })),
     )
@@ -615,6 +763,9 @@ export function App() {
     setMemoryEvents([])
     setMemoryEventsByAgentLogId({})
     setActiveLog(null)
+    setActiveLogGroup(null)
+    setExpandedTaskIds({})
+    setExpandedTaskMessageKeys({})
     setFacts({})
     setWorkingMemory([])
     void getWorkingMemory(session.id)
@@ -697,6 +848,7 @@ export function App() {
   function startNewChat() {
     setMode('chat')
     setActiveSession(null)
+    setTaskModeDraft(false)
     activeSessionIdRef.current = null
     localStorage.removeItem('copia.activeSessionId')
     setMessages(starterMessages)
@@ -708,6 +860,9 @@ export function App() {
     setWorkingMemory([])
     setMemoryEventsByAgentLogId({})
     setActiveLog(null)
+    setActiveLogGroup(null)
+    setExpandedTaskIds({})
+    setExpandedTaskMessageKeys({})
     setProfileSettingsError(null)
     setForkError(null)
     setMemoryPanelOpen(false)
@@ -919,7 +1074,130 @@ export function App() {
 
   function openAgentLog(exchange: AgentLogExchange) {
     setActiveLog(exchange)
+    setActiveLogGroup(null)
     setLogTab('request')
+  }
+
+  async function openTaskLog(agentLogId: string) {
+    const sessionId = activeSession?.id
+    if (!sessionId) return
+    try {
+      const detail = await getAgentLog(sessionId, agentLogId)
+      const exchange = detail.exchanges[detail.exchanges.length - 1]
+      if (!exchange) return
+      setActiveLog(exchange)
+      setActiveLogGroup(null)
+      setLogTab('request')
+    } catch {
+      // The task panel keeps the call status when a running log has no exchange yet.
+    }
+  }
+
+  async function openAllTaskLogs(taskId: string) {
+    const sessionId = activeSession?.id
+    const calls = tasksById.get(taskId)?.llm_calls ?? []
+    if (!sessionId || calls.length === 0) return
+    const details = await Promise.all(
+      calls.map((call) => getAgentLog(sessionId, call.agent_log_id).catch(() => null)),
+    )
+    const exchanges = details.flatMap((detail) => detail?.exchanges ?? [])
+    if (exchanges.length === 0) return
+    setActiveLogGroup(exchanges)
+    setActiveLog(exchanges[exchanges.length - 1])
+    setLogTab('request')
+  }
+
+  const profileControl = (
+    <ProfileIndicator
+      profiles={userProfiles}
+      selectedId={selectedUserProfileId}
+      loading={userProfilesLoading}
+      error={userProfilesError}
+      onSelect={(id) => void selectUserProfile(id)}
+      onManage={() => setMode('profiles')}
+      selectionError={profileSelectionError}
+      selectionLoading={profileSelectionLoading}
+      onRetrySelection={retryProfileSelection}
+      onRetryProfiles={() => void refreshUserProfiles()}
+      sessionRefreshError={sessionListRefreshError}
+      onRetrySessionRefresh={() => void refreshSessions()}
+    />
+  )
+
+  async function pauseActiveTask() {
+    const session = activeSession
+    const task = activeTask
+    if (!session || !task || task.status !== 'running') return
+    const updated = await pauseTask(session.id, task.id)
+    if (activeSessionIdRef.current === session.id)
+      setActiveSession((current) =>
+        current
+          ? {
+              ...current,
+              task: updated,
+              tasks: current.tasks.map((item) => (item.id === updated.id ? updated : item)),
+            }
+          : current,
+      )
+  }
+
+  async function resumeActiveTask() {
+    const session = activeSession
+    const task = activeTask
+    if (!session || !task || task.status !== 'paused') return
+    const updated = await resumeTask(session.id, task.id)
+    if (activeSessionIdRef.current === session.id)
+      setActiveSession((current) =>
+        current
+          ? {
+              ...current,
+              task: updated,
+              tasks: current.tasks.map((item) => (item.id === updated.id ? updated : item)),
+            }
+          : current,
+      )
+  }
+
+  async function retryFailedTask(task: TaskState) {
+    const session = activeSession
+    if (!session || task.status !== 'failed' || task.stage !== 'validation') return
+    setRetryingTaskId(task.id)
+    setTaskRetryError(null)
+    try {
+      const updated = await retryTask(session.id, task.id)
+      if (activeSessionIdRef.current === session.id)
+        setActiveSession((current) =>
+          current
+            ? {
+                ...current,
+                task: updated,
+                tasks: current.tasks.map((item) => (item.id === updated.id ? updated : item)),
+              }
+            : current,
+        )
+      setMessages((current) =>
+        current.filter((entry) => !(entry.taskId === task.id && entry.taskStepId != null)),
+      )
+      setExpandedTaskMessageKeys((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([key]) => !key.startsWith(`${task.id}:`)),
+        ),
+      )
+    } catch (error) {
+      setTaskRetryError({
+        taskId: task.id,
+        message: error instanceof Error ? error.message : 'Не удалось повторить проверку',
+      })
+    } finally {
+      setRetryingTaskId(null)
+    }
+  }
+
+  function toggleTaskMessage(key: string) {
+    setExpandedTaskMessageKeys((current) => ({
+      ...current,
+      [key]: !current[key],
+    }))
   }
 
   const memoryPanelContent = activeSession ? (
@@ -1057,96 +1335,209 @@ export function App() {
           <>
             <div className="messages-scroll" aria-live="polite">
               <div className="message-list">
-                {messages.map((entry) => (
-                  <Fragment key={entry.id}>
-                    {contextWindowStart != null &&
-                      entry.transcriptIndex === contextWindowStart &&
-                      contextWindowStart > 0 && (
-                        <div className="context-window-boundary">
-                          <span>
-                            {effectiveContextManagement.strategy === 'sticky_facts'
-                              ? 'Sticky Facts'
-                              : 'Sliding Window'}{' '}
-                            · последние {effectiveContextManagement.recent_message_limit} сообщений
-                          </span>
-                        </div>
-                      )}
-                    <article className={`message ${entry.role}`}>
-                      {entry.role !== 'user' && (
-                        <span className="avatar">
-                          {entry.role === 'error' ? (
-                            '!'
-                          ) : activeSession?.config.avatar_path ? (
-                            <img
-                              src={activeSession.config.avatar_path}
-                              alt={activeSession.config.name}
-                            />
-                          ) : (
-                            '◇'
-                          )}
-                        </span>
-                      )}
-                      <div className="message-body">
-                        <div className="markdown">
-                          <Markdown content={entry.content} />
-                        </div>
-                        {entry.role !== 'user' && (
-                          <AgentLogBlock
-                            key={`${activeSession?.id ?? 'session'}-${entry.id}-${entry.agentLogId ?? 'no-log'}`}
-                            sessionId={activeSession?.id}
-                            agentLogId={entry.agentLogId}
-                            memoryEvents={
-                              entry.agentLogId
-                                ? memoryEventsByAgentLogId[entry.agentLogId]
-                                : undefined
-                            }
-                            onOpenLogs={openAgentLog}
-                          />
+                {messages.map((entry, index) => {
+                  const task = entry.taskId
+                    ? tasksById.get(entry.taskId)
+                    : entry.role === 'user'
+                      ? sessionTasks.find((item) => item.original_instruction === entry.content)
+                      : undefined
+                  const step =
+                    task?.plan?.steps.find((item) => item.id === entry.taskStepId) ?? undefined
+                  const taskExpanded = task ? expandedTaskIds[task.id] === true : false
+                  const isCompletionReport = task?.completion_report === entry.content
+                  const isSubtaskMessage =
+                    entry.role === 'assistant' &&
+                    task != null &&
+                    step != null &&
+                    entry.taskStepId != null
+                  const subtaskMessageKey = isSubtaskMessage ? `${task.id}:${step.id}` : null
+                  const subtaskExpanded =
+                    subtaskMessageKey != null && expandedTaskMessageKeys[subtaskMessageKey] === true
+                  const isTaskPanelAnchor =
+                    task != null &&
+                    (lastTaskSubtaskMessageIndexes.has(task.id)
+                      ? entry.taskId === task.id &&
+                        entry.taskStepId != null &&
+                        lastTaskSubtaskMessageIndexes.get(task.id) === index
+                      : entry.role === 'user' && (entry.taskId === task.id || entry.taskId == null))
+                  const loadingStep =
+                    task && isTaskPanelAnchor ? currentTaskLoadingStep(task) : undefined
+                  const loadingMessageKey =
+                    loadingStep && task ? `${task.id}:${loadingStep.id}` : null
+                  const loadingExpanded =
+                    loadingMessageKey != null && expandedTaskMessageKeys[loadingMessageKey] === true
+                  const loadingStepHasMessage =
+                    loadingStep != null &&
+                    task != null &&
+                    messages.some(
+                      (item) => item.taskId === task.id && item.taskStepId === loadingStep.id,
+                    )
+                  return (
+                    <Fragment key={entry.id}>
+                      {contextWindowStart != null &&
+                        entry.transcriptIndex === contextWindowStart &&
+                        contextWindowStart > 0 && (
+                          <div className="context-window-boundary">
+                            <span>
+                              {effectiveContextManagement.strategy === 'sticky_facts'
+                                ? 'Sticky Facts'
+                                : 'Sliding Window'}{' '}
+                              · последние {effectiveContextManagement.recent_message_limit}{' '}
+                              сообщений
+                            </span>
+                          </div>
                         )}
-                        {(entry.timestamp ||
-                          entry.agentLogId ||
-                          (effectiveContextManagement.strategy === 'branching' &&
-                            activeSession &&
-                            entry.transcriptIndex != null)) && (
-                          <footer>
-                            {entry.timestamp && <span>{entry.timestamp}</span>}
-                            {effectiveContextManagement.strategy === 'branching' &&
-                              activeSession &&
-                              entry.transcriptIndex != null && (
+                      <article className={`message ${entry.role}`}>
+                        {entry.role !== 'user' && (
+                          <span className="avatar">
+                            {entry.role === 'error' ? (
+                              '!'
+                            ) : activeSession?.config.avatar_path ? (
+                              <img
+                                src={activeSession.config.avatar_path}
+                                alt={activeSession.config.name}
+                              />
+                            ) : (
+                              '◇'
+                            )}
+                          </span>
+                        )}
+                        <div className="message-body">
+                          {isSubtaskMessage && !subtaskExpanded ? (
+                            <button
+                              type="button"
+                              className="task-subtask-message-collapsed"
+                              aria-expanded={false}
+                              onClick={() => toggleTaskMessage(subtaskMessageKey!)}
+                            >
+                              <span
+                                className="task-subtask-message-dot completed"
+                                aria-hidden="true"
+                              >
+                                ✓
+                              </span>
+                              <span>
+                                <b>{step.title}</b>
+                                <small>Подзадача {step.order} · Выполнено</small>
+                              </span>
+                              <span className="task-subtask-message-chevron" aria-hidden="true">
+                                ›
+                              </span>
+                            </button>
+                          ) : (
+                            <div
+                              className={
+                                isCompletionReport ? 'markdown completion-report-card' : 'markdown'
+                              }
+                            >
+                              {isSubtaskMessage && (
                                 <button
                                   type="button"
-                                  className="fork-message"
-                                  aria-label="Создать ветку с этого сообщения"
-                                  title="Создать ветку с этого сообщения"
-                                  disabled={isLoading || forkingMessageIndex != null}
-                                  onClick={() => void forkFromMessage(entry.transcriptIndex!)}
+                                  className="task-subtask-message-expanded-toggle"
+                                  aria-expanded={true}
+                                  onClick={() => toggleTaskMessage(subtaskMessageKey!)}
                                 >
-                                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M6 3v7a4 4 0 0 0 4 4h4m0 0-3-3m3 3-3 3M6 10h5a4 4 0 0 0 4-4V3m0 0-3 3m3-3 3 3" />
-                                  </svg>
+                                  <span>
+                                    Подзадача {step.order}: {step.title}
+                                  </span>
+                                  <span aria-hidden="true">⌄</span>
                                 </button>
                               )}
-                          </footer>
-                        )}
-                      </div>
-                    </article>
-                    {entry.transcriptIndex != null &&
-                      summarizationEvents
-                        .filter((event) => event.after_message_index === entry.transcriptIndex)
-                        .map((event) => (
-                          <SummarizationIndicator
-                            key={event.id}
-                            event={event}
-                            retrying={isLoading && event.status === 'failed'}
-                            onRetry={() => void retrySummarization()}
+                              <Markdown content={entry.content} />
+                            </div>
+                          )}
+                          {entry.role !== 'user' && (
+                            <AgentLogBlock
+                              key={`${activeSession?.id ?? 'session'}-${entry.id}-${entry.agentLogId ?? 'no-log'}`}
+                              sessionId={activeSession?.id}
+                              agentLogId={entry.agentLogId}
+                              memoryEvents={
+                                entry.agentLogId
+                                  ? memoryEventsByAgentLogId[entry.agentLogId]
+                                  : undefined
+                              }
+                              onOpenLogs={openAgentLog}
+                            />
+                          )}
+                          {(entry.timestamp ||
+                            entry.agentLogId ||
+                            (effectiveContextManagement.strategy === 'branching' &&
+                              activeSession &&
+                              entry.transcriptIndex != null)) && (
+                            <footer>
+                              {entry.timestamp && <span>{entry.timestamp}</span>}
+                              {effectiveContextManagement.strategy === 'branching' &&
+                                activeSession &&
+                                entry.transcriptIndex != null && (
+                                  <button
+                                    type="button"
+                                    className="fork-message"
+                                    aria-label="Создать ветку с этого сообщения"
+                                    title="Создать ветку с этого сообщения"
+                                    disabled={isLoading || forkingMessageIndex != null}
+                                    onClick={() => void forkFromMessage(entry.transcriptIndex!)}
+                                  >
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                      <path d="M6 3v7a4 4 0 0 0 4 4h4m0 0-3-3m3 3-3 3M6 10h5a4 4 0 0 0 4-4V3m0 0-3 3m3-3 3 3" />
+                                    </svg>
+                                  </button>
+                                )}
+                            </footer>
+                          )}
+                        </div>
+                      </article>
+                      {isTaskPanelAnchor && task && taskModeEnabled && (
+                        <>
+                          {loadingStep && !loadingStepHasMessage && (
+                            <TaskSubtaskLoadingMessage
+                              step={loadingStep}
+                              expanded={loadingExpanded}
+                              onToggle={() => toggleTaskMessage(loadingMessageKey!)}
+                            />
+                          )}
+                          <TaskProgressPanel
+                            task={task}
+                            expanded={taskExpanded}
+                            onToggleExpanded={() =>
+                              setExpandedTaskIds((current) => ({
+                                ...current,
+                                [task.id]: !current[task.id],
+                              }))
+                            }
+                            onPause={() => {
+                              if (task.id === activeTask?.id) void pauseActiveTask()
+                            }}
+                            onResume={() => {
+                              if (task.id === activeTask?.id) void resumeActiveTask()
+                            }}
+                            onRetry={() => void retryFailedTask(task)}
+                            retrying={retryingTaskId === task.id}
+                            retryError={
+                              taskRetryError?.taskId === task.id ? taskRetryError.message : null
+                            }
+                            onOpenLogs={(agentLogId) => void openTaskLog(agentLogId)}
+                            onOpenAllLogs={() => void openAllTaskLogs(task.id)}
                           />
-                        ))}
-                    {entry.transcriptIndex != null &&
-                      factsEvents
-                        .filter((event) => event.after_message_index === entry.transcriptIndex)
-                        .map((event) => <FactsUpdateIndicator key={event.id} event={event} />)}
-                  </Fragment>
-                ))}
+                        </>
+                      )}
+                      {entry.transcriptIndex != null &&
+                        summarizationEvents
+                          .filter((event) => event.after_message_index === entry.transcriptIndex)
+                          .map((event) => (
+                            <SummarizationIndicator
+                              key={event.id}
+                              event={event}
+                              retrying={isLoading && event.status === 'failed'}
+                              onRetry={() => void retrySummarization()}
+                            />
+                          ))}
+                      {entry.transcriptIndex != null &&
+                        factsEvents
+                          .filter((event) => event.after_message_index === entry.transcriptIndex)
+                          .map((event) => <FactsUpdateIndicator key={event.id} event={event} />)}
+                    </Fragment>
+                  )
+                })}
                 {forkError && <div className="fork-error">{forkError}</div>}
                 {isSummarizing && !failedSummarization && (
                   <div className="summarization-event in-progress">
@@ -1186,23 +1577,22 @@ export function App() {
                 <div ref={settingsRef}>
                   {isProfileSession && activeSession ? (
                     <ProfileSessionSettings
-                      sessionId={activeSession.id}
-                      profileName={activeSession.profile_name!}
+                      profileControl={profileControl}
                       value={activeSession.config.context_management}
                       facts={facts}
                       provider={activeSession.config.provider}
                       longTermMemoryEnabled={activeSession.long_term_memory_enabled}
-                      longTermMemory={longTermMemory}
                       saving={profileSettingsSaving}
                       error={profileSettingsError}
                       onChange={setProfileContextManagement}
                       onLongTermMemoryEnabled={setLongTermMemoryEnabled}
-                      onAddLongTermMemory={addLongTermMemory}
-                      onEditLongTermMemory={editLongTermMemory}
-                      onDeleteLongTermMemory={removeLongTermMemory}
+                      taskModeEnabled={taskModeEnabled}
+                      taskModeDisabled={taskIsActive}
+                      onTaskMode={(enabled) => void setTaskMode(enabled)}
                     />
                   ) : (
                     <Settings
+                      profileControl={profileControl}
                       provider={provider}
                       model={model}
                       models={models}
@@ -1231,6 +1621,9 @@ export function App() {
                       factsModels={factsModels}
                       factsModelsLoading={factsModelsLoading}
                       factsSupportsSampling={factsSupportsSampling}
+                      taskModeEnabled={taskModeEnabled}
+                      taskModeDisabled={taskIsActive}
+                      onTaskMode={(enabled) => void setTaskMode(enabled)}
                     />
                   )}
                 </div>
@@ -1250,21 +1643,6 @@ export function App() {
                     />
                   )}
                 </span>
-                <span className="composer-divider" />
-                <ProfileIndicator
-                  profiles={userProfiles}
-                  selectedId={selectedUserProfileId}
-                  loading={userProfilesLoading}
-                  error={userProfilesError}
-                  onSelect={(id) => void selectUserProfile(id)}
-                  onManage={() => setMode('profiles')}
-                  selectionError={profileSelectionError}
-                  selectionLoading={profileSelectionLoading}
-                  onRetrySelection={retryProfileSelection}
-                  onRetryProfiles={() => void refreshUserProfiles()}
-                  sessionRefreshError={sessionListRefreshError}
-                  onRetrySessionRefresh={() => void refreshSessions()}
-                />
                 <span className="composer-divider" />
                 <button
                   type="button"
@@ -1298,16 +1676,29 @@ export function App() {
                       : 'Напишите сообщение Copia…'
                   }
                   rows={1}
-                  disabled={isLoading || failedSummarization != null}
+                  disabled={isLoading || failedSummarization != null || taskIsActive}
                 />
-                <button
-                  className="send"
-                  type="submit"
-                  disabled={isLoading || failedSummarization != null || !message.trim()}
-                  aria-label="Send"
-                >
-                  ↑
-                </button>
+                {taskIsActive ? (
+                  <button
+                    className="send task-stop-control"
+                    type="button"
+                    disabled={activeSession?.task?.status !== 'running'}
+                    onClick={() => void pauseActiveTask()}
+                    aria-label="Приостановить"
+                    title="Приостановить"
+                  >
+                    ■
+                  </button>
+                ) : (
+                  <button
+                    className="send"
+                    type="submit"
+                    disabled={isLoading || failedSummarization != null || !message.trim()}
+                    aria-label="Send"
+                  >
+                    ↑
+                  </button>
+                )}
               </form>
               <p className="hint">Copia может допускать ошибки. Проверяйте важную информацию.</p>
             </div>
@@ -1322,6 +1713,7 @@ export function App() {
       {activeLog && (
         <RequestLogs
           log={activeLog}
+          logs={activeLogGroup ?? undefined}
           tab={logTab}
           onTab={setLogTab}
           onClose={() => setActiveLog(null)}
@@ -1583,44 +1975,31 @@ function ContextProgress({
 }
 
 function ProfileSessionSettings({
-  sessionId,
-  profileName,
+  profileControl,
   value,
   facts,
   provider,
   longTermMemoryEnabled,
-  longTermMemory,
   saving,
   error,
   onChange,
   onLongTermMemoryEnabled,
-  onAddLongTermMemory,
-  onEditLongTermMemory,
-  onDeleteLongTermMemory,
+  taskModeEnabled,
+  taskModeDisabled,
+  onTaskMode,
 }: {
-  sessionId: string
-  profileName: string
+  profileControl: ReactNode
   value: ContextManagementConfig
   facts: Record<string, string>
   provider: Provider
   longTermMemoryEnabled: boolean
-  longTermMemory: LongTermMemoryItem[]
   saving: boolean
   error: string | null
   onChange: (value: ContextManagementConfig) => Promise<void>
   onLongTermMemoryEnabled: (enabled: boolean) => Promise<void>
-  onAddLongTermMemory: (
-    sessionId: string,
-    profileName: string,
-    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
-  ) => Promise<void>
-  onEditLongTermMemory: (
-    sessionId: string,
-    profileName: string,
-    itemId: string,
-    value: Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>,
-  ) => Promise<void>
-  onDeleteLongTermMemory: (sessionId: string, profileName: string, itemId: string) => Promise<void>
+  taskModeEnabled: boolean
+  taskModeDisabled: boolean
+  onTaskMode: (enabled: boolean) => void
 }) {
   return (
     <section className="settings-popover">
@@ -1630,7 +2009,9 @@ function ProfileSessionSettings({
           {provider} · long-term memory {longTermMemoryEnabled ? 'активна' : 'выключена'}
         </span>
       </header>
+      <div className="dialog-profile-control">{profileControl}</div>
       <MemoryLayerStatus longTermState={longTermMemoryEnabled ? 'enabled' : 'disabled'} />
+      <TaskModeToggle enabled={taskModeEnabled} disabled={taskModeDisabled} onChange={onTaskMode} />
       <label className="toggle-row">
         <span>
           <b>Long-term memory</b>
@@ -1646,19 +2027,6 @@ function ProfileSessionSettings({
           onChange={(event) => void onLongTermMemoryEnabled(event.target.checked)}
         />
       </label>
-      <section className="facts-panel long-term-memory-panel">
-        <header>
-          <b>Long-term memory · {longTermMemory.length}</b>
-          <span>Профиль</span>
-        </header>
-        <LongTermMemoryEditor
-          key={`${sessionId}:${profileName}`}
-          items={longTermMemory}
-          onAdd={(value) => onAddLongTermMemory(sessionId, profileName, value)}
-          onEdit={(itemId, value) => onEditLongTermMemory(sessionId, profileName, itemId, value)}
-          onDelete={(itemId) => onDeleteLongTermMemory(sessionId, profileName, itemId)}
-        />
-      </section>
       <StrategySettings
         value={value}
         facts={facts}
@@ -1667,6 +2035,33 @@ function ProfileSessionSettings({
       />
       {error && <p className="model-note">{error}</p>}
     </section>
+  )
+}
+
+function TaskModeToggle({
+  enabled,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean
+  disabled: boolean
+  onChange: (enabled: boolean) => void
+}) {
+  return (
+    <label className="toggle-row task-mode-toggle">
+      <span>
+        <b>Task mode</b>
+        <small>
+          Планирует задачу, выполняет подзадачи по очереди и проверяет итоговый результат.
+        </small>
+      </span>
+      <input
+        type="checkbox"
+        checked={enabled}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
   )
 }
 
@@ -1686,6 +2081,7 @@ function MemoryLayerStatus({
 }
 
 type SettingsProps = {
+  profileControl: ReactNode
   provider: Provider
   model: string
   models: ProviderModel[]
@@ -1714,6 +2110,9 @@ type SettingsProps = {
   factsModelsLoading: boolean
   factsSupportsSampling: boolean
   onContextManagement: (value: ContextManagementConfig) => void
+  taskModeEnabled: boolean
+  taskModeDisabled: boolean
+  onTaskMode: (enabled: boolean) => void
 }
 
 function Settings(props: SettingsProps) {
@@ -1723,7 +2122,13 @@ function Settings(props: SettingsProps) {
         <b>Настройки запроса</b>
         <span>Конфигурация применяется к обычному чату</span>
       </header>
+      <div className="dialog-profile-control">{props.profileControl}</div>
       <MemoryLayerStatus longTermState="unavailable" />
+      <TaskModeToggle
+        enabled={props.taskModeEnabled}
+        disabled={props.taskModeDisabled}
+        onChange={props.onTaskMode}
+      />
       <p className="model-note">Long-term memory недоступна без профиля.</p>
       <div className="settings-grid">
         <label>
@@ -2409,6 +2814,69 @@ function ProviderSelect({
         </div>
       )}
     </div>
+  )
+}
+
+function currentTaskLoadingStep(task: TaskState): TaskPlanStep | undefined {
+  if (
+    task.stage !== 'execution' ||
+    !['running', 'pause_requested'].includes(task.status) ||
+    task.current_step == null ||
+    task.plan == null
+  )
+    return undefined
+  const step = task.plan.steps[task.current_step]
+  return step && step.status !== 'completed' ? step : undefined
+}
+
+function TaskSubtaskLoadingMessage({
+  step,
+  expanded,
+  onToggle,
+}: {
+  step: TaskPlanStep
+  expanded: boolean
+  onToggle: () => void
+}) {
+  return (
+    <article className="message assistant task-subtask-loading-message">
+      <span className="avatar">◇</span>
+      <div className="message-body">
+        {expanded ? (
+          <div className="task-subtask-message-loading-expanded">
+            <button
+              type="button"
+              className="task-subtask-message-expanded-toggle"
+              aria-expanded={true}
+              onClick={onToggle}
+            >
+              <span>
+                Подзадача {step.order}: {step.title}
+              </span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+            <p>Выполняется подзадача…</p>
+            <small>Ответ появится после завершения шага.</small>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="task-subtask-message-collapsed loading"
+            aria-expanded={false}
+            onClick={onToggle}
+          >
+            <span className="task-subtask-message-dot loading" aria-hidden="true" />
+            <span>
+              <b>Выполняется {step.title}</b>
+              <small>Нажмите, чтобы открыть</small>
+            </span>
+            <span className="task-subtask-message-chevron" aria-hidden="true">
+              ›
+            </span>
+          </button>
+        )}
+      </div>
+    </article>
   )
 }
 

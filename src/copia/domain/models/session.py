@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .config import AgentConfig, ChatMessage, ProviderName, ProviderTrace
+from .task import TaskState
 
 
 class SummarizationEvent(BaseModel):
@@ -80,8 +81,26 @@ class ChatSession(BaseModel):
     profile_name: str | None = None
     user_profile_id: str | None = None
     long_term_memory_enabled: bool = False
+    task_mode_enabled: bool = False
+    task: TaskState | None = None
+    tasks: list[TaskState] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def synchronize_task_history(self) -> ChatSession:
+        if self.task is not None:
+            current_index = next(
+                (index for index, task in enumerate(self.tasks) if task.id == self.task.id),
+                None,
+            )
+            if current_index is None:
+                self.tasks.append(self.task)
+            else:
+                self.tasks[current_index] = self.task
+        elif self.tasks:
+            self.task = self.tasks[-1]
+        return self
 
 
 class ChatSessionSummary(BaseModel):

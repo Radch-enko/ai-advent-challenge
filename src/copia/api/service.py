@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import threading
@@ -15,7 +16,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..data.agent_log_repository import JsonAgentLogRepository
 from ..data.agent_log_store import AgentLogStore
@@ -71,12 +72,29 @@ from ..domain.models.session import (
     FactsUpdateEvent,
     SummarizationEvent,
 )
+from ..domain.models.task import (
+    TaskLlmCall,
+    TaskLlmCallStatus,
+    TaskModeUpdate,
+    TaskPlan,
+    TaskPlanStep,
+    TaskPlanStepStatus,
+    TaskStage,
+    TaskState,
+    TaskStatus,
+    TaskValidationResult,
+)
 from ..domain.models.user_profile import UserProfile, UserProfileCreate, UserProfileUpdate
 from ..domain.services.agent_log_context import agent_log_operation, agent_log_turn
 from ..domain.services.context_strategy import _render_user_profile_block
 from ..domain.services.credential_sanitizer import sanitize_error, sanitize_text, sanitize_value
 from ..domain.services.memory_classifier import LLMMemoryClassifier
 from ..domain.services.router import LLMRouter
+from ..domain.services.task_state_machine import (
+    InvalidTaskTransition,
+    TaskEvent,
+    TaskStateMachine,
+)
 
 load_dotenv()
 
@@ -94,6 +112,9 @@ pending_memory: dict[str, list[PendingMemorySuggestion]] = {}
 pending_memory_repository = PendingMemoryRepository(sessions_path)
 user_profiles = JsonUserProfilesRepository()
 session_lifecycle_lock = threading.RLock()
+task_state_machine = TaskStateMachine()
+task_workers: dict[str, asyncio.Task[None]] = {}
+task_workers_lock = threading.RLock()
 
 
 @dataclass
@@ -410,6 +431,7 @@ class CreateSessionRequest(BaseModel):
     profile_name: str | None = None
     config: AgentConfig | None = None
     user_profile_id: str | None = None
+    task_mode_enabled: bool = False
 
     @model_validator(mode="after")
     def require_one_source(self) -> CreateSessionRequest:
@@ -426,6 +448,580 @@ class UserProfileSelectionUpdate(BaseModel):
 
 class ForkSessionRequest(BaseModel):
     message_index: int = Field(ge=0)
+
+
+class TaskStartRequest(BaseModel):
+    instruction: str = Field(min_length=1)
+
+
+class _PlannerStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    instruction: str = Field(min_length=1)
+    success_criteria: str = Field(min_length=1)
+
+
+class _PlannerResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: list[_PlannerStep] = Field(min_length=1, max_length=32)
+
+
+TASK_REPORT_SECTIONS = (
+    "## Итоговый ответ",
+    "### Детали",
+    "### Ограничения",
+)
+
+
+def _task_prompt_message(content: str) -> ChatMessage:
+    return ChatMessage(role="user", content=content)
+
+
+def _task_system_messages(session: ChatSession, role_prompt: str) -> list[ChatMessage]:
+    messages: list[ChatMessage] = []
+    if session.config.system_prompt:
+        messages.append(ChatMessage(role="system", content=session.config.system_prompt))
+    messages.append(ChatMessage(role="system", content=role_prompt))
+    return messages
+
+
+def _task_llm_config(
+    session: ChatSession, *, structured_schema: dict[str, object] | None = None
+) -> LLMConfig:
+    return LLMConfig(
+        provider=session.config.provider,
+        model=session.config.model,
+        system_prompt=session.config.system_prompt,
+        generation=session.config.generation.model_copy(deep=True),
+        structured_output=(
+            StructuredOutputConfig(schema=structured_schema, strict=True)
+            if structured_schema is not None
+            else None
+        ),
+        provider_options=dict(session.config.provider_options),
+    )
+
+
+def _task_checkpoint(session_id: str, update: object, *, revision: bool = True) -> ChatSession:
+    """Apply one short, durable mutation without holding a provider/message lock."""
+    with session_lifecycle_lock:
+        session = sessions.load(session_id)
+        if session is None or session.task is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown task")
+        update(session)
+        if revision:
+            session.task.checkpoint_revision += 1
+        session.task.updated_at = datetime.now(UTC)
+        session.updated_at = session.task.updated_at
+        sessions.save(session)
+        return session
+
+
+def _session_tasks(session: ChatSession) -> list[TaskState]:
+    if session.tasks:
+        return session.tasks
+    return [session.task] if session.task is not None else []
+
+
+def _session_task(session: ChatSession, task_id: str) -> TaskState:
+    task = next((item for item in _session_tasks(session) if item.id == task_id), None)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown task")
+    return task
+
+
+def _session_has_active_task(session: ChatSession) -> bool:
+    return any(_task_active(task) for task in _session_tasks(session))
+
+
+def _task_state(session_id: str, task_id: str) -> TaskState:
+    with session_lifecycle_lock:
+        session = sessions.load(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+    return _session_task(session, task_id)
+
+
+def _task_active(task: TaskState | None) -> bool:
+    return task is not None and task.status in {
+        TaskStatus.RUNNING,
+        TaskStatus.PAUSE_REQUESTED,
+        TaskStatus.PAUSED,
+    }
+
+
+def _task_worker_running(session_id: str, task_id: str) -> bool:
+    with task_workers_lock:
+        worker = task_workers.get(session_id)
+        return worker is not None and not worker.done()
+
+
+def _finish_task_worker(session_id: str, worker: asyncio.Task[None]) -> None:
+    with task_workers_lock:
+        if task_workers.get(session_id) is worker:
+            task_workers.pop(session_id, None)
+
+
+def _task_call_start(
+    session_id: str,
+    *,
+    task_id: str,
+    stage: TaskStage,
+    kind: str,
+    step_id: str | None,
+) -> str:
+    agent_log_id = agent_log_store.start_turn(session_id)
+    now = datetime.now(UTC)
+
+    def update(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        task.llm_calls.append(
+            TaskLlmCall(
+                agent_log_id=agent_log_id,
+                stage=stage,
+                kind=kind,
+                step_id=step_id,
+                provider=session.config.provider,
+                model=session.config.model,
+                status=TaskLlmCallStatus.RUNNING,
+                started_at=now,
+            )
+        )
+
+    _task_checkpoint(session_id, update)
+    return agent_log_id
+
+
+def _task_call_finish(
+    session_id: str,
+    agent_log_id: str,
+    *,
+    task_id: str,
+    status_value: TaskLlmCallStatus,
+    error: str | None = None,
+) -> ChatSession:
+    finished_at = datetime.now(UTC)
+
+    def update(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        call = next(
+            (item for item in task.llm_calls if item.agent_log_id == agent_log_id),
+            None,
+        )
+        if call is None:
+            raise ValueError("Task LLM call is missing")
+        call.status = status_value
+        call.completed_at = finished_at
+        call.duration_seconds = max(0, (finished_at - call.started_at).total_seconds())
+        call.error = error
+
+    return _task_checkpoint(session_id, update)
+
+
+def _task_pause_if_requested(session_id: str, task_id: str) -> bool:
+    def update(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        if task.status == TaskStatus.PAUSE_REQUESTED:
+            task_state_machine.apply(task, TaskEvent.PAUSED)
+            task.recovered = True
+
+    session = _task_checkpoint(session_id, update, revision=False)
+    return _session_task(session, task_id).status != TaskStatus.RUNNING
+
+
+def _recover_orphaned_task(task: TaskState) -> None:
+    if task.status == TaskStatus.RUNNING:
+        task_state_machine.apply(task, TaskEvent.PAUSE_REQUESTED)
+    if task.status == TaskStatus.PAUSE_REQUESTED:
+        task_state_machine.apply(task, TaskEvent.PAUSED)
+    task.recovered = True
+    task.expected_action = "Resume the task to continue from the saved checkpoint"
+
+
+def _task_plan_schema() -> dict[str, object]:
+    return _PlannerResponse.model_json_schema()
+
+
+def _task_plan_payload(task: TaskState) -> str:
+    return (
+        "Create an actionable plan for the task below. Return only the structured output. "
+        "Use a small number of independent, sequential steps.\n\n"
+        f"Task:\n{task.original_instruction}"
+    )
+
+
+def _task_execution_payload(task: TaskState, step: TaskPlanStep) -> str:
+    assert task.plan is not None
+    previous = "\n".join(
+        f"{item.order}. {item.title}: {item.result or item.error or item.status}"
+        for item in task.plan.steps
+        if item.status == TaskPlanStepStatus.COMPLETED
+    )
+    validation_feedback = ""
+    if task.validation_result is not None and not task.validation_result.passed:
+        issues = "\n".join(f"- {issue}" for issue in task.validation_result.issues)
+        validation_feedback = (
+            "\n\nValidation feedback from the previous attempt:\n"
+            f"{issues or '- Rework the result against every success criterion.'}\n"
+            "Use this feedback to improve the current step."
+        )
+    return (
+        "Execute exactly the current task step. Do not execute another step and do not change "
+        "the task stage. Return a concise result that can be checked later.\n\n"
+        f"Original task:\n{task.original_instruction}\n\n"
+        f"Current step ({step.order}): {step.title}\n"
+        f"Instruction: {step.instruction}\n"
+        f"Success criteria: {step.success_criteria}\n\n"
+        f"Previous completed results:\n{previous or 'None'}"
+        f"{validation_feedback}"
+    )
+
+
+def _task_validation_payload(task: TaskState) -> str:
+    assert task.plan is not None
+    steps = "\n".join(
+        f"{step.id}: {step.title}\nResult: {step.result or step.error or 'No result'}\n"
+        f"Criteria: {step.success_criteria}"
+        for step in task.plan.steps
+    )
+    return (
+        "Validate the completed task against every success criterion. Return only structured "
+        "output with passed, issues, and checked_step_ids.\n\n"
+        f"Original task:\n{task.original_instruction}\n\n{steps}"
+    )
+
+
+def _task_report_payload(task: TaskState) -> str:
+    assert task.plan is not None
+    steps = "\n".join(
+        f"{step.order}. {step.title} — {step.status}\nResult: {step.result or '—'}"
+        for step in task.plan.steps
+    )
+    validation = task.validation_result
+    checked = ", ".join(validation.checked_step_ids) if validation else "—"
+    issues = "; ".join(validation.issues) if validation and validation.issues else "Нет"
+    return (
+        "Prepare the user-facing final answer using exactly the required Russian headings. "
+        "The answer must focus on the result for the original user request, not on the "
+        "internal task workflow. Do not describe planning, execution stages, validation "
+        "statuses, API logs, or subtask progress. Return plain text only; do not use JSON, "
+        "code fences, or add headings outside the template.\n\n"
+        "Required template:\n"
+        "## Итоговый ответ\n\n"
+        "[Direct answer to the user's request. Start with the result.]\n\n"
+        "### Детали\n\n"
+        "[Only important details needed to understand or use the answer.]\n\n"
+        "### Ограничения\n\n"
+        "[Only limitations that affect the answer, or Нет.]\n\n"
+        f"Original user request:\n{task.original_instruction}\n\n"
+        f"Internal execution results (use as context, do not reproduce the workflow):\n{steps}\n\n"
+        f"Internal validation context (do not expose statuses):\nChecked steps: {checked}\n"
+        f"Validation issues: {issues}"
+    )
+
+
+def _valid_task_report(report: str) -> bool:
+    headings = [line.strip() for line in report.splitlines() if line.strip().startswith("#")]
+    return headings == list(TASK_REPORT_SECTIONS)
+
+
+async def _task_complete_call(
+    session_id: str,
+    task_id: str,
+    *,
+    stage: TaskStage,
+    kind: str,
+    step_id: str | None,
+    messages: list[ChatMessage],
+    config: LLMConfig,
+) -> LLMResponse:
+    agent_log_id = _task_call_start(
+        session_id, task_id=task_id, stage=stage, kind=kind, step_id=step_id
+    )
+    try:
+        with agent_log_turn(
+            session_id,
+            agent_log_id,
+            provider=config.provider,
+            model=config.model,
+            operation=kind,
+        ):
+            response = await run_in_threadpool(router.complete, messages, config)
+    except Exception as error:
+        _task_call_finish(
+            session_id,
+            agent_log_id,
+            task_id=task_id,
+            status_value=TaskLlmCallStatus.FAILED,
+            error=str(error),
+        )
+        _finish_agent_log(
+            agent_log_id,
+            provider=config.provider,
+            model=config.model,
+            status="failed",
+            error=kind,
+        )
+        raise
+    _task_call_finish(
+        session_id,
+        agent_log_id,
+        task_id=task_id,
+        status_value=TaskLlmCallStatus.COMPLETED,
+    )
+    _finish_agent_log(
+        agent_log_id,
+        provider=response.provider,
+        model=response.model,
+        usage=response.usage,
+        status="completed",
+    )
+    return response
+
+
+async def _run_task(session_id: str, task_id: str) -> None:
+    try:
+        while True:
+            task = await run_in_threadpool(_task_state, session_id, task_id)
+            if task.status != TaskStatus.RUNNING:
+                return
+            if task.stage == TaskStage.PLANNING:
+                await _run_task_planning(session_id, task_id, task)
+            elif task.stage == TaskStage.EXECUTION:
+                await _run_task_execution(session_id, task_id, task)
+            elif task.stage == TaskStage.VALIDATION:
+                await _run_task_validation(session_id, task_id, task)
+            elif task.stage == TaskStage.REPORT:
+                await _run_task_report(session_id, task_id, task)
+            else:
+                return
+            if await run_in_threadpool(_task_pause_if_requested, session_id, task_id):
+                return
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        error_message = str(error)
+        try:
+
+            def fail(session: ChatSession) -> None:
+                assert session.task is not None
+                if session.task.id == task_id:
+                    if (
+                        session.task.stage == TaskStage.EXECUTION
+                        and session.task.plan is not None
+                        and session.task.current_step is not None
+                    ):
+                        step = session.task.plan.steps[session.task.current_step]
+                        step.status = TaskPlanStepStatus.FAILED
+                        step.error = error_message
+                    task_state_machine.apply(session.task, TaskEvent.ERROR)
+                    session.task.expected_action = error_message
+
+            await run_in_threadpool(_task_checkpoint, session_id, fail)
+        except (HTTPException, OSError, ValueError, InvalidTaskTransition):
+            pass
+    finally:
+        current = asyncio.current_task()
+        if current is not None:
+            _finish_task_worker(session_id, current)
+
+
+async def _run_task_planning(session_id: str, task_id: str, task: TaskState) -> None:
+    session = await _get_session(session_id)
+    assert session.task is not None
+    config = _task_llm_config(session, structured_schema=_task_plan_schema())
+    response = await _task_complete_call(
+        session_id,
+        task_id,
+        stage=TaskStage.PLANNING,
+        kind="task_planning",
+        step_id=None,
+        messages=_task_system_messages(session, "You are the Copia task planner.")
+        + [_task_prompt_message(_task_plan_payload(task))],
+        config=config,
+    )
+    planned = _PlannerResponse.model_validate(response.structured_data)
+    plan = TaskPlan(
+        steps=[
+            TaskPlanStep(
+                id=f"step-{index}",
+                order=index,
+                title=step.title,
+                instruction=step.instruction,
+                success_criteria=step.success_criteria,
+            )
+            for index, step in enumerate(planned.steps, start=1)
+        ]
+    )
+
+    def save_plan(latest: ChatSession) -> None:
+        assert latest.task is not None
+        if latest.task.id != task_id:
+            raise HTTPException(status_code=404, detail="Unknown task")
+        latest.task.plan = plan
+        task_state_machine.apply(latest.task, TaskEvent.PLAN_CREATED)
+
+    await run_in_threadpool(_task_checkpoint, session_id, save_plan)
+
+
+async def _run_task_execution(session_id: str, task_id: str, task: TaskState) -> None:
+    if task.plan is None or task.current_step is None:
+        raise ValueError("Execution checkpoint is missing the current plan step")
+    step_index = task.current_step
+    if step_index >= len(task.plan.steps):
+        raise ValueError("Execution checkpoint points outside the plan")
+    step = task.plan.steps[step_index]
+    if step.status == TaskPlanStepStatus.COMPLETED:
+        next_step = step_index + 1
+
+        def advance(latest: ChatSession) -> None:
+            assert latest.task is not None
+            task_state_machine.apply(latest.task, TaskEvent.STEP_COMPLETED, next_step=next_step)
+
+        await run_in_threadpool(_task_checkpoint, session_id, advance)
+        return
+
+    session = await _get_session(session_id)
+    config = _task_llm_config(session)
+
+    def mark_step_running(latest: ChatSession) -> None:
+        assert latest.task is not None and latest.task.plan is not None
+        latest.task.plan.steps[step_index].status = TaskPlanStepStatus.RUNNING
+
+    await run_in_threadpool(_task_checkpoint, session_id, mark_step_running)
+    response = await _task_complete_call(
+        session_id,
+        task_id,
+        stage=TaskStage.EXECUTION,
+        kind="task_execution_step",
+        step_id=step.id,
+        messages=_task_system_messages(session, "You are the Copia task executor.")
+        + [_task_prompt_message(_task_execution_payload(task, step))],
+        config=config,
+    )
+    latest_task = await run_in_threadpool(_task_state, session_id, task_id)
+    execution_log_id = next(
+        call.agent_log_id
+        for call in reversed(latest_task.llm_calls)
+        if call.kind == "task_execution_step" and call.step_id == step.id
+    )
+
+    def save_step(latest: ChatSession) -> None:
+        current_task = _session_task(latest, task_id)
+        assert current_task.plan is not None
+        current = current_task.plan.steps[step_index]
+        current.status = TaskPlanStepStatus.COMPLETED
+        current.result = response.content
+        current.error = None
+        task_state_machine.apply(
+            current_task,
+            TaskEvent.STEP_COMPLETED,
+            next_step=step_index + 1,
+        )
+        latest.messages.append(
+            ChatMessage(
+                role="assistant",
+                content=response.content,
+                created_at=datetime.now(UTC),
+                usage=response.usage,
+                context_window=response.context_window,
+                agent_log_id=execution_log_id,
+                task_id=task_id,
+                task_step_id=current.id,
+            )
+        )
+
+    await run_in_threadpool(_task_checkpoint, session_id, save_step)
+
+
+async def _run_task_validation(session_id: str, task_id: str, task: TaskState) -> None:
+    session = await _get_session(session_id)
+    config = _task_llm_config(session, structured_schema=TaskValidationResult.model_json_schema())
+    response = await _task_complete_call(
+        session_id,
+        task_id,
+        stage=TaskStage.VALIDATION,
+        kind="task_validation",
+        step_id=None,
+        messages=_task_system_messages(session, "You are the Copia task validator.")
+        + [_task_prompt_message(_task_validation_payload(task))],
+        config=config,
+    )
+    validation = TaskValidationResult.model_validate(response.structured_data)
+
+    def save_validation(latest: ChatSession) -> None:
+        assert latest.task is not None
+        latest.task.validation_result = validation
+        task_state_machine.apply(
+            latest.task,
+            TaskEvent.VALIDATION_PASSED if validation.passed else TaskEvent.VALIDATION_FAILED,
+        )
+
+    await run_in_threadpool(_task_checkpoint, session_id, save_validation)
+
+
+async def _run_task_report(session_id: str, task_id: str, task: TaskState) -> None:
+    session = await _get_session(session_id)
+    config = _task_llm_config(session)
+    response = await _task_complete_call(
+        session_id,
+        task_id,
+        stage=TaskStage.REPORT,
+        kind="task_report",
+        step_id=None,
+        messages=_task_system_messages(session, "You are the Copia completion report writer.")
+        + [_task_prompt_message(_task_report_payload(task))],
+        config=config,
+    )
+    if not _valid_task_report(response.content):
+        raise ValueError("Report does not match the required template")
+    latest_task = await run_in_threadpool(_task_state, session_id, task_id)
+    report_log_id = next(
+        call.agent_log_id for call in reversed(latest_task.llm_calls) if call.kind == "task_report"
+    )
+
+    def save_report(latest: ChatSession) -> None:
+        assert latest.task is not None
+        latest.task.completion_report = response.content
+        latest.messages.append(
+            ChatMessage(
+                role="assistant",
+                content=response.content,
+                created_at=datetime.now(UTC),
+                usage=response.usage,
+                context_window=response.context_window,
+                agent_log_id=report_log_id,
+                task_id=task_id,
+            )
+        )
+        task_state_machine.apply(latest.task, TaskEvent.REPORT_SAVED)
+
+    await run_in_threadpool(_task_checkpoint, session_id, save_report)
+
+
+def _start_task_worker(session_id: str, task_id: str) -> None:
+    with task_workers_lock:
+        existing = task_workers.get(session_id)
+        if existing is not None and not existing.done():
+
+            async def start_after_previous() -> None:
+                try:
+                    await existing
+                except asyncio.CancelledError:
+                    return
+                with task_workers_lock:
+                    current = task_workers.get(session_id)
+                    if current is not None and not current.done():
+                        return
+                    worker = asyncio.create_task(_run_task(session_id, task_id))
+                    task_workers[session_id] = worker
+
+            asyncio.create_task(start_after_previous())
+            return
+        worker = asyncio.create_task(_run_task(session_id, task_id))
+        task_workers[session_id] = worker
 
 
 @app.get("/health")
@@ -814,6 +1410,7 @@ def create_session(request: CreateSessionRequest) -> ChatSession:
         config=config,
         profile_name=request.profile_name,
         user_profile_id=request.user_profile_id,
+        task_mode_enabled=request.task_mode_enabled,
         created_at=now,
         updated_at=now,
     )
@@ -830,7 +1427,168 @@ def get_session(session_id: str) -> ChatSession:
     session = sessions.load(session_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+    orphaned_tasks = [
+        task
+        for task in _session_tasks(session)
+        if _task_active(task) and not _task_worker_running(session_id, task.id)
+    ]
+    if orphaned_tasks:
+        for task in orphaned_tasks:
+            _recover_orphaned_task(task)
+        session.updated_at = datetime.now(UTC)
+        sessions.save(session)
     return session
+
+
+@app.patch("/sessions/{session_id}/task-mode", response_model=ChatSession)
+async def update_session_task_mode(session_id: str, request: TaskModeUpdate) -> ChatSession:
+    def update() -> ChatSession:
+        with _session_mutation_lock(session_id):
+            session = _get_session_locked(session_id)
+            if _session_has_active_task(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Task mode cannot be changed while a task is active",
+                )
+            session.task_mode_enabled = request.enabled
+            session.updated_at = datetime.now(UTC)
+            sessions.save(session)
+            return session
+
+    return await run_in_threadpool(update)
+
+
+@app.post(
+    "/sessions/{session_id}/tasks", response_model=TaskState, status_code=status.HTTP_202_ACCEPTED
+)
+async def start_task(session_id: str, request: TaskStartRequest) -> TaskState:
+    def create() -> TaskState:
+        with _session_mutation_lock(session_id):
+            session = _get_session_locked(session_id)
+            if not session.task_mode_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Task mode is disabled for this session",
+                )
+            if _session_has_active_task(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A task is already active for this session",
+                )
+            now = datetime.now(UTC)
+            task = TaskState(
+                id=str(uuid.uuid4()),
+                original_instruction=request.instruction,
+                stage=TaskStage.PLANNING,
+                status=TaskStatus.RUNNING,
+                expected_action="Create a plan for the task",
+                created_at=now,
+                updated_at=now,
+            )
+            session.messages.append(
+                ChatMessage(
+                    role="user",
+                    content=request.instruction,
+                    created_at=now,
+                    task_id=task.id,
+                )
+            )
+            session.task = task
+            session.tasks.append(task)
+            session.updated_at = now
+            sessions.save(session)
+            return task
+
+    task = await run_in_threadpool(create)
+    _start_task_worker(session_id, task.id)
+    return task
+
+
+@app.get("/sessions/{session_id}/tasks/{task_id}", response_model=TaskState)
+async def get_task(session_id: str, task_id: str) -> TaskState:
+    task = await run_in_threadpool(_task_state, session_id, task_id)
+    if (
+        _task_active(task)
+        and task.status != TaskStatus.PAUSED
+        and not _task_worker_running(session_id, task_id)
+    ):
+
+        def recover(session: ChatSession) -> None:
+            _recover_orphaned_task(_session_task(session, task_id))
+
+        recovered_session = await run_in_threadpool(_task_checkpoint, session_id, recover)
+        task = _session_task(recovered_session, task_id)
+    return task
+
+
+@app.post("/sessions/{session_id}/tasks/{task_id}/pause", response_model=TaskState)
+async def pause_task(session_id: str, task_id: str) -> TaskState:
+    def pause() -> TaskState:
+        with session_lifecycle_lock:
+            session = _get_session_locked(session_id)
+            task = _session_task(session, task_id)
+            if task.status == TaskStatus.PAUSED:
+                return task
+            try:
+                task_state_machine.apply(task, TaskEvent.PAUSE_REQUESTED)
+            except InvalidTaskTransition as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            task.updated_at = datetime.now(UTC)
+            session.updated_at = task.updated_at
+            sessions.save(session)
+            return task
+
+    return await run_in_threadpool(pause)
+
+
+@app.post("/sessions/{session_id}/tasks/{task_id}/resume", response_model=TaskState)
+async def resume_task(session_id: str, task_id: str) -> TaskState:
+    def resume() -> TaskState:
+        with session_lifecycle_lock:
+            session = _get_session_locked(session_id)
+            task = _session_task(session, task_id)
+            try:
+                task_state_machine.apply(task, TaskEvent.RESUME)
+            except InvalidTaskTransition as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            task.recovered = False
+            task.updated_at = datetime.now(UTC)
+            session.updated_at = task.updated_at
+            sessions.save(session)
+            return task
+
+    task = await run_in_threadpool(resume)
+    _start_task_worker(session_id, task_id)
+    return task
+
+
+@app.post(
+    "/sessions/{session_id}/tasks/{task_id}/retry",
+    response_model=TaskState,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_task(session_id: str, task_id: str) -> TaskState:
+    def retry() -> TaskState:
+        with session_lifecycle_lock:
+            session = _get_session_locked(session_id)
+            task = _session_task(session, task_id)
+            try:
+                task_state_machine.apply(task, TaskEvent.RETRY_EXECUTION)
+            except InvalidTaskTransition as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            session.messages = [
+                message
+                for message in session.messages
+                if not (message.task_id == task_id and message.task_step_id is not None)
+            ]
+            task.updated_at = datetime.now(UTC)
+            session.updated_at = task.updated_at
+            sessions.save(session)
+            return task
+
+    task = await run_in_threadpool(retry)
+    _start_task_worker(session_id, task_id)
+    return task
 
 
 def _get_session_locked(session_id: str) -> ChatSession:
@@ -1022,6 +1780,7 @@ def fork_session(session_id: str, request: ForkSessionRequest) -> ChatSession:
             profile_name=source.profile_name,
             user_profile_id=source.user_profile_id,
             long_term_memory_enabled=source.long_term_memory_enabled,
+            task_mode_enabled=source.task_mode_enabled,
             created_at=now,
             updated_at=now,
         )
@@ -1054,6 +1813,11 @@ async def _send_session_message_locked(
         raise _session_initialization_error(
             agent_log_id, "Session is unavailable", "session_unavailable"
         ) from error
+    if _session_has_active_task(session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A task is active for this session; resume or wait for it to finish",
+        )
     agent_log_id = agent_log_store.start_turn(session.id)
     if request.config is not None and session.profile_name is None:
         session.config = request.config

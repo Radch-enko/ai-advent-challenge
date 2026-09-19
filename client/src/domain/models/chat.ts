@@ -71,6 +71,8 @@ export type ChatMessage = {
   usage?: TokenUsage | null
   contextWindow?: number | null
   transcriptIndex?: number
+  taskId?: string
+  taskStepId?: string
 }
 
 export type ProviderTrace = {
