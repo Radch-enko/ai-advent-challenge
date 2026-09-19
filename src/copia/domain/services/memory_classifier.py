@@ -13,6 +13,7 @@ from ..models.config import (
 )
 from ..models.memory import MemoryCandidate, WorkingMemoryItem
 from .agent_log_context import agent_log_operation
+from .credential_sanitizer import sanitize_error
 from .router import LLMRouter
 
 MEMORY_CLASSIFIER_SYSTEM_PROMPT = """Classify whether the user's explicit information should be remembered and choose exactly one memory scope.
@@ -195,8 +196,8 @@ class LLMMemoryClassifier:
                 if isinstance(response_body, dict)
                 else {"error": str(error)},
             )
-            details = str(error) or type(error).__name__
-            self.last_error = (
+            details = sanitize_error(str(error) or type(error).__name__)
+            self.last_error = sanitize_error(
                 f"Memory classification failed at {stage}: "
                 f"{type(error).__name__}: {details}; working memory was unchanged"
             )

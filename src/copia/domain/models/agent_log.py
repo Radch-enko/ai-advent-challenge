@@ -8,6 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import ProviderName
 
 
+class AgentLogOperation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    agent_turn_id: str
+    session_id: str
+    operation: Literal["user_profile_load"]
+    status: Literal["completed", "failed", "skipped"]
+    profile_id: str | None = None
+    profile_name: str | None = None
+    preference_count: int = Field(ge=0)
+    applied: bool
+    duration_seconds: float = Field(ge=0)
+    error_code: str | None = None
+    message: str | None = None
+    created_at: datetime
+
+
 class AgentLogContext(BaseModel):
     """Correlation data carried through one agent execution."""
 
@@ -60,4 +78,5 @@ class AgentLogTurn(BaseModel):
     completed_at: datetime | None = None
     duration_seconds: float = Field(default=0, ge=0)
     error: str | None = None
+    operations: list[AgentLogOperation] = Field(default_factory=list)
     exchanges: list[AgentLogExchange] = Field(default_factory=list)

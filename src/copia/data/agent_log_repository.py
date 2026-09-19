@@ -65,6 +65,7 @@ def _turn_payload(turn: AgentLogTurn) -> dict[str, object]:
         "completed_at": turn.completed_at.isoformat() if turn.completed_at else None,
         "duration_seconds": turn.duration_seconds,
         "error": turn.error,
+        "operations": [operation.model_dump(mode="json") for operation in turn.operations],
         "exchanges": [_exchange_payload(exchange) for exchange in turn.exchanges],
     }
 
@@ -117,6 +118,7 @@ def _turn_from_payload(payload: Any) -> AgentLogTurn:
         exchange["response_body"] = _body_from_payload(exchange.get("response_body"))
         exchanges.append(exchange)
     data["exchanges"] = exchanges
+    data.setdefault("operations", [])
     return AgentLogTurn.model_validate(data)
 
 

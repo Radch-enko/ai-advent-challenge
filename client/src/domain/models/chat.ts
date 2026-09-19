@@ -35,7 +35,24 @@ export type AgentLogDetail = {
   completed_at?: string | null
   duration_seconds: number
   error?: string | null
+  operations: AgentLogOperation[]
   exchanges: AgentLogExchange[]
+}
+
+export type AgentLogOperation = {
+  id: string
+  agent_turn_id: string
+  session_id: string
+  operation: 'user_profile_load'
+  status: 'completed' | 'failed' | 'skipped'
+  profile_id?: string | null
+  profile_name?: string | null
+  preference_count: number
+  applied: boolean
+  duration_seconds: number
+  error_code?: string | null
+  message?: string | null
+  created_at: string
 }
 
 export type TokenUsage = {

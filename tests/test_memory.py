@@ -51,7 +51,7 @@ def memory_item(category: str, key: str, value: str) -> LongTermMemoryItem:
     )
 
 
-def test_long_term_memory_precedes_working_context_and_does_not_expose_trace() -> None:
+def test_long_term_memory_precedes_working_context_and_preserves_safe_trace() -> None:
     router = MemoryRouter()
     config = AgentConfig.model_validate(
         {
@@ -75,7 +75,7 @@ def test_long_term_memory_precedes_working_context_and_does_not_expose_trace() -
 
     response = agent.ask("What next?")
 
-    assert response.trace is None
+    assert response.trace is not None
     system = router.requests[-1][0].content
     assert system.index("system instructions") < system.index("<long_term_memory>")
     assert system.index('"deadline"') < system.index('"language"') < system.index('"reference"')
@@ -493,7 +493,7 @@ def test_direct_profile_agent_requires_explicit_memory_opt_in_and_redacts_its_tr
         f"/agents/{enabled_agent.json()['agent_id']}/messages", json={"content": "enabled"}
     )
     assert enabled_response.status_code == 200
-    assert enabled_response.json()["response"]["trace"] is None
+    assert enabled_response.json()["response"]["trace"] is not None
     assert "secret-memory-value" in requests[-1][0].content
 
     def fail(messages, config):
@@ -510,9 +510,9 @@ def test_direct_profile_agent_requires_explicit_memory_opt_in_and_redacts_its_tr
     )
     assert failure.status_code == 502
     trace = failure.json()["detail"]["provider_trace"]
-    assert trace["request_body"] == {"redacted": "Long-term memory is not included in traces."}
-    assert trace["response_body"] == {"redacted": "Long-term memory is not included in traces."}
-    assert "secret-memory-value" not in failure.text
+    assert trace["request_body"] == {"secret": "[REDACTED]"}
+    assert trace["response_body"] == {"echo": "secret-memory-value"}
+    assert "secret-memory-value" in failure.text
 
 
 def test_toggle_persists_and_fork_copies_it_without_message_writes(
@@ -575,7 +575,7 @@ def test_memory_storage_errors_are_generic(monkeypatch) -> None:
     assert response.json()["detail"] == "Long-term memory storage is unavailable"
 
 
-def test_long_term_memory_redacts_provider_failure_trace(monkeypatch, tmp_path: Path) -> None:
+def test_long_term_memory_sanitizes_provider_failure_trace(monkeypatch, tmp_path: Path) -> None:
     sessions = SessionsRepository(tmp_path / "sessions")
     memory = ProfileMemoryRepository(tmp_path / "memory")
     memory.save("planner", [memory_item("decision", "goal", "secret-memory-value")])
@@ -602,9 +602,9 @@ def test_long_term_memory_redacts_provider_failure_trace(monkeypatch, tmp_path: 
 
     assert response.status_code == 502
     trace = response.json()["detail"]["provider_trace"]
-    assert trace["request_body"] == {"redacted": "Long-term memory is not included in traces."}
-    assert trace["response_body"] == {"redacted": "Long-term memory is not included in traces."}
-    assert "secret-memory-value" not in response.text
+    assert trace["request_body"] == {"secret": "[REDACTED]"}
+    assert trace["response_body"] == {"echo": "secret-memory-value"}
+    assert "secret-memory-value" in response.text
 
 
 def test_memory_api_uses_threadpool_and_facts_errors_are_generic(

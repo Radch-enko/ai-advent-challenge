@@ -132,7 +132,7 @@ def test_retry_summarization_preserves_working_and_pending_memory(monkeypatch, t
     assert response.json()["pending_memory"][0]["id"] == "pending"
 
 
-def test_provider_error_redacts_memory_created_by_classifier(monkeypatch, tmp_path):
+def test_provider_error_preserves_memory_and_sanitizes_credentials(monkeypatch, tmp_path):
     sessions = SessionsRepository(tmp_path / "sessions")
     working = WorkingMemoryRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", sessions)
@@ -178,7 +178,7 @@ def test_provider_error_redacts_memory_created_by_classifier(monkeypatch, tmp_pa
     response = TestClient(app).post(f"/sessions/{session.id}/messages", json={"content": "hello"})
 
     assert response.status_code == 502
-    assert response.json()["detail"]["provider_trace"]["request_body"]["redacted"]
+    assert response.json()["detail"]["provider_trace"]["request_body"] == {"memory": "value"}
     assert working.load(session.id)[0].value == "value"
 
 

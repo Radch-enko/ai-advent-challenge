@@ -32,7 +32,9 @@ def _facts_session(session_id: str) -> ChatSession:
     )
 
 
-def test_facts_only_success_redacts_primary_and_facts_traces(monkeypatch, tmp_path):
+def test_facts_only_success_preserves_personal_context_and_redacts_credentials(
+    monkeypatch, tmp_path
+):
     sessions = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", sessions)
     session = _facts_session("facts-success")
@@ -70,10 +72,10 @@ def test_facts_only_success_redacts_primary_and_facts_traces(monkeypatch, tmp_pa
     assert response.status_code == 200
     body = response.json()
     assert body["response"]["trace"] is None
-    assert body["facts_events"][0]["trace"]["request_body"]["redacted"]
+    assert body["facts_events"][0]["trace"]["request_body"] == {"secret": "[REDACTED]"}
 
 
-def test_facts_only_provider_failure_redacts_error_trace(monkeypatch, tmp_path):
+def test_facts_only_provider_failure_redacts_error_credentials(monkeypatch, tmp_path):
     sessions = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", sessions)
     session = _facts_session("facts-failure")
@@ -101,8 +103,8 @@ def test_facts_only_provider_failure_redacts_error_trace(monkeypatch, tmp_path):
 
     assert response.status_code == 502
     trace = response.json()["detail"]["provider_trace"]
-    assert trace["request_body"]["redacted"]
-    assert trace["response_body"]["redacted"]
+    assert trace["request_body"]["secret"] == "[REDACTED]"
+    assert trace["response_body"]["secret"] == "[REDACTED]"
 
 
 def test_context_management_update_waits_for_in_flight_send(monkeypatch, tmp_path):

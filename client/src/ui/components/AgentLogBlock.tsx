@@ -29,6 +29,7 @@ export function AgentLogBlock({ sessionId, agentLogId, memoryEvents = [], onOpen
   const [detail, setDetail] = useState<AgentLogDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState(false)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     if (!sessionId || !agentLogId) return
@@ -48,7 +49,7 @@ export function AgentLogBlock({ sessionId, agentLogId, memoryEvents = [], onOpen
     return () => {
       cancelled = true
     }
-  }, [agentLogId, sessionId])
+  }, [agentLogId, sessionId, attempt])
 
   function toggleExpanded() {
     const next = !expanded
@@ -66,7 +67,7 @@ export function AgentLogBlock({ sessionId, agentLogId, memoryEvents = [], onOpen
     (event) => event.scope === 'working' || event.scope === 'long_term',
   )
 
-  if (!sessionId || !agentLogId || unavailable) return null
+  if (!sessionId || !agentLogId) return null
 
   return (
     <section className="agent-log-block" aria-label="Agent log">
@@ -89,11 +90,27 @@ export function AgentLogBlock({ sessionId, agentLogId, memoryEvents = [], onOpen
       {expanded && (
         <div className="agent-log-details">
           {loading && <p className="agent-log-status">Загружаем детали…</p>}
+          {unavailable && (
+            <p className="agent-log-status" role="alert">
+              Не удалось загрузить лог.{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setUnavailable(false)
+                  setLoading(true)
+                  setAttempt((value) => value + 1)
+                }}
+              >
+                Повторить
+              </button>
+            </p>
+          )}
           {detail && (
             <div className="agent-log-details-card">
               {detail.usage && <TokenUsageDetails usage={detail.usage} />}
               <AgentLogDivider />
               <ModelInfo detail={detail} />
+              <ProfileOperations operations={detail.operations} />
               <AgentLogDivider />
               <HttpCalls exchanges={detail.exchanges} onOpenLogs={openLogs} />
               {hasMemorySummaryEvents && (
@@ -106,6 +123,27 @@ export function AgentLogBlock({ sessionId, agentLogId, memoryEvents = [], onOpen
           )}
         </div>
       )}
+    </section>
+  )
+}
+
+function ProfileOperations({ operations }: { operations: AgentLogDetail['operations'] }) {
+  const operation = operations.find((item) => item.operation === 'user_profile_load')
+  if (!operation) return null
+  const status =
+    operation.status === 'completed'
+      ? 'Loaded'
+      : operation.status === 'skipped'
+        ? 'Skipped'
+        : 'Error'
+  return (
+    <section className="agent-log-operations" aria-label="Контекст">
+      <h3>Контекст</h3>
+      <p>
+        <strong>User profile</strong> · {status} · {operation.profile_name ?? 'Без профиля'} ·{' '}
+        {formatExchangeDuration(operation.duration_seconds)}
+      </p>
+      {operation.message && <p>{operation.message}</p>}
     </section>
   )
 }

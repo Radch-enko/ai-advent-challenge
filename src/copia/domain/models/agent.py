@@ -10,6 +10,7 @@ from typing import Protocol
 from ..services.agent_log_context import agent_log_operation
 from ..services.context_strategy import FactsUpdateFailed as FactsUpdateFailed
 from ..services.context_strategy import context_strategy_for
+from ..services.credential_sanitizer import sanitize_error, sanitize_value
 from ..services.memory_classifier import MemoryClassifier
 from ..services.memory_policy import HybridMemoryPolicy, WorkingMemoryStore
 from ..services.router import LLMRouter, ProviderError
@@ -23,6 +24,7 @@ from .config import (
 )
 from .memory import LongTermMemoryItem, MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem
 from .session import ConversationContext, FactsUpdateEvent, SummarizationEvent
+from .user_profile import UserProfile
 
 
 class ProfilesSource(Protocol):
@@ -57,6 +59,7 @@ class Agent:
         session_id: str | None = None,
         memory_classifier: MemoryClassifier | None = None,
         pending_memory: list[PendingMemorySuggestion] | None = None,
+        user_profile: UserProfile | None = None,
     ) -> None:
         self.config = config
         self._router = router
@@ -73,6 +76,7 @@ class Agent:
         self._memory_classifier = memory_classifier
         self._memory_events: list[MemoryEvent] = []
         self._pending_memory = list(pending_memory or [])
+        self._user_profile = user_profile
         self._strategy = context_strategy_for(
             config,
             router,
@@ -80,6 +84,7 @@ class Agent:
             self._long_term_memory,
             self._context_window,
             self._working_memory,
+            self._user_profile,
         )
 
     @property
@@ -152,6 +157,13 @@ class Agent:
             self._compact_eligible_messages()
         except SummarizationFailed:
             # The user message remains in the transcript so Retry can resume this turn.
+            raise
+        except FactsUpdateFailed as error:
+            # Preserve the failed operation while rolling back the user turn.
+            self._context = context_before_turn
+            self._context.facts_events.append(error.event)
+            self._history.pop()
+            self._strategy.rollback_turn()
             raise
         except Exception:
             self._history.pop()
@@ -268,7 +280,7 @@ class Agent:
         except (ProviderError, ValueError) as error:
             event.status = "failed"
             event.duration_seconds = time.perf_counter() - started_at
-            event.error = str(error)
+            event.error = sanitize_error(str(error))
             event.trace = self._error_trace(error, redact=self.has_sensitive_memory)
             event.updated_at = datetime.now(UTC)
             self._operation_events.append(event.model_copy(deep=True))
@@ -278,9 +290,9 @@ class Agent:
         event.duration_seconds = time.perf_counter() - started_at
         event.usage = response.usage
         event.trace = (
-            self._redact_trace(response).trace
-            if self.has_sensitive_memory and response.trace is not None
-            else response.trace
+            ProviderTrace.model_validate(sanitize_value(response.trace.model_dump()))
+            if response.trace is not None
+            else None
         )
         event.error = None
         event.updated_at = datetime.now(UTC)
@@ -332,6 +344,7 @@ class Agent:
             self._long_term_memory,
             self._context_window,
             self._working_memory,
+            self._user_profile,
         )
 
     def _classify_memory(self, content: str) -> None:
@@ -349,7 +362,13 @@ class Agent:
                 self._history[-2].content if len(self._history) > 1 else None,
             )
             classifier_error = getattr(self._memory_classifier, "last_error", None)
+            if classifier_error is not None:
+                classifier_error = sanitize_error(str(classifier_error))
             memory_trace = getattr(self._memory_classifier, "last_trace", None)
+            if memory_trace is not None:
+                memory_trace = ProviderTrace.model_validate(
+                    sanitize_value(memory_trace.model_dump())
+                )
             memory_duration = getattr(self._memory_classifier, "last_duration_seconds", None)
             if memory_trace is None and memory_duration is not None:
                 memory_trace = ProviderTrace(
@@ -402,6 +421,7 @@ class Agent:
                 self._long_term_memory,
                 self._context_window,
                 self._working_memory,
+                user_profile=self._user_profile,
             )
         except Exception as error:
             self._memory_events.append(
@@ -409,7 +429,7 @@ class Agent:
                     id=str(uuid.uuid4()),
                     scope="working",
                     action="error",
-                    message=(
+                    message=sanitize_error(
                         "Memory update failed: "
                         f"{type(error).__name__}: {str(error) or type(error).__name__}"
                     ),
@@ -417,10 +437,10 @@ class Agent:
             )
 
     def _redact_long_term_trace(self, response: LLMResponse) -> LLMResponse:
-        if not self.has_sensitive_memory or response.trace is None:
+        if response.trace is None:
             return response
         result = response.model_copy(deep=True)
-        result.trace = None
+        result.trace = ProviderTrace.model_validate(sanitize_value(response.trace.model_dump()))
         return result
 
     @staticmethod
@@ -432,12 +452,8 @@ class Agent:
             response_body = {"raw": response_body}
         return ProviderTrace(
             status_code=error.status_code,
-            request_body={"redacted": "Memory is not included in traces."}
-            if redact
-            else error.request_body,
-            response_body={"redacted": "Memory is not included in traces."}
-            if redact
-            else response_body,
+            request_body=sanitize_value(error.request_body),
+            response_body=sanitize_value(response_body),
         )
 
 

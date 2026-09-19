@@ -7,6 +7,7 @@ import {
   TokenUsage,
 } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
+import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -58,6 +59,7 @@ export type ChatSession = {
   id: string
   title: string | null
   profile_name: string | null
+  user_profile_id: string | null
   long_term_memory_enabled: boolean
   config: AgentConfig
   messages: StoredMessage[]
@@ -87,6 +89,19 @@ export class ApiRequestError extends Error {
     const detail = this.body.detail
     return typeof detail === 'object' && detail !== null && 'provider_trace' in detail
       ? (detail.provider_trace as ChatResponse['response']['trace'])
+      : undefined
+  }
+
+  get errorCode(): string | undefined {
+    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
+      return undefined
+    }
+    const detail = this.body.detail
+    return typeof detail === 'object' &&
+      detail !== null &&
+      'code' in detail &&
+      typeof detail.code === 'string'
+      ? detail.code
       : undefined
   }
 
@@ -151,7 +166,10 @@ async function requestWithMeta<T>(path: string, init?: RequestInit): Promise<Api
     const body = await response.json().catch(() => null)
     throw new ApiRequestError(response.status, body)
   }
-  return { data: (await response.json()) as T, status: response.status }
+  return {
+    data: response.status === 204 ? (undefined as T) : ((await response.json()) as T),
+    status: response.status,
+  }
 }
 
 export async function createAgent(config: AgentConfig): Promise<string> {
@@ -256,6 +274,33 @@ export async function createAgentFromProfile(profileName: string): Promise<strin
 export function getSessions(): Promise<ChatSessionSummary[]> {
   return request('/sessions')
 }
+export function getUserProfiles(): Promise<UserProfile[]> {
+  return request('/user-profiles')
+}
+export function createUserProfile(input: UserProfileInput): Promise<UserProfile> {
+  return request('/user-profiles', { method: 'POST', body: JSON.stringify(input) })
+}
+export function updateUserProfile(
+  profileId: string,
+  input: UserProfileUpdate,
+): Promise<UserProfile> {
+  return request(`/user-profiles/${encodeURIComponent(profileId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+export function deleteUserProfile(profileId: string): Promise<void> {
+  return request(`/user-profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' })
+}
+export function updateSessionUserProfile(
+  sessionId: string,
+  profileId: string | null,
+): Promise<ChatSession> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/user-profile`, {
+    method: 'PATCH',
+    body: JSON.stringify({ user_profile_id: profileId }),
+  })
+}
 export function getSession(sessionId: string): Promise<ChatSession> {
   return request(`/sessions/${sessionId}`)
 }
@@ -313,8 +358,14 @@ export function rejectMemory(
     method: 'POST',
   })
 }
-export function createSession(config: AgentConfig): Promise<ChatSession> {
-  return request('/sessions', { method: 'POST', body: JSON.stringify({ config }) })
+export function createSession(
+  config: AgentConfig,
+  userProfileId: string | null = null,
+): Promise<ChatSession> {
+  return request('/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ config, user_profile_id: userProfileId }),
+  })
 }
 export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
   return request('/sessions', {

@@ -1,46 +1,26 @@
 from __future__ import annotations
 
-import re
 import time
 from datetime import UTC, datetime
 from functools import partial
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from ...domain.contracts import AgentLogSink
 from ...domain.models.agent_log import AgentLogContext, AgentLogExchange
 from ...domain.services.agent_log_context import current_agent_log_context
+from ...domain.services.credential_sanitizer import (
+    is_sensitive_key,
+    sanitize_error,
+    sanitize_text,
+    sanitize_url,
+)
 
 _STARTED_AT = "copia.agent_log.started_at"
 _CONTEXT = "copia.agent_log.context"
 _REQUEST_BODY = "copia.agent_log.request_body"
 _SKIP = "copia.agent_log.skip"
 _RESPONSE_RECORDED = "copia.agent_log.response_recorded"
-_SENSITIVE_FIELD = re.compile(
-    r"(?P<prefix>[\"']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"id[_-]?token|client[_-]?secret|auth[_-]?key|cookie|set[_-]?cookie|password|secret|"
-    r"token)[\"']?\s*[:=]\s*)"
-    r"(?P<value>[\"'](?:\\.|[^\"'])*(?:[\"']|$)|[^,;&}#\r\n]*)",
-    re.IGNORECASE,
-)
-_BEARER_VALUE = re.compile(r"\b(Bearer|Basic)\s+[^\s,;]+", re.IGNORECASE)
-_SENSITIVE_QUERY = re.compile(
-    r"([?&](?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|"
-    r"client[_-]?secret|auth[_-]?key|cookie|set[_-]?cookie|token|secret|password|key)=[^&#]*)",
-    re.IGNORECASE,
-)
-_SENSITIVE_FRAGMENT = re.compile(
-    r"([&#](?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|"
-    r"client[_-]?secret|auth[_-]?key|cookie|set[_-]?cookie|token|secret|password|key)=[^&#]*)",
-    re.IGNORECASE,
-)
-_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-_CREDENTIAL_PATH = re.compile(
-    r"(?P<prefix>/(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"id[_-]?token|client[_-]?secret|auth[_-]?key)(?:=|:|/))(?P<value>[^/?#&]+)",
-    re.IGNORECASE,
-)
 _SENSITIVE_HEADER_PARTS = (
     "authorization",
     "api-key",
@@ -58,6 +38,8 @@ _SENSITIVE_HEADER_PARTS = (
     "token",
     "password",
     "secret",
+    "www-authenticate",
+    "proxy-authenticate",
 )
 
 
@@ -248,14 +230,14 @@ def _request_content(request: httpx.Request) -> bytes | None:
 def _capture_body(store: AgentLogSink, body: bytes | None) -> tuple[bytes | None, bool]:
     if body is None:
         return None, False
-    truncated = len(body) > store.max_body_bytes
-    limited = body[: store.max_body_bytes]
-    redacted = _redacted_body(limited)
+    # Redact the complete payload first. Truncating before this step could leave
+    # a profile value in the retained prefix when the closing delimiter is past
+    # the body limit.
+    redacted = _redacted_body(body)
     if redacted is None:
-        return None, truncated
-    if len(redacted) > store.max_body_bytes:
-        return redacted[: store.max_body_bytes], True
-    return redacted, truncated
+        return None, len(body) > store.max_body_bytes
+    truncated = len(redacted) > store.max_body_bytes
+    return redacted[: store.max_body_bytes], truncated
 
 
 def _redacted_body(body: bytes | None) -> bytes | None:
@@ -270,16 +252,7 @@ def _redacted_body(body: bytes | None) -> bytes | None:
         text = body.decode("latin-1")
         encoding = "latin-1"
 
-    def replace_field(match: re.Match[str]) -> str:
-        value = match.group("value")
-        if value[:1] in {"'", '"'}:
-            replacement = f"{value[0]}[REDACTED]{value[0]}"
-        else:
-            replacement = "[REDACTED]"
-        return f"{match.group('prefix')}{replacement}"
-
-    text = _SENSITIVE_FIELD.sub(replace_field, text)
-    text = _BEARER_VALUE.sub(r"\1 [REDACTED]", text)
+    text = sanitize_text(text)
     return text.encode(encoding)
 
 
@@ -292,28 +265,16 @@ def _redact_headers(headers: httpx.Headers) -> dict[str, str]:
 
 def _is_sensitive_header(name: str) -> bool:
     normalized = name.lower()
-    return any(part in normalized for part in _SENSITIVE_HEADER_PARTS)
+    return is_sensitive_key(name) or any(part in normalized for part in _SENSITIVE_HEADER_PARTS)
 
 
 def redact_url(url: str) -> str:
-    def replace_query(match: re.Match[str]) -> str:
-        return f"{match.group(0).split('=', 1)[0]}=[REDACTED]"
-
-    parts = urlsplit(url)
-    netloc = parts.netloc
-    if "@" in netloc:
-        _, netloc = netloc.rsplit("@", 1)
-    path = _CREDENTIAL_PATH.sub(r"\g<prefix>[REDACTED]", parts.path)
-    query = _SENSITIVE_QUERY.sub(replace_query, f"?{parts.query}")[1:] if parts.query else ""
-    fragment = (
-        _SENSITIVE_FRAGMENT.sub(replace_query, f"#{parts.fragment}")[1:] if parts.fragment else ""
-    )
-    return urlunsplit((parts.scheme, netloc, path, query, fragment))
+    return sanitize_url(url)
 
 
 def redact_url_text(value: str) -> str:
     """Apply URL redaction to embedded URLs without changing ordinary text."""
-    return _URL_IN_TEXT.sub(lambda match: redact_url(match.group(0)), value)
+    return sanitize_text(value)
 
 
 def _redact_url(url: str) -> str:
@@ -332,8 +293,7 @@ def _duration_for(request: httpx.Request) -> float:
 
 
 def _safe_error(value: str) -> str:
-    redacted = _redacted_body(value.encode("utf-8")) or b""
-    return _redact_url(redacted.decode("utf-8", errors="replace"))[:500]
+    return sanitize_error(value)
 
 
 def _new_id() -> str:

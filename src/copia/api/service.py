@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import base64
 import os
-import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -27,9 +27,13 @@ from ..data.profile_memory_repository import (
     ProfileMemoryRepository,
 )
 from ..data.profiles_repository import ProfilesRepository
-from ..data.providers.http_logging import redact_url_text
 from ..data.providers.llm import ProviderError
 from ..data.sessions_repository import SessionsRepository
+from ..data.user_profiles_repository import (
+    JsonUserProfilesRepository,
+    UserProfileNameConflictError,
+    UserProfileStorageError,
+)
 from ..data.working_memory_repository import WorkingMemoryRepository
 from ..domain.models.agent import (
     Agent,
@@ -38,7 +42,7 @@ from ..domain.models.agent import (
     SummarizationFailed,
     SummarizationRetryRequired,
 )
-from ..domain.models.agent_log import AgentLogExchange, AgentLogTurn
+from ..domain.models.agent_log import AgentLogExchange, AgentLogOperation, AgentLogTurn
 from ..domain.models.config import (
     AgentConfig,
     ChatMessage,
@@ -67,7 +71,10 @@ from ..domain.models.session import (
     FactsUpdateEvent,
     SummarizationEvent,
 )
+from ..domain.models.user_profile import UserProfile, UserProfileCreate, UserProfileUpdate
 from ..domain.services.agent_log_context import agent_log_operation, agent_log_turn
+from ..domain.services.context_strategy import _render_user_profile_block
+from ..domain.services.credential_sanitizer import sanitize_error, sanitize_text, sanitize_value
 from ..domain.services.memory_classifier import LLMMemoryClassifier
 from ..domain.services.router import LLMRouter
 
@@ -85,6 +92,7 @@ profile_memory = ProfileMemoryRepository(Path(os.getenv("COPIA_MEMORY_PATH", "~/
 working_memory = WorkingMemoryRepository(sessions_path)
 pending_memory: dict[str, list[PendingMemorySuggestion]] = {}
 pending_memory_repository = PendingMemoryRepository(sessions_path)
+user_profiles = JsonUserProfilesRepository()
 session_lifecycle_lock = threading.RLock()
 
 
@@ -104,34 +112,16 @@ approved_memory_mutations: OrderedDict[tuple[str, str], LongTermMemoryMutationRe
 
 app = FastAPI(title="Copia API", version="0.1.0")
 
-_SENSITIVE_ERROR_FIELD = re.compile(
-    r"(?P<prefix>[\"']?(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"id[_-]?token|client[_-]?secret|auth[_-]?key|password|secret|token)[\"']?\s*[:=]\s*)"
-    r"(?P<value>[\"'](?:\\.|[^\"'])*(?:[\"']|$)|[^,;&}#\r\n]*)",
-    re.IGNORECASE,
-)
-_BEARER_ERROR_VALUE = re.compile(r"\b(Bearer|Basic)\s+[^\s,;]+", re.IGNORECASE)
-_SENSITIVE_ERROR_QUERY = re.compile(
-    r"([?&](?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|"
-    r"client[_-]?secret|auth[_-]?key|token|secret|password|key)=[^&#]*)",
-    re.IGNORECASE,
-)
-
 
 def provider_error_detail(
     error: ProviderError, *, redact_request: bool = False
 ) -> dict[str, object]:
-    marker = (
-        "Long-term memory is not included in traces."
-        if redact_request
-        else "Provider body is available in the session agent log."
-    )
     return {
         "message": "Provider request failed",
         "provider_trace": {
             "status_code": error.status_code,
-            "request_body": {"redacted": marker},
-            "response_body": {"redacted": marker},
+            "request_body": sanitize_value(error.request_body),
+            "response_body": sanitize_value(error.response_body),
         },
     }
 
@@ -255,6 +245,7 @@ class AgentLogResponse(BaseModel):
     completed_at: datetime | None = None
     duration_seconds: float
     error: str | None = None
+    operations: list[AgentLogOperation] = Field(default_factory=list)
     exchanges: list[AgentLogExchangeResponse] = Field(default_factory=list)
 
 
@@ -310,6 +301,7 @@ def _agent_log_response(turn: AgentLogTurn) -> AgentLogResponse:
         completed_at=turn.completed_at,
         duration_seconds=turn.duration_seconds,
         error=turn.error,
+        operations=turn.operations,
         exchanges=[_agent_log_exchange_response(exchange) for exchange in turn.exchanges],
     )
 
@@ -356,8 +348,8 @@ def _safe_trace(trace: ProviderTrace | None) -> ProviderTrace | None:
         return None
     return ProviderTrace(
         status_code=trace.status_code,
-        request_body={"redacted": "Provider body is available in the session agent log."},
-        response_body={"redacted": "Provider body is available in the session agent log."},
+        request_body=sanitize_value(trace.request_body),
+        response_body=sanitize_value(trace.response_body),
     )
 
 
@@ -394,34 +386,18 @@ def _safe_memory_events(events: list[MemoryEvent]) -> list[MemoryEvent]:
 def _safe_error_text(value: str | None) -> str | None:
     if value is None:
         return None
-    safe = redact_url_text(value)
-    safe = _BEARER_ERROR_VALUE.sub(r"\1 [REDACTED]", safe)
-
-    def replace_field(match: re.Match[str]) -> str:
-        value = match.group("value")
-        if value[:1] in {"'", '"'}:
-            replacement = f"{value[0]}[REDACTED]{value[0]}"
-        else:
-            replacement = "[REDACTED]"
-        return f"{match.group('prefix')}{replacement}"
-
-    safe = _SENSITIVE_ERROR_FIELD.sub(replace_field, safe)
-    safe = _SENSITIVE_ERROR_QUERY.sub(
-        lambda match: f"{match.group(0).split('=', 1)[0]}=[REDACTED]", safe
-    )
-    return " ".join(safe.replace("\n", " ").split())[:500]
+    return sanitize_error(value)
 
 
-def _session_failure_trace(status_code: int, *, sensitive: bool) -> ProviderTrace:
-    marker = (
-        "Long-term memory is not included in traces."
-        if sensitive
-        else "Provider body is available in the session agent log."
-    )
+def _session_failure_trace(error: ProviderError) -> ProviderTrace:
     return ProviderTrace(
-        status_code=status_code,
-        request_body={"redacted": marker},
-        response_body={"redacted": marker},
+        status_code=error.status_code,
+        request_body=sanitize_value(error.request_body),
+        response_body=sanitize_value(
+            error.response_body
+            if isinstance(error.response_body, dict)
+            else {"raw": error.response_body}
+        ),
     )
 
 
@@ -433,6 +409,7 @@ class CompletionRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     profile_name: str | None = None
     config: AgentConfig | None = None
+    user_profile_id: str | None = None
 
     @model_validator(mode="after")
     def require_one_source(self) -> CreateSessionRequest:
@@ -441,6 +418,10 @@ class CreateSessionRequest(BaseModel):
         if (self.profile_name is None) == (self.config is None):
             raise ValueError("Provide exactly one of profile_name or config")
         return self
+
+
+class UserProfileSelectionUpdate(BaseModel):
+    user_profile_id: str | None = None
 
 
 class ForkSessionRequest(BaseModel):
@@ -558,6 +539,71 @@ def _session_initialization_error(
     )
 
 
+async def _load_user_profile_for_turn(
+    session: ChatSession, agent_log_id: str
+) -> UserProfile | None:
+    started = time.perf_counter()
+    if session.user_profile_id is None:
+        agent_log_store.append_operation(
+            AgentLogOperation(
+                id=str(uuid.uuid4()),
+                agent_turn_id=agent_log_id,
+                session_id=session.id,
+                operation="user_profile_load",
+                status="skipped",
+                preference_count=0,
+                applied=False,
+                duration_seconds=time.perf_counter() - started,
+                created_at=datetime.now(UTC),
+            )
+        )
+        return None
+    try:
+        profile = await run_in_threadpool(user_profiles.get, session.user_profile_id)
+        if profile is None:
+            raise UserProfileStorageError("User profile was not found")
+        # Validate the rendered, escaped prompt before recording the operation
+        # as applied. This also protects against legacy storage bypassing API
+        # model validation.
+        _render_user_profile_block(profile)
+    except (UserProfileStorageError, OSError, ValueError) as error:
+        agent_log_store.append_operation(
+            AgentLogOperation(
+                id=str(uuid.uuid4()),
+                agent_turn_id=agent_log_id,
+                session_id=session.id,
+                operation="user_profile_load",
+                status="failed",
+                profile_id=session.user_profile_id,
+                preference_count=0,
+                applied=False,
+                duration_seconds=time.perf_counter() - started,
+                error_code="user_profile_unavailable",
+                message="User profile could not be loaded",
+                created_at=datetime.now(UTC),
+            )
+        )
+        raise _session_initialization_error(
+            agent_log_id, "User profile is unavailable", "user_profile_unavailable", 409
+        ) from error
+    agent_log_store.append_operation(
+        AgentLogOperation(
+            id=str(uuid.uuid4()),
+            agent_turn_id=agent_log_id,
+            session_id=session.id,
+            operation="user_profile_load",
+            status="completed",
+            profile_id=profile.id,
+            profile_name=sanitize_text(profile.name),
+            preference_count=5,
+            applied=True,
+            duration_seconds=time.perf_counter() - started,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return profile
+
+
 def _cache_approved_memory_mutation(
     key: tuple[str, str], result: LongTermMemoryMutationResponse
 ) -> None:
@@ -654,6 +700,91 @@ def list_sessions() -> list[ChatSessionSummary]:
     return sessions.list()
 
 
+def _user_profile_error(code: str, message: str, status_code: int) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _sorted_user_profiles() -> list[UserProfile]:
+    return sorted(user_profiles.list(), key=lambda profile: (profile.name.casefold(), profile.id))
+
+
+@app.get("/user-profiles", response_model=list[UserProfile])
+async def list_user_profiles() -> list[UserProfile]:
+    try:
+        return await run_in_threadpool(_sorted_user_profiles)
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
+
+
+@app.post("/user-profiles", response_model=UserProfile, status_code=status.HTTP_201_CREATED)
+async def create_user_profile(request: UserProfileCreate) -> UserProfile:
+    def create() -> UserProfile:
+        now = datetime.now(UTC)
+        return user_profiles.create(
+            UserProfile(
+                id=str(uuid.uuid4()), **request.model_dump(), created_at=now, updated_at=now
+            )
+        )
+
+    try:
+        return await run_in_threadpool(create)
+    except UserProfileNameConflictError as error:
+        raise _user_profile_error(
+            "user_profile_name_conflict", "A user profile with this name already exists", 409
+        ) from error
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
+
+
+@app.patch("/user-profiles/{profile_id}", response_model=UserProfile)
+async def update_user_profile(profile_id: str, request: UserProfileUpdate) -> UserProfile:
+    def update() -> UserProfile:
+        current = user_profiles.get(profile_id)
+        if current is None:
+            raise _user_profile_error("user_profile_not_found", "User profile was not found", 404)
+        changes = request.model_dump(exclude_none=True)
+        changes["updated_at"] = datetime.now(UTC)
+        return user_profiles.update(profile_id, changes)
+
+    try:
+        return await run_in_threadpool(update)
+    except UserProfileNameConflictError as error:
+        raise _user_profile_error(
+            "user_profile_name_conflict", "A user profile with this name already exists", 409
+        ) from error
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
+
+
+@app.delete("/user-profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_profile(profile_id: str) -> None:
+    def delete() -> None:
+        if user_profiles.get(profile_id) is None:
+            raise _user_profile_error("user_profile_not_found", "User profile was not found", 404)
+        if any(
+            (session := sessions.load(summary.id)) is not None
+            and session.user_profile_id == profile_id
+            for summary in sessions.list()
+        ):
+            raise _user_profile_error(
+                "user_profile_in_use", "User profile is used by a session", 409
+            )
+        user_profiles.delete(profile_id)
+
+    try:
+        await run_in_threadpool(delete)
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
+
+
 @app.post("/sessions", response_model=ChatSession, status_code=status.HTTP_201_CREATED)
 def create_session(request: CreateSessionRequest) -> ChatSession:
     try:
@@ -666,12 +797,23 @@ def create_session(request: CreateSessionRequest) -> ChatSession:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown profile: {request.profile_name}"
         ) from error
+    try:
+        if (
+            request.user_profile_id is not None
+            and user_profiles.get(request.user_profile_id) is None
+        ):
+            raise _user_profile_error("user_profile_not_found", "User profile was not found", 404)
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
     assert config is not None
     now = datetime.now(UTC)
     session = ChatSession(
         id=str(uuid.uuid4()),
         config=config,
         profile_name=request.profile_name,
+        user_profile_id=request.user_profile_id,
         created_at=now,
         updated_at=now,
     )
@@ -786,6 +928,39 @@ def update_session_context_management(
         _release_session_message_lock(message_lock)
 
 
+@app.patch("/sessions/{session_id}/user-profile", response_model=ChatSession)
+async def update_session_user_profile(
+    session_id: str, request: UserProfileSelectionUpdate
+) -> ChatSession:
+    def update() -> ChatSession:
+        message_lock = _session_message_lock(session_id)
+        message_lock.lock.acquire()
+        try:
+            with session_lifecycle_lock:
+                session = _get_session_locked(session_id)
+                if (
+                    request.user_profile_id is not None
+                    and user_profiles.get(request.user_profile_id) is None
+                ):
+                    raise _user_profile_error(
+                        "user_profile_not_found", "User profile was not found", 404
+                    )
+                session.user_profile_id = request.user_profile_id
+                session.updated_at = datetime.now(UTC)
+                sessions.save(session)
+                return session
+        finally:
+            message_lock.lock.release()
+            _release_session_message_lock(message_lock)
+
+    try:
+        return await run_in_threadpool(update)
+    except UserProfileStorageError as error:
+        raise _user_profile_error(
+            "user_profile_unavailable", "User profiles are unavailable", 500
+        ) from error
+
+
 @app.patch("/sessions/{session_id}/long-term-memory", response_model=ChatSession)
 async def update_session_long_term_memory(
     session_id: str, request: LongTermMemoryToggleUpdate
@@ -845,6 +1020,7 @@ def fork_session(session_id: str, request: ForkSessionRequest) -> ChatSession:
             ],
             title=f"{source.title or 'Новый чат'} · ветка",
             profile_name=source.profile_name,
+            user_profile_id=source.user_profile_id,
             long_term_memory_enabled=source.long_term_memory_enabled,
             created_at=now,
             updated_at=now,
@@ -881,6 +1057,7 @@ async def _send_session_message_locked(
     agent_log_id = agent_log_store.start_turn(session.id)
     if request.config is not None and session.profile_name is None:
         session.config = request.config
+    user_profile = await _load_user_profile_for_turn(session, agent_log_id)
     try:
         facts = await run_in_threadpool(sessions.load_facts, session.id)
     except (OSError, ValueError) as error:
@@ -919,6 +1096,7 @@ async def _send_session_message_locked(
             session_id=session.id,
             memory_classifier=LLMMemoryClassifier(router, session.config),
             pending_memory=loaded_pending_memory,
+            user_profile=user_profile,
         )
     except (OSError, TypeError, ValueError) as error:
         raise _session_initialization_error(
@@ -929,6 +1107,7 @@ async def _send_session_message_locked(
             _ask_agent, session.id, agent, request.content, agent_log_id, True
         )
     except FactsUpdateFailed as error:
+        _save_agent_state(session, agent)
         _finish_agent_log(
             agent_log_id,
             provider=error.event.provider,
@@ -990,9 +1169,7 @@ async def _send_session_message_locked(
                 "message": "Provider request failed",
                 "code": "provider_request_failed",
                 "agent_log_id": agent_log_id,
-                "provider_trace": _session_failure_trace(
-                    error.status_code, sensitive=agent.has_sensitive_memory
-                ).model_dump(mode="json"),
+                "provider_trace": _session_failure_trace(error).model_dump(mode="json"),
             },
         ) from error
 
@@ -1048,6 +1225,7 @@ async def retry_session_summarization(session_id: str) -> SessionMessageResponse
                 agent_log_id, "Session is unavailable", "session_unavailable"
             ) from error
         agent_log_id = agent_log_store.start_turn(session.id)
+        user_profile = await _load_user_profile_for_turn(session, agent_log_id)
         try:
             facts = await run_in_threadpool(sessions.load_facts, session.id)
             long_term_memory = await run_in_threadpool(
@@ -1080,6 +1258,7 @@ async def retry_session_summarization(session_id: str) -> SessionMessageResponse
                 session_id=session.id,
                 memory_classifier=LLMMemoryClassifier(router, session.config),
                 pending_memory=loaded_pending_memory,
+                user_profile=user_profile,
             )
         except (OSError, TypeError, ValueError) as error:
             raise _session_initialization_error(
@@ -1132,9 +1311,7 @@ async def retry_session_summarization(session_id: str) -> SessionMessageResponse
                     "message": "Provider request failed",
                     "code": "provider_request_failed",
                     "agent_log_id": agent_log_id,
-                    "provider_trace": _session_failure_trace(
-                        error.status_code, sensitive=agent.has_sensitive_memory
-                    ).model_dump(mode="json"),
+                    "provider_trace": _session_failure_trace(error).model_dump(mode="json"),
                 },
             ) from error
 

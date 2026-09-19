@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .models.agent_log import AgentLogExchange, AgentLogTurn
+from .models.agent_log import AgentLogExchange, AgentLogOperation, AgentLogTurn
 from .models.config import ChatMessage
 from .models.memory import LongTermMemoryItem, WorkingMemoryItem
 
@@ -17,6 +17,11 @@ class AgentLogSink(Protocol):
 
 
 @runtime_checkable
+class AgentLogOperationSink(Protocol):
+    def append_operation(self, operation: AgentLogOperation) -> None: ...
+
+
+@runtime_checkable
 class AgentLogRepository(Protocol):
     """Durable storage contract for completed and in-progress agent turns."""
 
@@ -27,6 +32,18 @@ class AgentLogRepository(Protocol):
     def delete(self, session_id: str, agent_turn_id: str) -> None: ...
 
     def delete_session(self, session_id: str) -> None: ...
+
+
+class UserProfilesRepository(Protocol):
+    def list(self) -> list[object]: ...
+
+    def get(self, profile_id: str) -> object | None: ...
+
+    def create(self, profile: object) -> object: ...
+
+    def update(self, profile_id: str, changes: dict[str, object]) -> object: ...
+
+    def delete(self, profile_id: str) -> None: ...
 
 
 @runtime_checkable

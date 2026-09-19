@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import RLock
 
 from ..domain.contracts import AgentLogRepository
-from ..domain.models.agent_log import AgentLogExchange, AgentLogTurn
+from ..domain.models.agent_log import AgentLogExchange, AgentLogOperation, AgentLogTurn
 from ..domain.models.config import ProviderName
+from ..domain.services.credential_sanitizer import sanitize_error
 
 MAX_AGENT_LOG_BODY_BYTES = 64 * 1024
 MAX_AGENT_LOG_TURNS = 100
@@ -31,6 +31,7 @@ class _TurnRecord:
     duration_seconds: float = 0
     error: str | None = None
     exchanges: list[AgentLogExchange] = field(default_factory=list)
+    operations: list[AgentLogOperation] = field(default_factory=list)
 
 
 class AgentLogStore:
@@ -111,6 +112,14 @@ class AgentLogStore:
                 self._persist(record)
             return any(item.id == bounded.id for item in record.exchanges)
 
+    def append_operation(self, operation: AgentLogOperation) -> None:
+        with self._lock:
+            record = self._turns.get(operation.agent_turn_id)
+            if record is None or record.session_id != operation.session_id:
+                return
+            record.operations.append(operation)
+            self._persist(record)
+
     def finish_turn(
         self,
         agent_turn_id: str,
@@ -132,7 +141,7 @@ class AgentLogStore:
             record.status = status
             record.completed_at = now
             record.duration_seconds = max(0, (now - record.started_at).total_seconds())
-            record.error = _safe_error(error) if error else None
+            record.error = sanitize_error(error) if error else None
             self._turns.move_to_end(agent_turn_id)
             self._persist(record)
 
@@ -244,19 +253,8 @@ def _snapshot(record: _TurnRecord) -> AgentLogTurn:
         duration_seconds=record.duration_seconds,
         error=record.error,
         exchanges=[exchange.model_copy(deep=True) for exchange in record.exchanges],
+        operations=[operation.model_copy(deep=True) for operation in record.operations],
     )
-
-
-def _safe_error(error: str) -> str:
-    safe = re.sub(r"\b(Bearer|Basic)\s+[^\s,;]+", r"\1 [REDACTED]", error, flags=re.IGNORECASE)
-    safe = re.sub(
-        r"(?i)(?P<prefix>(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-        r"id[_-]?token|client[_-]?secret|auth[_-]?key|password|secret|token)\s*[:=]\s*)"
-        r"[^\s,;}]*",
-        lambda match: f"{match.group('prefix')}[REDACTED]",
-        safe,
-    )
-    return " ".join(safe.replace("\n", " ").split())[:500]
 
 
 def _new_id() -> str:

@@ -3,6 +3,7 @@ import {
   Fragment,
   KeyboardEvent,
   ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -22,6 +23,7 @@ import {
   deleteSession,
   forkSession,
   getModels,
+  getUserProfiles,
   getProfiles,
   getProfileMemory,
   getSession,
@@ -37,9 +39,11 @@ import {
   updateSessionContextManagement,
   updateSessionLongTermMemory,
   updateProfileMemory,
+  updateSessionUserProfile,
 } from './data/api/copiaApi'
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
+import { UserProfile } from './domain/models/userProfile'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -56,6 +60,7 @@ import {
 import { AgentLogBlock } from './ui/components/AgentLogBlock'
 import { LongTermMemoryEditor, MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
 import { RequestLogs } from './ui/components/RequestLogs'
+import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
 
 const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
@@ -131,7 +136,7 @@ function defaultContextManagement(provider: Provider, model: string): ContextMan
 }
 
 export function App() {
-  const [mode, setMode] = useState<'chat' | 'agents'>('chat')
+  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles'>('chat')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState(providerModels.openai)
   const [systemPrompt, setSystemPrompt] = useState('You are Copia, a helpful personal assistant.')
@@ -173,6 +178,16 @@ export function App() {
   const [models, setModels] = useState<ProviderModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, AgentConfig>>({})
+  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([])
+  const [userProfilesLoading, setUserProfilesLoading] = useState(false)
+  const [userProfilesError, setUserProfilesError] = useState<string | null>(null)
+  const [profileSelectionError, setProfileSelectionError] = useState<string | null>(null)
+  const [profileSelectionLoading, setProfileSelectionLoading] = useState(false)
+  const [sessionListRefreshError, setSessionListRefreshError] = useState<string | null>(null)
+  const [lastProfileSelection, setLastProfileSelection] = useState<{
+    id: string | null
+  } | null>(null)
+  const [selectedUserProfileId, setSelectedUserProfileId] = useState<string | null>(null)
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null)
   const [savedSessions, setSavedSessions] = useState<ChatSessionSummary[]>([])
   const composerRef = useRef<HTMLTextAreaElement>(null)
@@ -224,6 +239,36 @@ export function App() {
       .then(setProfiles)
       .catch(() => setProfiles({}))
   }, [])
+  const refreshUserProfiles = useCallback(async (showError = true): Promise<boolean> => {
+    setUserProfilesLoading(true)
+    try {
+      setUserProfiles(await getUserProfiles())
+      setUserProfilesError(null)
+      return true
+    } catch (error) {
+      if (showError) {
+        setUserProfilesError(
+          error instanceof Error ? error.message : 'Не удалось загрузить профили',
+        )
+      }
+      return false
+    } finally {
+      setUserProfilesLoading(false)
+    }
+  }, [])
+  const refreshSessions = useCallback(async (): Promise<boolean> => {
+    try {
+      setSavedSessions(await getSessions())
+      setSessionListRefreshError(null)
+      return true
+    } catch {
+      setSessionListRefreshError('Не удалось обновить список сессий.')
+      return false
+    }
+  }, [])
+  useEffect(() => {
+    queueMicrotask(() => void refreshUserProfiles())
+  }, [refreshUserProfiles])
   useEffect(() => {
     const profileName = activeSession?.profile_name
     if (!profileName) return
@@ -241,11 +286,7 @@ export function App() {
   }, [activeSession?.id, activeSession?.profile_name])
   useEffect(() => {
     void (async () => {
-      try {
-        setSavedSessions(await getSessions())
-      } catch {
-        setSavedSessions([])
-      }
+      await refreshSessions()
       const sessionId = localStorage.getItem('copia.activeSessionId')
       if (!sessionId) return
       activeSessionIdRef.current = sessionId
@@ -255,6 +296,7 @@ export function App() {
         setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
+        setSelectedUserProfileId(session.user_profile_id)
         if (session.profile_name == null) {
           setProvider(session.config.provider)
           setModel(session.config.model)
@@ -311,14 +353,12 @@ export function App() {
         setProfileSettingsError(null)
         setForkError(null)
         setMemoryPanelOpen(false)
-        void getSessions()
-          .then(setSavedSessions)
-          .catch(() => setSavedSessions([]))
+        void refreshSessions()
       } catch {
         localStorage.removeItem('copia.activeSessionId')
       }
     })()
-  }, [])
+  }, [refreshSessions])
 
   const baseConfig = useMemo<AgentConfig>(
     () => ({
@@ -370,7 +410,7 @@ export function App() {
       ])
       session = activeSession
       if (!session) {
-        session = await createSession(config)
+        session = await createSession(config, selectedUserProfileId)
         setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
@@ -554,6 +594,7 @@ export function App() {
 
   function openSession(session: ChatSession) {
     setActiveSession(session)
+    setSelectedUserProfileId(session.user_profile_id)
     activeSessionIdRef.current = session.id
     localStorage.setItem('copia.activeSessionId', session.id)
     if (session.profile_name == null) applyConfig(session.config)
@@ -609,12 +650,33 @@ export function App() {
     })
   }
 
-  async function refreshSessions() {
-    try {
-      setSavedSessions(await getSessions())
-    } catch {
-      setSavedSessions([])
+  async function selectUserProfile(profileId: string | null) {
+    if (!activeSession) {
+      setSelectedUserProfileId(profileId)
+      setProfileSelectionError(null)
+      return
     }
+    setProfileSelectionLoading(true)
+    setProfileSelectionError(null)
+    setLastProfileSelection({ id: profileId })
+    try {
+      const updated = await updateSessionUserProfile(activeSession.id, profileId)
+      setActiveSession(updated)
+      setSelectedUserProfileId(updated.user_profile_id)
+      setProfileSelectionError(null)
+      setLastProfileSelection(null)
+      await refreshSessions()
+    } catch (error) {
+      setProfileSelectionError(
+        error instanceof Error ? error.message : 'Не удалось выбрать профиль',
+      )
+    } finally {
+      setProfileSelectionLoading(false)
+    }
+  }
+
+  function retryProfileSelection() {
+    if (lastProfileSelection) void selectUserProfile(lastProfileSelection.id)
   }
 
   function applyConfig(config: AgentConfig) {
@@ -926,6 +988,12 @@ export function App() {
             >
               Агенты
             </button>
+            <button
+              className={`agents-nav ${mode === 'profiles' ? 'active' : ''}`}
+              onClick={() => setMode('profiles')}
+            >
+              Профили общения
+            </button>
             <div className="saved-chats">
               {savedSessions.map((session) => (
                 <div className="saved-chat" key={session.id}>
@@ -961,7 +1029,19 @@ export function App() {
       )}
 
       <section className="chat-stage">
-        {mode === 'agents' ? (
+        {mode === 'profiles' ? (
+          <UserProfilesScreen
+            profiles={userProfiles}
+            loading={userProfilesLoading}
+            error={userProfilesError}
+            selectedId={selectedUserProfileId}
+            onRetry={refreshUserProfiles}
+            onChanged={() => refreshUserProfiles(false)}
+            onChooseOtherProfile={() => setMode('chat')}
+            onManageProfiles={() => setMode('profiles')}
+            onCloseState={() => setMode('chat')}
+          />
+        ) : mode === 'agents' ? (
           <Agents
             profiles={profiles}
             onLaunch={async (profile) => {
@@ -1171,6 +1251,21 @@ export function App() {
                   )}
                 </span>
                 <span className="composer-divider" />
+                <ProfileIndicator
+                  profiles={userProfiles}
+                  selectedId={selectedUserProfileId}
+                  loading={userProfilesLoading}
+                  error={userProfilesError}
+                  onSelect={(id) => void selectUserProfile(id)}
+                  onManage={() => setMode('profiles')}
+                  selectionError={profileSelectionError}
+                  selectionLoading={profileSelectionLoading}
+                  onRetrySelection={retryProfileSelection}
+                  onRetryProfiles={() => void refreshUserProfiles()}
+                  sessionRefreshError={sessionListRefreshError}
+                  onRetrySessionRefresh={() => void refreshSessions()}
+                />
+                <span className="composer-divider" />
                 <button
                   type="button"
                   className={`tune ${settingsOpen ? 'active' : ''}`}
@@ -1245,6 +1340,218 @@ function TokenUsageSummary({ usage }: { usage: TokenUsage }) {
       )}
       {' · '}Output {formatTokens(usage.completion_tokens)} · Total{' '}
       {formatTokens(usage.total_tokens)}
+    </span>
+  )
+}
+
+function ProfileIndicator({
+  profiles,
+  selectedId,
+  loading,
+  error,
+  onSelect,
+  onManage,
+  selectionError,
+  selectionLoading,
+  onRetrySelection,
+  onRetryProfiles,
+  sessionRefreshError,
+  onRetrySessionRefresh,
+}: {
+  profiles: UserProfile[]
+  selectedId: string | null
+  loading: boolean
+  error: string | null
+  onSelect: (id: string | null) => void
+  onManage: () => void
+  selectionError: string | null
+  selectionLoading: boolean
+  onRetrySelection: () => void
+  onRetryProfiles: () => void
+  sessionRefreshError: string | null
+  onRetrySessionRefresh: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const firstOptionRef = useRef<HTMLButtonElement>(null)
+  const clearOptionRef = useRef<HTMLButtonElement>(null)
+  const selected = profiles.find((profile) => profile.id === selectedId)
+  const selectedProfileMissing = selectedId !== null && selected === undefined
+  const popoverId = 'user-profile-popover'
+  const triggerLabel = loading
+    ? 'Профиль пользователя: загрузка'
+    : selectionLoading
+      ? 'Профиль пользователя: сохраняется'
+      : error !== null
+        ? 'Профиль пользователя: список недоступен'
+        : selectionError !== null
+          ? 'Профиль пользователя: выбор не сохранен'
+          : selectedProfileMissing
+            ? 'Профиль пользователя: выбранный профиль недоступен'
+            : sessionRefreshError !== null
+              ? 'Профиль пользователя: список сессий не обновлен'
+              : `Профиль пользователя: ${selected?.name ?? 'Без профиля'}`
+  const triggerText = loading
+    ? 'Загрузка профиля…'
+    : selectionLoading
+      ? 'Сохраняем…'
+      : error !== null
+        ? 'Список недоступен'
+        : selectionError !== null
+          ? 'Выбор не сохранен'
+          : selectedProfileMissing
+            ? 'Профиль недоступен'
+            : sessionRefreshError !== null
+              ? 'Сессии не обновлены'
+              : (selected?.name ?? 'Без профиля')
+
+  useEffect(() => {
+    if (!open) return
+    const firstFocusable = firstOptionRef.current ?? clearOptionRef.current
+    firstFocusable?.focus()
+  }, [open])
+
+  function closePopover() {
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  return (
+    <span className="user-profile-indicator">
+      <button
+        type="button"
+        className="model-indicator"
+        ref={triggerRef}
+        aria-label={triggerLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={popoverId}
+        aria-invalid={error !== null || selectionError !== null || selectedProfileMissing}
+        aria-busy={loading || selectionLoading}
+        title={selectedProfileMissing ? 'Выбранный профиль недоступен' : undefined}
+        onClick={() => {
+          if (open) {
+            closePopover()
+          } else {
+            setOpen(true)
+          }
+        }}
+      >
+        {triggerText}
+      </button>
+      {open && (
+        <span
+          id={popoverId}
+          className="user-profile-popover"
+          role="dialog"
+          aria-label="Выбор профиля"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              closePopover()
+            }
+          }}
+        >
+          <section className="user-profile-section user-profile-summary">
+            <h2>Активный профиль</h2>
+            <span>
+              {selected
+                ? `${selected.name} · ${selected.language} · ${selected.tone} · ${selected.verbosity}`
+                : selectedProfileMissing
+                  ? 'Профиль недоступен'
+                  : 'Без профиля'}
+            </span>
+          </section>
+          <div className="user-profile-separator" role="separator" />
+          {loading && <p className="user-profile-state">Загрузка профилей…</p>}
+          {error && (
+            <div className="user-profile-state error" role="alert">
+              <span>Не удалось загрузить список профилей.</span>
+              <button type="button" onClick={onRetryProfiles} disabled={loading}>
+                Повторить
+              </button>
+            </div>
+          )}
+          {selectionError && (
+            <div className="user-profile-state error" role="alert">
+              <span>{selectionError}</span>
+              <button type="button" onClick={onRetrySelection} disabled={selectionLoading}>
+                {selectionLoading ? 'Повторяем…' : 'Повторить выбор'}
+              </button>
+            </div>
+          )}
+          {selectedProfileMissing && !loading && !error && (
+            <div className="user-profile-state missing" role="alert">
+              <span>Выбранный профиль больше недоступен.</span>
+              <button type="button" onClick={() => onSelect(null)} disabled={selectionLoading}>
+                Очистить выбор
+              </button>
+            </div>
+          )}
+          {sessionRefreshError && (
+            <div className="user-profile-state refresh-error" role="alert">
+              <span>{sessionRefreshError}</span>
+              <button type="button" onClick={onRetrySessionRefresh}>
+                Обновить список сессий
+              </button>
+            </div>
+          )}
+          <section className="user-profile-section user-profile-quick-select">
+            <h2>Быстрый выбор</h2>
+            {!loading && !error && profiles.length === 0 && (
+              <p className="user-profile-state">Нет профилей. Можно продолжить без профиля.</p>
+            )}
+            {!loading &&
+              !error &&
+              profiles.length > 0 &&
+              profiles.map((profile) => (
+                <span className="user-profile-option" key={profile.id}>
+                  <button
+                    type="button"
+                    ref={profile === profiles[0] ? firstOptionRef : undefined}
+                    aria-pressed={profile.id === selectedId}
+                    disabled={selectionLoading}
+                    onClick={() => {
+                      onSelect(profile.id)
+                      closePopover()
+                    }}
+                  >
+                    <strong>{profile.name}</strong>
+                    <small>
+                      {profile.language} · {profile.tone} · {profile.verbosity} ·{' '}
+                      {profile.response_format.join(', ')} · constraints:{' '}
+                      {profile.constraints.length}
+                    </small>
+                  </button>
+                </span>
+              ))}
+          </section>
+          <div className="user-profile-separator" role="separator" />
+          <footer className="user-profile-footer">
+            <button
+              type="button"
+              ref={clearOptionRef}
+              aria-pressed={selectedId === null}
+              disabled={selectionLoading}
+              onClick={() => {
+                onSelect(null)
+                closePopover()
+              }}
+            >
+              Без профиля
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                closePopover()
+                onManage()
+              }}
+            >
+              Управление профилями
+            </button>
+          </footer>
+        </span>
+      )}
     </span>
   )
 }
