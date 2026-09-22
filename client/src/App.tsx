@@ -78,6 +78,7 @@ import { RequestLogs } from './ui/components/RequestLogs'
 import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
 import { TaskProgressPanel } from './ui/components/TaskProgressPanel'
 import { TaskPlanApprovalBar } from './ui/components/TaskPlanApprovalBar'
+import { McpSettingsScreen } from './ui/components/McpSettingsScreen'
 
 const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
@@ -163,7 +164,7 @@ function defaultContextManagement(provider: Provider, model: string): ContextMan
 }
 
 export function App() {
-  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles' | 'invariants'>('chat')
+  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles' | 'invariants' | 'mcp'>('chat')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState(providerModels.openai)
   const [systemPrompt, setSystemPrompt] = useState('You are Copia, a helpful personal assistant.')
@@ -1382,11 +1383,21 @@ export function App() {
             >
               Профили общения
             </button>
+            <div className="nav-section-label">Расширения (MCP)</div>
             <button
               className={`agents-nav ${mode === 'invariants' ? 'active' : ''}`}
               onClick={() => void openInvariantsScreen()}
             >
               Инварианты
+            </button>
+            <button
+              className={`agents-nav ${mode === 'mcp' ? 'active' : ''}`}
+              onClick={() => setMode('mcp')}
+            >
+              <span className="mcp-nav-icon" aria-hidden="true">
+                ◇
+              </span>{' '}
+              MCP
             </button>
             <div className="saved-chats">
               {savedSessions.map((session) => (
@@ -1423,7 +1434,9 @@ export function App() {
       )}
 
       <section className="chat-stage">
-        {mode === 'invariants' ? (
+        {mode === 'mcp' ? (
+          <McpSettingsScreen />
+        ) : mode === 'invariants' ? (
           <section className="invariants-screen">{invariantPanelContent}</section>
         ) : mode === 'profiles' ? (
           <UserProfilesScreen

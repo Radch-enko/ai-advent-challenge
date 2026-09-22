@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..data.agent_log_repository import JsonAgentLogRepository
 from ..data.agent_log_store import AgentLogStore
 from ..data.invariants_repository import InvariantsRepository
+from ..data.mcp_client import McpDiscoveryError, discover_mcp_tools
 from ..data.model_catalog import context_window_for
 from ..data.path_identifiers import validate_path_identifier
 from ..data.pending_memory_repository import PendingMemoryRepository
@@ -60,6 +61,7 @@ from ..domain.models.config import (
     StructuredOutputConfig,
 )
 from ..domain.models.invariant import Invariant, InvariantCreate, InvariantUpdate
+from ..domain.models.mcp import McpDiscoveryResult
 from ..domain.models.memory import (
     LongTermMemoryCreate,
     LongTermMemoryItem,
@@ -179,6 +181,18 @@ class CreateAgentResponse(BaseModel):
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1)
     config: AgentConfig | None = None
+
+
+class McpDiscoveryRequest(BaseModel):
+    endpoint: str = Field(min_length=1)
+    header_name: str | None = None
+    header_value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_header_pair(self) -> McpDiscoveryRequest:
+        if (self.header_name is None) != (self.header_value is None):
+            raise ValueError("header_name and header_value must be provided together")
+        return self
 
 
 class ContextManagementUpdate(BaseModel):
@@ -1148,6 +1162,36 @@ def _start_task_worker(session_id: str, task_id: str) -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+MCP_ERROR_STATUS_CODES = {
+    "mcp_endpoint_rejected": 422,
+    "mcp_header_rejected": 422,
+    "mcp_auth_required": status.HTTP_401_UNAUTHORIZED,
+    "mcp_access_denied": status.HTTP_403_FORBIDDEN,
+    "mcp_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
+    "mcp_redirect_rejected": status.HTTP_502_BAD_GATEWAY,
+    "mcp_connection_failed": status.HTTP_502_BAD_GATEWAY,
+    "mcp_response_too_large": status.HTTP_502_BAD_GATEWAY,
+    "mcp_protocol_error": status.HTTP_502_BAD_GATEWAY,
+}
+
+
+@app.post("/mcp/discover", response_model=McpDiscoveryResult)
+async def discover_mcp(request: McpDiscoveryRequest) -> McpDiscoveryResult:
+    try:
+        if request.header_name is None and request.header_value is None:
+            return await discover_mcp_tools(request.endpoint)
+        return await discover_mcp_tools(
+            request.endpoint,
+            header_name=request.header_name,
+            header_value=request.header_value,
+        )
+    except McpDiscoveryError as error:
+        raise HTTPException(
+            status_code=MCP_ERROR_STATUS_CODES.get(error.code, status.HTTP_502_BAD_GATEWAY),
+            detail={"code": error.code, "message": error.message},
+        ) from error
 
 
 @app.get("/profiles")

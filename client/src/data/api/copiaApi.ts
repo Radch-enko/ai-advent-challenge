@@ -10,6 +10,7 @@ import { Provider, ProviderModel } from '../../domain/models/provider'
 import { TaskState } from '../../domain/models/task'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import { Invariant, InvariantInput } from '../../domain/models/invariant'
+import { McpDiscoveryResult } from '../../domain/models/mcp'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -185,6 +186,21 @@ export async function createAgent(config: AgentConfig): Promise<string> {
     body: JSON.stringify({ config }),
   })
   return result.agent_id
+}
+
+export function discoverMcpTools(
+  endpoint: string,
+  headerName?: string,
+  headerValue?: string,
+): Promise<McpDiscoveryResult> {
+  return request('/mcp/discover', {
+    method: 'POST',
+    body: JSON.stringify({
+      endpoint,
+      header_name: headerName || null,
+      header_value: headerValue || null,
+    }),
+  })
 }
 
 export function deleteAgent(agentId: string): Promise<unknown> {
