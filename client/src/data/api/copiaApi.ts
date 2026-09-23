@@ -10,7 +10,12 @@ import { Provider, ProviderModel } from '../../domain/models/provider'
 import { TaskState } from '../../domain/models/task'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import { Invariant, InvariantInput } from '../../domain/models/invariant'
-import { McpDiscoveryResult } from '../../domain/models/mcp'
+import {
+  McpApproval,
+  McpConnection,
+  McpConnectionInput,
+  McpDiscoveryResult,
+} from '../../domain/models/mcp'
 import {
   LongTermMemoryItem,
   MemoryEvent,
@@ -47,6 +52,17 @@ export type SessionChatResponse = Omit<ChatResponse, 'response' | 'agent_log_id'
   agent_log_id: string
 }
 
+export type McpTurn = {
+  id: string
+  session_id: string
+  status: 'running' | 'waiting_for_approval' | 'completed' | 'failed'
+  approval: McpApproval | null
+  result: SessionChatResponse | null
+  error: string | null
+}
+
+export type McpTurnEvent = { type: string; data: unknown }
+
 export type ApiResult<T> = { data: T; status: number }
 export type MemoryMutationResponse = LongTermMemoryItem & { memory_events: MemoryEvent[] }
 
@@ -79,6 +95,9 @@ export type ChatSession = {
   }
   created_at: string
   updated_at: string
+  mcp_turn_id?: string | null
+  mcp_turn_status?: 'running' | 'waiting_for_approval' | 'completed' | 'failed' | null
+  mcp_turn_error?: string | null
 }
 export type ChatSessionSummary = Pick<ChatSession, 'id' | 'title' | 'profile_name' | 'updated_at'>
 
@@ -201,6 +220,90 @@ export function discoverMcpTools(
       header_value: headerValue || null,
     }),
   })
+}
+
+export function listMcpConnections(): Promise<McpConnection[]> {
+  return request('/mcp/connections')
+}
+
+export function createMcpConnection(input: McpConnectionInput): Promise<McpConnection> {
+  return request('/mcp/connections', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function updateMcpConnection(input: McpConnectionInput): Promise<McpConnection> {
+  return request(`/mcp/connections/${encodeURIComponent(input.id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteMcpConnection(connectionId: string): Promise<void> {
+  return request(`/mcp/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' })
+}
+
+export function testMcpConnection(connectionId: string): Promise<McpConnection> {
+  return request(`/mcp/connections/${encodeURIComponent(connectionId)}/test`, { method: 'POST' })
+}
+
+export function startMcpTurn(
+  sessionId: string,
+  content: string,
+  config?: AgentConfig,
+): Promise<McpTurn> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/turns`, {
+    method: 'POST',
+    body: JSON.stringify({ content, config }),
+  })
+}
+
+export function getMcpTurn(sessionId: string, turnId: string): Promise<McpTurn> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`)
+}
+
+export function decideMcpApproval(
+  sessionId: string,
+  approvalId: string,
+  decision: 'approve' | 'reject',
+): Promise<unknown> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/mcp-approvals/${encodeURIComponent(approvalId)}`,
+    { method: 'POST', body: JSON.stringify({ decision }) },
+  )
+}
+
+export async function streamMcpTurnEvents(
+  sessionId: string,
+  turnId: string,
+  onEvent: (event: McpTurnEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`,
+    { signal, headers: { Accept: 'text/event-stream' } },
+  )
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null)
+    throw new ApiRequestError(response.status, body)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) {
+      let type = 'message'
+      let data = ''
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) type = line.slice(7)
+        if (line.startsWith('data: ')) data += line.slice(6)
+      }
+      if (data) onEvent({ type, data: JSON.parse(data) })
+    }
+    if (done) return
+  }
 }
 
 export function deleteAgent(agentId: string): Promise<unknown> {

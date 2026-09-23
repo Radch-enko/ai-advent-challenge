@@ -14,6 +14,7 @@ from ..services.credential_sanitizer import sanitize_error, sanitize_value
 from ..services.memory_classifier import MemoryClassifier
 from ..services.memory_policy import HybridMemoryPolicy, WorkingMemoryStore
 from ..services.router import LLMRouter, ProviderError
+from ..services.runtime_context import with_current_datetime_context
 from .config import (
     AgentConfig,
     ChatMessage,
@@ -141,7 +142,13 @@ class Agent:
             self._long_term_memory or self._working_memory or self._pending_memory or self.facts
         )
 
-    def ask(self, content: str, *, agent_log_id: str | None = None) -> LLMResponse:
+    def ask(
+        self,
+        content: str,
+        *,
+        agent_log_id: str | None = None,
+        completion: Callable[[list[ChatMessage], LLMConfig], LLMResponse] | None = None,
+    ) -> LLMResponse:
         self._refresh_long_term_memory()
         if self._pending_event() is not None:
             raise SummarizationRetryRequired(
@@ -189,7 +196,9 @@ class Agent:
                 provider=self.config.provider,
                 model=self.config.model,
             ):
-                response = self._router.complete(self._messages_for_request(), self.config)
+                response = (completion or self._router.complete)(
+                    self._messages_for_request(), self.config
+                )
         except Exception:
             self._history.pop()
             self._context = context_before_turn
@@ -344,14 +353,14 @@ class Agent:
             message.role == "system" and invariant_context in message.content
             for message in messages
         ):
-            return messages
+            return list(with_current_datetime_context(messages))
         if messages and messages[0].role == "system":
             messages[0] = messages[0].model_copy(
                 update={"content": f"{messages[0].content}\n\n{invariant_context}"}
             )
         else:
             messages.insert(0, ChatMessage(role="system", content=invariant_context))
-        return messages
+        return list(with_current_datetime_context(messages))
 
     def _append_response(self, response: LLMResponse, agent_log_id: str | None = None) -> None:
         self._history.append(

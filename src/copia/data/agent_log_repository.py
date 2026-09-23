@@ -67,6 +67,7 @@ def _turn_payload(turn: AgentLogTurn) -> dict[str, object]:
         "error": turn.error,
         "operations": [operation.model_dump(mode="json") for operation in turn.operations],
         "exchanges": [_exchange_payload(exchange) for exchange in turn.exchanges],
+        "tool_calls": turn.tool_calls,
     }
 
 
@@ -119,6 +120,7 @@ def _turn_from_payload(payload: Any) -> AgentLogTurn:
         exchanges.append(exchange)
     data["exchanges"] = exchanges
     data.setdefault("operations", [])
+    data.setdefault("tool_calls", [])
     return AgentLogTurn.model_validate(data)
 
 

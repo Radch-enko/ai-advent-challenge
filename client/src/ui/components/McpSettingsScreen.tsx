@@ -1,6 +1,12 @@
-import { FormEvent, useState } from 'react'
-import { discoverMcpTools } from '../../data/api/copiaApi'
-import { McpDiscoveryResult } from '../../domain/models/mcp'
+import { FormEvent, useEffect, useState } from 'react'
+import {
+  createMcpConnection,
+  deleteMcpConnection,
+  listMcpConnections,
+  testMcpConnection,
+  updateMcpConnection,
+} from '../../data/api/copiaApi'
+import { McpConnection, McpDiscoveryResult } from '../../domain/models/mcp'
 
 type McpConnectionState = 'idle' | 'connecting' | 'connected' | 'empty' | 'error'
 
@@ -12,11 +18,14 @@ const stateCopy: Record<McpConnectionState, string> = {
   error: 'Ошибка подключения',
 }
 
-function isPublicHttpsEndpoint(value: string): boolean {
+function isSupportedMcpEndpoint(value: string): boolean {
   try {
     const url = new URL(value)
     return (
-      url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      url.username === '' &&
+      url.password === '' &&
+      url.hash === ''
     )
   } catch {
     return false
@@ -24,27 +33,49 @@ function isPublicHttpsEndpoint(value: string): boolean {
 }
 
 export function McpSettingsScreen() {
+  const [connectionId, setConnectionId] = useState('')
+  const [connectionName, setConnectionName] = useState('')
   const [endpoint, setEndpoint] = useState('')
   const [headerName, setHeaderName] = useState('')
-  const [headerValue, setHeaderValue] = useState('')
+  const [headerValueEnv, setHeaderValueEnv] = useState('')
+  const [connections, setConnections] = useState<McpConnection[]>([])
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [connectionState, setConnectionState] = useState<McpConnectionState>('idle')
   const [result, setResult] = useState<McpDiscoveryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const refreshConnections = () =>
+    listMcpConnections()
+      .then(setConnections)
+      .catch((loadError) => {
+        setError(
+          loadError instanceof Error ? loadError.message : 'Не удалось загрузить connections',
+        )
+      })
+
+  useEffect(() => {
+    void refreshConnections()
+  }, [])
+
   async function connect() {
     const normalizedEndpoint = endpoint.trim()
     const normalizedHeaderName = headerName.trim()
-    const normalizedHeaderValue = headerValue.trim()
-    if (!isPublicHttpsEndpoint(normalizedEndpoint)) {
+    const normalizedHeaderValueEnv = headerValueEnv.trim()
+    if (!isSupportedMcpEndpoint(normalizedEndpoint)) {
       setConnectionState('error')
       setResult(null)
-      setError('Введите корректный публичный HTTPS endpoint без userinfo и fragment.')
+      setError('Введите корректный HTTP(S) endpoint без userinfo и fragment.')
       return
     }
-    if ((normalizedHeaderName === '') !== (normalizedHeaderValue === '')) {
+    if ((normalizedHeaderName === '') !== (normalizedHeaderValueEnv === '')) {
       setConnectionState('error')
       setResult(null)
-      setError('Укажите одновременно Header name и Header value или оставьте оба поля пустыми.')
+      setError('Укажите одновременно Header name и secret env или оставьте оба поля пустыми.')
+      return
+    }
+    if (!connectionId.trim() || !connectionName.trim()) {
+      setConnectionState('error')
+      setError('Укажите ID и название connection.')
       return
     }
 
@@ -52,13 +83,30 @@ export function McpSettingsScreen() {
     setResult(null)
     setError(null)
     try {
-      const discovery = await discoverMcpTools(
-        normalizedEndpoint,
-        normalizedHeaderName || undefined,
-        normalizedHeaderValue || undefined,
-      )
+      const saved = await (editingId
+        ? updateMcpConnection({
+            id: connectionId.trim(),
+            name: connectionName.trim(),
+            endpoint: normalizedEndpoint,
+            header_name: normalizedHeaderName || null,
+            header_value_env: normalizedHeaderValueEnv || null,
+          })
+        : createMcpConnection({
+            id: connectionId.trim(),
+            name: connectionName.trim(),
+            endpoint: normalizedEndpoint,
+            header_name: normalizedHeaderName || null,
+            header_value_env: normalizedHeaderValueEnv || null,
+          }))
+      const discovery: McpDiscoveryResult = {
+        server: saved.server ?? { name: null, version: null },
+        endpoint: saved.endpoint,
+        tools: saved.tools,
+      }
       setResult(discovery)
-      setConnectionState(discovery.tools.length > 0 ? 'connected' : 'empty')
+      setConnectionState(saved.tools.length > 0 ? 'connected' : 'empty')
+      setEditingId(saved.id)
+      await refreshConnections()
     } catch (requestError) {
       setConnectionState('error')
       setError(
@@ -75,10 +123,58 @@ export function McpSettingsScreen() {
   function disconnect() {
     setEndpoint('')
     setHeaderName('')
-    setHeaderValue('')
+    setHeaderValueEnv('')
+    setConnectionId('')
+    setConnectionName('')
+    setEditingId(null)
     setConnectionState('idle')
     setResult(null)
     setError(null)
+  }
+
+  function editConnection(connection: McpConnection) {
+    setConnectionId(connection.id)
+    setConnectionName(connection.name)
+    setEndpoint(connection.endpoint)
+    setHeaderName(connection.header_name ?? '')
+    setHeaderValueEnv(connection.header_value_env ?? '')
+    setEditingId(connection.id)
+    setResult(
+      connection.server
+        ? { server: connection.server, endpoint: connection.endpoint, tools: connection.tools }
+        : null,
+    )
+    setConnectionState('idle')
+    setError(null)
+  }
+
+  async function removeConnection(connection: McpConnection) {
+    try {
+      await deleteMcpConnection(connection.id)
+      if (editingId === connection.id) disconnect()
+      await refreshConnections()
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : 'Не удалось удалить connection')
+      setConnectionState('error')
+    }
+  }
+
+  async function testConnection(connection: McpConnection) {
+    setConnectionState('connecting')
+    setError(null)
+    try {
+      const updated = await testMcpConnection(connection.id)
+      setResult({
+        server: updated.server ?? { name: null, version: null },
+        endpoint: updated.endpoint,
+        tools: updated.tools,
+      })
+      setConnectionState(updated.tools.length ? 'connected' : 'empty')
+      await refreshConnections()
+    } catch (testError) {
+      setConnectionState('error')
+      setError(testError instanceof Error ? testError.message : 'Проверка connection не удалась')
+    }
   }
 
   const isConnecting = connectionState === 'connecting'
@@ -91,7 +187,7 @@ export function McpSettingsScreen() {
         <div>
           <p className="mcp-kicker">Настройки системы</p>
           <h1 id="mcp-settings-title">MCP connections</h1>
-          <p>Подключите публичный MCP server и просмотрите доступные инструменты.</p>
+          <p>Подключите MCP server и просмотрите доступные инструменты.</p>
         </div>
         <div className="mcp-header-status">
           <span className="mcp-active-status">
@@ -102,13 +198,62 @@ export function McpSettingsScreen() {
       </header>
 
       <div className="mcp-settings-content">
+        {connections.length > 0 && (
+          <article className="mcp-tools-card">
+            <div className="mcp-card-heading">
+              <div>
+                <h2>Saved connections</h2>
+                <p>Connections доступны для выбора в конфигурации агента.</p>
+              </div>
+              <span className="mcp-tool-count">{connections.length}</span>
+            </div>
+            <div className="mcp-tool-list">
+              {connections.map((connection) => (
+                <div className="mcp-tool-item" key={connection.id}>
+                  <div className="mcp-tool-item-icon" aria-hidden="true">
+                    ◇
+                  </div>
+                  <div>
+                    <h3>{connection.name}</h3>
+                    <p>
+                      {connection.endpoint} · {connection.tools.length} tools
+                    </p>
+                    <div className="mcp-connection-actions">
+                      <button
+                        type="button"
+                        className="mcp-action-button mcp-action-secondary"
+                        onClick={() => editConnection(connection)}
+                      >
+                        Изменить
+                      </button>
+                      <button
+                        type="button"
+                        className="mcp-action-button mcp-action-primary"
+                        onClick={() => void testConnection(connection)}
+                      >
+                        Проверить
+                      </button>
+                      <button
+                        type="button"
+                        className="mcp-action-button mcp-action-danger"
+                        onClick={() => void removeConnection(connection)}
+                      >
+                        Удалить
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
+        )}
         <article className="mcp-security-notice">
           <div className="mcp-security-icon" aria-hidden="true">
             ✓
           </div>
           <div>
             <strong>Только чтение</strong>
-            <span className="mcp-security-required">HTTPS REQUIRED</span>
+            <span className="mcp-security-required">HTTPS / LOOPBACK</span>
             <p>
               Мы выполняем только initialize и tools/list. Выполнение tools/call и передача tools в
               LLM отключены. Дополнительный header используется только для discovery и не
@@ -129,6 +274,28 @@ export function McpSettingsScreen() {
           </div>
 
           <form onSubmit={handleSubmit}>
+            <div className="mcp-header-fields">
+              <label>
+                Connection ID
+                <input
+                  value={connectionId}
+                  onChange={(event) => setConnectionId(event.target.value)}
+                  placeholder="finances"
+                  disabled={isConnecting || editingId !== null}
+                  required
+                />
+              </label>
+              <label>
+                Название
+                <input
+                  value={connectionName}
+                  onChange={(event) => setConnectionName(event.target.value)}
+                  placeholder="Личные финансы"
+                  disabled={isConnecting}
+                  required
+                />
+              </label>
+            </div>
             <label htmlFor="mcp-endpoint">Server endpoint</label>
             <div className="mcp-endpoint-row">
               <input
@@ -136,13 +303,17 @@ export function McpSettingsScreen() {
                 type="url"
                 value={endpoint}
                 onChange={(event) => setEndpoint(event.target.value)}
-                placeholder="https://example.com/mcp"
+                placeholder="http://127.0.0.1:8001/mcp"
                 disabled={isConnecting}
                 autoComplete="off"
                 spellCheck={false}
               />
               <button type="submit" disabled={isConnecting || endpoint.trim() === ''}>
-                {isConnecting ? 'Подключение…' : 'Подключиться и загрузить инструменты'}
+                {isConnecting
+                  ? 'Сохранение…'
+                  : editingId
+                    ? 'Сохранить connection'
+                    : 'Добавить connection'}
               </button>
             </div>
             <div className="mcp-header-fields">
@@ -159,20 +330,21 @@ export function McpSettingsScreen() {
                 />
               </label>
               <label>
-                Header value
+                Secret env
                 <input
-                  type="password"
-                  value={headerValue}
-                  onChange={(event) => setHeaderValue(event.target.value)}
-                  placeholder="Bearer token"
+                  type="text"
+                  value={headerValueEnv}
+                  onChange={(event) => setHeaderValueEnv(event.target.value)}
+                  placeholder="COPIA_MCP_FINANCES_TOKEN"
                   disabled={isConnecting}
-                  autoComplete="new-password"
+                  autoComplete="off"
                   spellCheck={false}
                 />
               </label>
             </div>
             <small>
-              Поддерживаются только публичные HTTPS endpoints. Endpoint и headers не сохраняются.
+              Для удалённых servers требуется HTTPS; HTTP разрешён только для localhost и loopback.
+              Secret хранится только в environment, в registry сохраняется имя переменной.
             </small>
           </form>
 

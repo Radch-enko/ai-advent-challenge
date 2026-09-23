@@ -18,6 +18,9 @@ from ...domain.models.config import (
     ProviderModel,
     ProviderName,
     ProviderTrace,
+    ToolCall,
+    ToolDefinition,
+    ToolLoopMessage,
 )
 from .http_logging import install_http_logging, record_response, record_transport_error
 
@@ -43,7 +46,12 @@ class LLMProvider(ABC):
     capabilities: ProviderCapabilities
 
     @abstractmethod
-    def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> LLMResponse:
         raise NotImplementedError
 
     @abstractmethod
@@ -61,6 +69,89 @@ def _structured_data(content: str, enabled: bool) -> dict[str, Any] | list[Any] 
     if not isinstance(value, (dict, list)):
         raise ProviderError("Structured output must be a JSON object or array")
     return value
+
+
+def _arguments(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        raise ProviderError("Provider returned invalid tool arguments")
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ProviderError("Provider returned invalid tool arguments") from error
+    if not isinstance(decoded, dict):
+        raise ProviderError("Provider tool arguments must be a JSON object")
+    return decoded
+
+
+def _openai_message(message: ChatMessage | ToolLoopMessage) -> dict[str, Any]:
+    if isinstance(message, ChatMessage):
+        return message.model_dump(include={"role", "content"})
+    payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+            }
+            for call in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name is not None:
+        payload["name"] = message.name
+    return payload
+
+
+def _openai_tool_calls(value: object) -> list[ToolCall]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ProviderError("Provider returned invalid tool calls")
+    calls: list[ToolCall] = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("function"), dict):
+            raise ProviderError("Provider returned invalid tool call")
+        function = item["function"]
+        call_id = item.get("id")
+        name = function.get("name")
+        if not isinstance(call_id, str) or not isinstance(name, str):
+            raise ProviderError("Provider returned invalid tool call")
+        calls.append(
+            ToolCall(id=call_id, name=name, arguments=_arguments(function.get("arguments")))
+        )
+    return calls
+
+
+def _gigachat_message(message: ChatMessage | ToolLoopMessage) -> dict[str, Any]:
+    if isinstance(message, ChatMessage):
+        return message.model_dump(include={"role", "content"})
+    if message.role == "assistant" and message.tool_calls:
+        call = message.tool_calls[0]
+        return {
+            "role": "assistant",
+            "content": message.content,
+            "function_call": {"name": call.name, "arguments": call.arguments},
+        }
+    if message.role in {"tool", "function"}:
+        return {"role": "function", "name": message.name, "content": message.content}
+    return {"role": message.role, "content": message.content}
+
+
+def _gigachat_tool_calls(value: object) -> list[ToolCall]:
+    if value is None:
+        return []
+    if not isinstance(value, dict) or not isinstance(value.get("name"), str):
+        raise ProviderError("Provider returned invalid function call")
+    return [
+        ToolCall(
+            id=str(uuid.uuid4()),
+            name=value["name"],
+            arguments=_arguments(value.get("arguments", {})),
+        )
+    ]
 
 
 class OpenAIProvider(LLMProvider):
@@ -104,14 +195,33 @@ class OpenAIProvider(LLMProvider):
             "gpt-5-nano",
         } and not normalized.startswith(unsupported_prefixes)
 
-    def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> LLMResponse:
         if not self._api_key:
             raise ProviderError("OPENAI_API_KEY is not configured")
 
         request_payload: dict[str, Any] = {
             "model": config.model,
-            "messages": [message.model_dump(include={"role", "content"}) for message in messages],
+            "messages": [_openai_message(message) for message in messages],
         }
+        if tools:
+            request_payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": tool.parameters or {"type": "object", "properties": {}},
+                    },
+                }
+                for tool in tools
+            ]
+            request_payload["tool_choice"] = "auto"
+            request_payload["parallel_tool_calls"] = False
         generation = config.generation
         if generation.max_output_tokens is not None:
             request_payload["max_completion_tokens"] = generation.max_output_tokens
@@ -141,7 +251,9 @@ class OpenAIProvider(LLMProvider):
             response = self._client.send(http_request)
             response.raise_for_status()
             data = response.json()
-            content = data["choices"][0]["message"]["content"] or ""
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
+            tool_calls = _openai_tool_calls(message.get("tool_calls"))
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             if response is None and self._log_store is not None:
                 record_transport_error(self._log_store, http_request, error)
@@ -186,6 +298,7 @@ class OpenAIProvider(LLMProvider):
                 request_body=request_payload,
                 response_body=data,
             ),
+            tool_calls=tool_calls,
         )
 
     def list_models(self) -> list[ProviderModel]:
@@ -273,11 +386,26 @@ class GigaChatProvider(LLMProvider):
         self._access_token = token
         return token
 
-    def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": config.model,
-            "messages": [message.model_dump(include={"role", "content"}) for message in messages],
+            "messages": [_gigachat_message(message) for message in messages],
         }
+        if tools:
+            payload["functions"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "parameters": tool.parameters or {"type": "object", "properties": {}},
+                }
+                for tool in tools
+            ]
+            payload["function_call"] = "auto"
         generation = config.generation
         if generation.max_output_tokens is not None:
             payload["max_tokens"] = generation.max_output_tokens
@@ -304,7 +432,9 @@ class GigaChatProvider(LLMProvider):
             response = self._client.send(http_request)
             response.raise_for_status()
             data = response.json()
-            content = data["choices"][0]["message"]["content"] or ""
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
+            tool_calls = _gigachat_tool_calls(message.get("function_call"))
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             if response is None and self._log_store is not None:
                 record_transport_error(self._log_store, http_request, error)
@@ -344,6 +474,7 @@ class GigaChatProvider(LLMProvider):
             trace=ProviderTrace(
                 status_code=response.status_code, request_body=payload, response_body=data
             ),
+            tool_calls=tool_calls,
         )
 
     def list_models(self) -> list[ProviderModel]:

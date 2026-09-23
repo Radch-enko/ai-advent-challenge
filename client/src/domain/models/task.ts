@@ -55,4 +55,6 @@ export type TaskState = {
   updated_at: string
   checkpoint_revision: number
   recovered: boolean
+  mcp_approval?: import('./mcp').McpApproval | null
+  mcp_running_tool?: string | null
 }

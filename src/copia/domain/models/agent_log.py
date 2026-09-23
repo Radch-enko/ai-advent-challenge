@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,3 +80,4 @@ class AgentLogTurn(BaseModel):
     error: str | None = None
     operations: list[AgentLogOperation] = Field(default_factory=list)
     exchanges: list[AgentLogExchange] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)

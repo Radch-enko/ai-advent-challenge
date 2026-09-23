@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from copia.api import service
@@ -5,6 +7,19 @@ from copia.api.service import agents, app, router
 from copia.data.providers.llm import ProviderError
 from copia.data.sessions_repository import SessionsRepository
 from copia.domain.models.config import ChatMessage, LLMResponse, ProviderName, ProviderTrace
+
+
+def stable_prompt_messages(messages: list[str]) -> list[str]:
+    stable = [
+        re.sub(
+            r"(?:^|\n\n)<current_datetime_context>.*?</current_datetime_context>",
+            "",
+            message,
+            flags=re.DOTALL,
+        ).strip()
+        for message in messages
+    ]
+    return [message for message in stable if message]
 
 
 def test_agent_lifecycle_via_api(monkeypatch) -> None:
@@ -361,7 +376,7 @@ def test_fork_creates_independent_session_from_selected_message(monkeypatch, tmp
 
     client.post(f"/sessions/{fork['id']}/messages", json={"content": "fork only"})
 
-    assert requests[-1] == ["shared", "reply to shared", "fork only"]
+    assert stable_prompt_messages(requests[-1]) == ["shared", "reply to shared", "fork only"]
     assert [message.content for message in repository.load(fork["id"]).messages] == [
         "shared",
         "reply to shared",

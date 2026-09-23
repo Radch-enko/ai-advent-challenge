@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProviderName(StrEnum):
@@ -44,6 +44,22 @@ class LLMConfig(BaseModel):
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     structured_output: StructuredOutputConfig | None = None
     provider_options: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpAccessConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    enabled_tools: list[str] = Field(default_factory=list)
+
+    @field_validator("enabled_tools")
+    @classmethod
+    def unique_tools(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("Enabled tool names must not be blank")
+        if len(set(value)) != len(value):
+            raise ValueError("Enabled tool names must be unique")
+        return value
 
 
 DEFAULT_SUMMARIZATION_PROMPT = """Update the compact summary of the conversation using the existing summary
@@ -148,6 +164,15 @@ class AgentConfig(LLMConfig):
     description: str | None = None
     avatar_path: str | None = None
     context_management: ContextManagementConfig = Field(default_factory=ContextManagementConfig)
+    mcp_access: list[McpAccessConfig] = Field(default_factory=list)
+
+    @field_validator("mcp_access")
+    @classmethod
+    def unique_connections(cls, value: list[McpAccessConfig]) -> list[McpAccessConfig]:
+        ids = [item.connection_id for item in value]
+        if len(set(ids)) != len(ids):
+            raise ValueError("MCP connection references must be unique")
+        return value
 
 
 class CompletionConfig(LLMConfig):
@@ -170,6 +195,26 @@ class ChatMessage(BaseModel):
     task_step_id: str | None = None
 
 
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+class ToolDefinition(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolLoopMessage(BaseModel):
+    role: str = Field(pattern="^(system|user|assistant|tool|function)$")
+    content: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    name: str | None = None
+
+
 class ProviderTrace(BaseModel):
     status_code: int
     request_body: dict[str, Any]
@@ -184,6 +229,7 @@ class LLMResponse(BaseModel):
     context_window: int | None = Field(default=None, gt=0)
     structured_data: dict[str, Any] | list[Any] | None = None
     trace: ProviderTrace | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list)
 
 
 class ProviderCapabilities(BaseModel):

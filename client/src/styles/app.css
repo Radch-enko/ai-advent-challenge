@@ -869,6 +869,67 @@ button {
   overflow-wrap: anywhere;
   margin: 3px 0 0;
 }
+.mcp-connection-actions,
+.mcp-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+.mcp-action-button {
+  min-height: 30px;
+  padding: 6px 11px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+.mcp-action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.mcp-action-button:focus-visible {
+  outline: 2px solid #a69cff;
+  outline-offset: 2px;
+}
+.mcp-action-primary {
+  border-color: #655bd0;
+  color: #fff;
+  background: #5147ad;
+}
+.mcp-action-primary:hover:not(:disabled) {
+  border-color: #8178e8;
+  background: #6459c8;
+}
+.mcp-action-secondary {
+  border-color: #454354;
+  color: #d9d5ec;
+  background: #25242e;
+}
+.mcp-action-secondary:hover:not(:disabled) {
+  border-color: #6a6384;
+  color: #fff;
+  background: #302d40;
+}
+.mcp-action-danger {
+  border-color: #6f3546;
+  color: #ffbeca;
+  background: #321e27;
+}
+.mcp-action-danger:hover:not(:disabled) {
+  border-color: #a64b62;
+  color: #ffd9df;
+  background: #47232f;
+}
+.mcp-action-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
 .mcp-empty-state {
   display: grid;
   justify-items: center;
@@ -1109,6 +1170,44 @@ button {
 }
 .message-body {
   max-width: min(600px, 88%);
+}
+.mcp-approval-card .message-body {
+  width: min(600px, 88%);
+  padding: 14px 16px;
+  border: 1px solid #514a83;
+  border-radius: 12px;
+  background: #211e32;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 16%);
+}
+.mcp-approval-card strong {
+  display: block;
+  color: #f1efff;
+  font-size: 13px;
+}
+.mcp-approval-card p {
+  margin-top: 5px;
+  color: #bdb8d4;
+  font-size: 12px;
+}
+.mcp-approval-card pre {
+  max-height: 180px;
+  margin: 11px 0 0;
+  overflow: auto;
+  padding: 10px 11px;
+  border: 1px solid #37334e;
+  border-radius: 7px;
+  color: #d9d5ec;
+  background: #171620;
+  font:
+    11px/1.5 'JetBrains Mono',
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-approval-card .avatar {
+  color: #d7d2ff;
+  border: 1px solid #4d4770;
+  background: #28243d;
 }
 .message p {
   margin: 0;

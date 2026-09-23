@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+import json
 import os
 import threading
 import time
@@ -10,18 +12,32 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ..data.agent_log_repository import JsonAgentLogRepository
 from ..data.agent_log_store import AgentLogStore
+from ..data.expenses_repository import (
+    ExpensesFileNotFoundError,
+    ExpensesRepository,
+    ExpensesStorageError,
+)
 from ..data.invariants_repository import InvariantsRepository
-from ..data.mcp_client import McpDiscoveryError, discover_mcp_tools
+from ..data.mcp_client import McpDiscoveryError, call_mcp_tool, discover_mcp_tools
+from ..data.mcp_connections_repository import (
+    McpConnectionConflictError,
+    McpConnectionsRepository,
+    McpConnectionsStorageError,
+)
 from ..data.model_catalog import context_window_for
 from ..data.path_identifiers import validate_path_identifier
 from ..data.pending_memory_repository import PendingMemoryRepository
@@ -59,9 +75,16 @@ from ..domain.models.config import (
     ProviderName,
     ProviderTrace,
     StructuredOutputConfig,
+    ToolDefinition,
 )
+from ..domain.models.expense import Expense, ExpenseCreate, ExpensePage, ExpenseSearchFilters
 from ..domain.models.invariant import Invariant, InvariantCreate, InvariantUpdate
-from ..domain.models.mcp import McpDiscoveryResult
+from ..domain.models.mcp import (
+    McpApproval,
+    McpConnection,
+    McpConnectionInput,
+    McpDiscoveryResult,
+)
 from ..domain.models.memory import (
     LongTermMemoryCreate,
     LongTermMemoryItem,
@@ -92,8 +115,17 @@ from ..domain.models.user_profile import UserProfile, UserProfileCreate, UserPro
 from ..domain.services.agent_log_context import agent_log_operation, agent_log_turn
 from ..domain.services.context_strategy import _render_user_profile_block, render_invariants_context
 from ..domain.services.credential_sanitizer import sanitize_error, sanitize_text, sanitize_value
+from ..domain.services.expense_search import filter_expenses
+from ..domain.services.mcp_tool_loop import (
+    McpToolLoop,
+    ResolvedMcpTool,
+    ToolExecutionResult,
+    encode_tool_result,
+    provider_tool_alias,
+)
 from ..domain.services.memory_classifier import LLMMemoryClassifier
 from ..domain.services.router import LLMRouter
+from ..domain.services.runtime_context import with_current_datetime_context
 from ..domain.services.task_state_machine import (
     InvalidTaskTransition,
     TaskEvent,
@@ -120,10 +152,56 @@ invariants_repository = InvariantsRepository(
     legacy_sessions_root=sessions_path,
 )
 user_profiles = JsonUserProfilesRepository()
+expenses = ExpensesRepository(Path("~/.copia/files/finances.xlsx"))
+mcp_connections = McpConnectionsRepository(
+    Path(os.getenv("COPIA_MCP_CONNECTIONS_PATH", "~/.copia/mcp_connections.json"))
+)
 session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
 task_workers: dict[str, asyncio.Task[None]] = {}
 task_workers_lock = threading.RLock()
+
+
+@dataclass
+class _McpTurnRuntime:
+    id: str
+    session_id: str
+    status: str = "running"
+    events: list[dict[str, Any]] = None  # type: ignore[assignment]
+    approval: McpApproval | None = None
+    result: SessionMessageResponse | None = None  # type: ignore[name-defined]
+    error: str | None = None
+    decision: bool | None = None
+    decision_event: threading.Event = None  # type: ignore[assignment]
+    lock: threading.RLock = None  # type: ignore[assignment]
+    audits: list[dict[str, Any]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self.events = []
+        self.decision_event = threading.Event()
+        self.lock = threading.RLock()
+        self.audits = []
+
+
+mcp_turns: dict[str, _McpTurnRuntime] = {}
+mcp_turns_lock = threading.RLock()
+mcp_turn_workers: dict[str, asyncio.Task[None]] = {}
+
+
+@dataclass
+class _TaskMcpApprovalRuntime:
+    session_id: str
+    task_id: str
+    approval: McpApproval
+    decision: bool | None = None
+    event: threading.Event = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self.event = threading.Event()
+
+
+task_mcp_approvals: dict[str, _TaskMcpApprovalRuntime] = {}
+task_mcp_approvals_lock = threading.RLock()
 
 
 @dataclass
@@ -141,6 +219,43 @@ approved_memory_mutations: OrderedDict[tuple[str, str], LongTermMemoryMutationRe
 )
 
 app = FastAPI(title="Copia API", version="0.1.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(
+    request: Request, error: RequestValidationError
+) -> JSONResponse:
+    if request.url.path != "/expenses":
+        return await request_validation_exception_handler(request, error)
+    first_error = error.errors()[0]
+    location = ".".join(str(part) for part in first_error["loc"])
+    message = f"Invalid {location}: {first_error['msg']}"
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": {"code": "invalid_expense_request", "message": message}},
+    )
+
+
+def _expense_error(code: str, message: str, status_code: int) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _encode_expense_cursor(offset: int) -> str:
+    return base64.urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
+
+
+def _decode_expense_cursor(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(cursor + padding, altchars=b"-_", validate=True).decode("ascii")
+        offset = int(decoded)
+    except (binascii.Error, UnicodeDecodeError, ValueError) as error:
+        raise _expense_error("invalid_cursor", "Expense cursor is invalid", 422) from error
+    if offset < 0:
+        raise _expense_error("invalid_cursor", "Expense cursor is invalid", 422)
+    return offset
 
 
 def provider_error_detail(
@@ -193,6 +308,12 @@ class McpDiscoveryRequest(BaseModel):
         if (self.header_name is None) != (self.header_value is None):
             raise ValueError("header_name and header_value must be provided together")
         return self
+
+
+class McpApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "reject"]
 
 
 class ContextManagementUpdate(BaseModel):
@@ -250,6 +371,15 @@ class SessionMessageResponse(BaseModel):
     working_memory: list[WorkingMemoryItem] = Field(default_factory=list)
 
 
+class McpTurnResponse(BaseModel):
+    id: str
+    session_id: str
+    status: Literal["running", "waiting_for_approval", "completed", "failed"]
+    approval: McpApproval | None = None
+    result: SessionMessageResponse | None = None
+    error: str | None = None
+
+
 class AgentLogBodyResponse(BaseModel):
     content: str
     encoding: Literal["utf-8", "base64"]
@@ -289,6 +419,7 @@ class AgentLogResponse(BaseModel):
     error: str | None = None
     operations: list[AgentLogOperation] = Field(default_factory=list)
     exchanges: list[AgentLogExchangeResponse] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 AgentLogDetail = AgentLogResponse
@@ -345,6 +476,7 @@ def _agent_log_response(turn: AgentLogTurn) -> AgentLogResponse:
         error=turn.error,
         operations=turn.operations,
         exchanges=[_agent_log_exchange_response(exchange) for exchange in turn.exchanges],
+        tool_calls=turn.tool_calls,
     )
 
 
@@ -663,6 +795,45 @@ def _task_call_finish(
     return _task_checkpoint(session_id, update)
 
 
+def _request_task_mcp_approval(session_id: str, task_id: str, approval: McpApproval) -> bool:
+    runtime = _TaskMcpApprovalRuntime(session_id=session_id, task_id=task_id, approval=approval)
+    with task_mcp_approvals_lock:
+        task_mcp_approvals[approval.id] = runtime
+
+    def waiting(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        task.status = TaskStatus.WAITING_FOR_APPROVAL
+        task.expected_action = f"Approve or reject MCP tool {approval.tool_name}"
+        task.mcp_approval = approval
+
+    _task_checkpoint(session_id, waiting)
+    runtime.event.wait()
+
+    def resumed(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        task.status = TaskStatus.RUNNING
+        task.expected_action = None
+        task.mcp_approval = None
+
+    _task_checkpoint(session_id, resumed)
+    with task_mcp_approvals_lock:
+        task_mcp_approvals.pop(approval.id, None)
+    return bool(runtime.decision)
+
+
+def _emit_task_mcp_event(
+    session_id: str, task_id: str, event_type: str, data: dict[str, Any]
+) -> None:
+    if event_type not in {"tool_running", "tool_completed"}:
+        return
+
+    def update(session: ChatSession) -> None:
+        task = _session_task(session, task_id)
+        task.mcp_running_tool = str(data.get("tool_name")) if event_type == "tool_running" else None
+
+    _task_checkpoint(session_id, update)
+
+
 def _task_pause_if_requested(session_id: str, task_id: str) -> bool:
     def update(session: ChatSession) -> None:
         task = _session_task(session, task_id)
@@ -675,6 +846,13 @@ def _task_pause_if_requested(session_id: str, task_id: str) -> bool:
 
 
 def _recover_orphaned_task(task: TaskState) -> None:
+    if task.mcp_approval is not None or task.mcp_running_tool is not None:
+        task.status = TaskStatus.FAILED
+        task.expected_action = "Retry the task after an interrupted MCP tool call"
+        task.mcp_approval = None
+        task.mcp_running_tool = None
+        task.recovered = True
+        return
     if task.status == TaskStatus.RUNNING:
         task_state_machine.apply(task, TaskEvent.PAUSE_REQUESTED)
     if task.status == TaskStatus.PAUSE_REQUESTED:
@@ -851,6 +1029,25 @@ async def _task_complete_call(
         session_id, task_id=task_id, stage=stage, kind=kind, step_id=step_id
     )
     try:
+        session = await _get_session(session_id)
+        resolved_tools = (
+            await _resolved_mcp_tools(session.config) if session.config.mcp_access else []
+        )
+        completion = None
+        if resolved_tools:
+            tool_loop = McpToolLoop(
+                router,
+                resolved_tools,
+                request_approval=lambda approval: _request_task_mcp_approval(
+                    session_id, task_id, approval
+                ),
+                execute=_execute_resolved_tool,
+                emit=lambda event_type, data: _emit_task_mcp_event(
+                    session_id, task_id, event_type, data
+                ),
+                audit=lambda entry: agent_log_store.append_tool_call(agent_log_id, entry),
+            )
+            completion = tool_loop.complete
         with agent_log_turn(
             session_id,
             agent_log_id,
@@ -858,7 +1055,11 @@ async def _task_complete_call(
             model=config.model,
             operation=kind,
         ):
-            response = await run_in_threadpool(router.complete, messages, config)
+            response = await run_in_threadpool(
+                completion or router.complete,
+                with_current_datetime_context(messages),
+                config,
+            )
     except Exception as error:
         _task_call_finish(
             session_id,
@@ -1159,6 +1360,63 @@ def _start_task_worker(session_id: str, task_id: str) -> None:
         task_workers[session_id] = worker
 
 
+@app.get("/expenses", response_model=ExpensePage)
+def list_expenses(
+    page_size: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = None,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
+    category: str | None = None,
+    name: str | None = None,
+    merchant: str | None = None,
+    payment_method: str | None = None,
+    tags: Annotated[list[str] | None, Query()] = None,
+    min_amount_rub: Annotated[Decimal | None, Query(ge=0)] = None,
+    max_amount_rub: Annotated[Decimal | None, Query(ge=0)] = None,
+    text: str | None = None,
+) -> ExpensePage:
+    offset = _decode_expense_cursor(cursor)
+    try:
+        search_filters = ExpenseSearchFilters(
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+            category=category,
+            name=name,
+            merchant=merchant,
+            payment_method=payment_method,
+            tags=tags or [],
+            min_amount_rub=min_amount_rub,
+            max_amount_rub=max_amount_rub,
+            text=text,
+        )
+    except ValidationError as error:
+        message = error.errors(include_url=False)[0]["msg"]
+        raise _expense_error("invalid_expense_request", message, 422) from error
+    try:
+        stored_expenses = filter_expenses(expenses.list(), search_filters)
+    except ExpensesFileNotFoundError as error:
+        raise _expense_error("finances_file_not_found", str(error), 404) from error
+    except ExpensesStorageError as error:
+        raise _expense_error("finances_storage_error", str(error), 500) from error
+
+    items = stored_expenses[offset : offset + page_size]
+    next_offset = offset + len(items)
+    next_cursor = (
+        _encode_expense_cursor(next_offset) if next_offset < len(stored_expenses) else None
+    )
+    return ExpensePage(items=items, next_cursor=next_cursor)
+
+
+@app.post("/expenses", response_model=Expense, status_code=status.HTTP_201_CREATED)
+def create_expense(request: ExpenseCreate) -> Expense:
+    try:
+        return expenses.add(request)
+    except ExpensesFileNotFoundError as error:
+        raise _expense_error("finances_file_not_found", str(error), 404) from error
+    except ExpensesStorageError as error:
+        raise _expense_error("finances_storage_error", str(error), 500) from error
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -1177,20 +1435,183 @@ MCP_ERROR_STATUS_CODES = {
 }
 
 
-@app.post("/mcp/discover", response_model=McpDiscoveryResult)
+@app.post(
+    "/mcp/discover",
+    response_model=McpDiscoveryResult,
+    response_model_exclude_defaults=True,
+)
 async def discover_mcp(request: McpDiscoveryRequest) -> McpDiscoveryResult:
     try:
+        allow_local = os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false"
         if request.header_name is None and request.header_value is None:
-            return await discover_mcp_tools(request.endpoint)
+            if allow_local:
+                return await discover_mcp_tools(request.endpoint)
+            return await discover_mcp_tools(request.endpoint, allow_local=False)
+        if allow_local:
+            return await discover_mcp_tools(
+                request.endpoint,
+                header_name=request.header_name,
+                header_value=request.header_value,
+            )
         return await discover_mcp_tools(
             request.endpoint,
             header_name=request.header_name,
             header_value=request.header_value,
+            allow_local=False,
         )
     except McpDiscoveryError as error:
         raise HTTPException(
             status_code=MCP_ERROR_STATUS_CODES.get(error.code, status.HTTP_502_BAD_GATEWAY),
             detail={"code": error.code, "message": error.message},
+        ) from error
+
+
+def _mcp_header(connection: McpConnection | McpConnectionInput) -> tuple[str | None, str | None]:
+    if connection.header_value_env is None:
+        return None, None
+    value = os.getenv(connection.header_value_env)
+    if value is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "mcp_secret_unavailable",
+                "message": f"Environment variable {connection.header_value_env} is not configured",
+            },
+        )
+    return connection.header_name, value
+
+
+async def _discover_connection(
+    connection: McpConnection | McpConnectionInput,
+) -> McpDiscoveryResult:
+    header_name, header_value = _mcp_header(connection)
+    try:
+        return await discover_mcp_tools(
+            connection.endpoint,
+            header_name=header_name,
+            header_value=header_value,
+            allow_local=os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false",
+        )
+    except McpDiscoveryError as error:
+        raise HTTPException(
+            status_code=MCP_ERROR_STATUS_CODES.get(error.code, 502),
+            detail={"code": error.code, "message": error.message},
+        ) from error
+
+
+@app.get("/mcp/connections", response_model=list[McpConnection])
+async def list_mcp_connections() -> list[McpConnection]:
+    try:
+        return await run_in_threadpool(mcp_connections.list)
+    except McpConnectionsStorageError as error:
+        raise HTTPException(
+            500, detail={"code": "mcp_storage_error", "message": str(error)}
+        ) from error
+
+
+@app.post("/mcp/connections", response_model=McpConnection, status_code=201)
+async def create_mcp_connection(request: McpConnectionInput) -> McpConnection:
+    discovery = await _discover_connection(request)
+    connection = McpConnection(
+        **request.model_dump(),
+        server=discovery.server,
+        tools=discovery.tools,
+        updated_at=datetime.now(UTC),
+    )
+    try:
+        return await run_in_threadpool(mcp_connections.create, connection)
+    except McpConnectionConflictError as error:
+        raise HTTPException(
+            409, detail={"code": "mcp_connection_exists", "message": str(error)}
+        ) from error
+    except McpConnectionsStorageError as error:
+        raise HTTPException(
+            500, detail={"code": "mcp_storage_error", "message": str(error)}
+        ) from error
+
+
+@app.put("/mcp/connections/{connection_id}", response_model=McpConnection)
+async def update_mcp_connection(connection_id: str, request: McpConnectionInput) -> McpConnection:
+    if connection_id != request.id:
+        raise HTTPException(
+            422, detail={"code": "mcp_id_mismatch", "message": "Connection ID cannot be changed"}
+        )
+    if await run_in_threadpool(mcp_connections.get, connection_id) is None:
+        raise HTTPException(
+            404, detail={"code": "mcp_connection_not_found", "message": "MCP connection not found"}
+        )
+    discovery = await _discover_connection(request)
+    connection = McpConnection(
+        **request.model_dump(),
+        server=discovery.server,
+        tools=discovery.tools,
+        updated_at=datetime.now(UTC),
+    )
+    try:
+        return await run_in_threadpool(mcp_connections.save, connection)
+    except McpConnectionsStorageError as error:
+        raise HTTPException(
+            500, detail={"code": "mcp_storage_error", "message": str(error)}
+        ) from error
+
+
+@app.post("/mcp/connections/{connection_id}/test", response_model=McpConnection)
+async def test_mcp_connection(connection_id: str) -> McpConnection:
+    connection = await run_in_threadpool(mcp_connections.get, connection_id)
+    if connection is None:
+        raise HTTPException(
+            404, detail={"code": "mcp_connection_not_found", "message": "MCP connection not found"}
+        )
+    discovery = await _discover_connection(connection)
+    updated = connection.model_copy(
+        update={
+            "server": discovery.server,
+            "tools": discovery.tools,
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    return await run_in_threadpool(mcp_connections.save, updated)
+
+
+def _connection_is_used(connection_id: str) -> bool:
+    if any(
+        access.connection_id == connection_id
+        for agent in agents.values()
+        for access in agent.config.mcp_access
+    ):
+        return True
+    for summary in sessions.list():
+        session = sessions.load(summary.id)
+        if session and any(
+            item.connection_id == connection_id for item in session.config.mcp_access
+        ):
+            return True
+    return any(
+        access.connection_id == connection_id
+        for config in ProfilesRepository(profiles_path).load().values()
+        for access in config.mcp_access
+    )
+
+
+@app.delete("/mcp/connections/{connection_id}", status_code=204)
+async def delete_mcp_connection(connection_id: str) -> None:
+    try:
+        if await run_in_threadpool(_connection_is_used, connection_id):
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "mcp_connection_in_use",
+                    "message": "MCP connection is used by an agent",
+                },
+            )
+        if not await run_in_threadpool(mcp_connections.delete, connection_id):
+            raise HTTPException(
+                404,
+                detail={"code": "mcp_connection_not_found", "message": "MCP connection not found"},
+            )
+    except McpConnectionsStorageError as error:
+        raise HTTPException(
+            500, detail={"code": "mcp_storage_error", "message": str(error)}
         ) from error
 
 
@@ -1453,6 +1874,14 @@ async def send_message(agent_id: str, request: MessageRequest) -> MessageRespons
     agent = agents.get(agent_id)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown agent")
+    if agent.config.mcp_access:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "mcp_turn_required",
+                "message": "MCP-enabled agents must use a persisted session turn",
+            },
+        )
     try:
         loaded_invariants = await run_in_threadpool(invariants_repository.load)
         agent.set_invariants(loaded_invariants)
@@ -1833,6 +2262,7 @@ def _get_session_locked(session_id: str) -> ChatSession:
     session = sessions.load(session_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+    _recover_interrupted_mcp_turn(session)
     return session
 
 
@@ -1844,7 +2274,21 @@ async def _get_session(session_id: str) -> ChatSession:
     session = await run_in_threadpool(sessions.load, session_id)
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
+    await run_in_threadpool(_recover_interrupted_mcp_turn, session)
     return session
+
+
+def _recover_interrupted_mcp_turn(session: ChatSession) -> None:
+    if session.mcp_turn_status not in {"running", "waiting_for_approval"}:
+        return
+    with mcp_turns_lock:
+        active = session.mcp_turn_id is not None and session.mcp_turn_id in mcp_turns
+    if active:
+        return
+    session.mcp_turn_status = "failed"
+    session.mcp_turn_error = "interrupted_by_restart"
+    session.updated_at = datetime.now(UTC)
+    sessions.save(session)
 
 
 def _session_message_lock(session_id: str) -> _SessionLockState:
@@ -2114,7 +2558,10 @@ async def send_session_message(
 
 
 async def _send_session_message_locked(
-    session_id: str, request: MessageRequest, background_tasks: BackgroundTasks
+    session_id: str,
+    request: MessageRequest,
+    background_tasks: BackgroundTasks,
+    completion=None,
 ) -> SessionMessageResponse:
     try:
         session = await _get_session(session_id)
@@ -2124,6 +2571,19 @@ async def _send_session_message_locked(
         raise _session_initialization_error(
             agent_log_id, "Session is unavailable", "session_unavailable"
         ) from error
+    effective_config = (
+        request.config
+        if request.config is not None and session.profile_name is None
+        else session.config
+    )
+    if completion is None and effective_config.mcp_access:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "mcp_turn_required",
+                "message": "MCP-enabled agents must use the asynchronous turn API",
+            },
+        )
     if _session_has_active_task(session):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2190,7 +2650,7 @@ async def _send_session_message_locked(
         ) from error
     try:
         response = await run_in_threadpool(
-            _ask_agent, session.id, agent, request.content, agent_log_id, True
+            _ask_agent, session.id, agent, request.content, agent_log_id, True, completion
         )
     except FactsUpdateFailed as error:
         _save_agent_state(session, agent)
@@ -2279,6 +2739,275 @@ async def _send_session_message_locked(
         pending_memory=agent.pending_memory,
         working_memory=agent.working_memory,
     )
+
+
+def _turn_response(turn: _McpTurnRuntime) -> McpTurnResponse:
+    with turn.lock:
+        return McpTurnResponse(
+            id=turn.id,
+            session_id=turn.session_id,
+            status=turn.status,  # type: ignore[arg-type]
+            approval=turn.approval,
+            result=turn.result,
+            error=turn.error,
+        )
+
+
+def _emit_turn(turn: _McpTurnRuntime, event_type: str, data: dict[str, Any]) -> None:
+    with turn.lock:
+        turn.events.append({"id": len(turn.events) + 1, "type": event_type, "data": data})
+
+
+def _persist_mcp_turn_state(
+    session_id: str,
+    turn_id: str,
+    status_value: str,
+    error: str | None = None,
+) -> None:
+    with session_lifecycle_lock:
+        session = sessions.load(session_id)
+        if session is None:
+            return
+        session.mcp_turn_id = turn_id
+        session.mcp_turn_status = status_value  # type: ignore[assignment]
+        session.mcp_turn_error = error
+        session.updated_at = datetime.now(UTC)
+        sessions.save(session)
+
+
+async def _resolved_mcp_tools(config: AgentConfig) -> list[ResolvedMcpTool]:
+    resolved: list[ResolvedMcpTool] = []
+    for access in config.mcp_access:
+        connection = await run_in_threadpool(mcp_connections.get, access.connection_id)
+        if connection is None:
+            raise RuntimeError(f"MCP connection {access.connection_id} is unavailable")
+        discovery = await _discover_connection(connection)
+        discovered = {tool.name: tool for tool in discovery.tools}
+        for tool_name in access.enabled_tools:
+            tool = discovered.get(tool_name)
+            if tool is None:
+                raise RuntimeError(
+                    f"MCP tool {tool_name} is unavailable on connection {connection.name}"
+                )
+            alias = provider_tool_alias(connection.id, tool.name)
+            resolved.append(
+                ResolvedMcpTool(
+                    alias=alias,
+                    connection_id=connection.id,
+                    connection_name=connection.name,
+                    tool_name=tool.name,
+                    definition=ToolDefinition(
+                        name=alias,
+                        description=tool.description,
+                        parameters=tool.input_schema,
+                    ),
+                )
+            )
+    return resolved
+
+
+def _turn_approval(turn: _McpTurnRuntime, approval: McpApproval) -> bool:
+    with turn.lock:
+        turn.approval = approval
+        turn.status = "waiting_for_approval"
+        turn.decision = None
+        turn.decision_event.clear()
+    _persist_mcp_turn_state(turn.session_id, turn.id, "waiting_for_approval")
+    turn.decision_event.wait()
+    with turn.lock:
+        decision = bool(turn.decision)
+        turn.approval = None
+        turn.status = "running"
+    _persist_mcp_turn_state(turn.session_id, turn.id, "running")
+    return decision
+
+
+def _execute_resolved_tool(tool: ResolvedMcpTool, arguments: dict[str, Any]) -> ToolExecutionResult:
+    connection = mcp_connections.get(tool.connection_id)
+    if connection is None:
+        raise RuntimeError("MCP connection is unavailable")
+    header_name, header_value = _mcp_header(connection)
+    try:
+        result = asyncio.run(
+            call_mcp_tool(
+                connection.endpoint,
+                tool.tool_name,
+                arguments,
+                header_name=header_name,
+                header_value=header_value,
+                allow_local=os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false",
+            )
+        )
+    except McpDiscoveryError as error:
+        raise RuntimeError(error.message) from error
+    return ToolExecutionResult(
+        encode_tool_result(
+            {
+                "content": result.content,
+                "structured_content": result.structured_content,
+                "is_error": result.is_error,
+            }
+        ),
+        is_error=result.is_error,
+    )
+
+
+async def _run_mcp_turn(turn: _McpTurnRuntime, request: MessageRequest) -> None:
+    message_lock = _session_message_lock(turn.session_id)
+    await run_in_threadpool(message_lock.lock.acquire)
+    background = BackgroundTasks()
+    try:
+        session = await _get_session(turn.session_id)
+        config = (
+            request.config
+            if request.config is not None and session.profile_name is None
+            else session.config
+        )
+        tools = await _resolved_mcp_tools(config)
+        loop = McpToolLoop(
+            router,
+            tools,
+            request_approval=lambda approval: _turn_approval(turn, approval),
+            execute=_execute_resolved_tool,
+            emit=lambda event_type, data: _emit_turn(turn, event_type, data),
+            audit=lambda entry: turn.audits.append(entry),
+        )
+        response = await _send_session_message_locked(
+            turn.session_id, request, background, completion=loop.complete
+        )
+        for audit in turn.audits:
+            agent_log_store.append_tool_call(response.agent_log_id, audit)
+        with turn.lock:
+            turn.result = response
+            turn.status = "completed"
+        await run_in_threadpool(
+            _persist_mcp_turn_state, turn.session_id, turn.id, "completed", None
+        )
+        _emit_turn(turn, "final", response.model_dump(mode="json"))
+        await background()
+    except Exception as error:
+        with turn.lock:
+            turn.error = sanitize_error(str(error))[:1000]
+            turn.status = "failed"
+        await run_in_threadpool(
+            _persist_mcp_turn_state, turn.session_id, turn.id, "failed", turn.error
+        )
+        _emit_turn(turn, "error", {"message": turn.error})
+    finally:
+        message_lock.lock.release()
+        _release_session_message_lock(message_lock)
+        with mcp_turns_lock:
+            mcp_turn_workers.pop(turn.id, None)
+
+
+@app.post("/sessions/{session_id}/turns", response_model=McpTurnResponse, status_code=202)
+async def start_mcp_turn(session_id: str, request: MessageRequest) -> McpTurnResponse:
+    session = await _get_session(session_id)
+    config = (
+        request.config
+        if request.config is not None and session.profile_name is None
+        else session.config
+    )
+    if not config.mcp_access:
+        raise HTTPException(
+            409, detail={"code": "mcp_not_enabled", "message": "Agent has no MCP tools enabled"}
+        )
+    with mcp_turns_lock:
+        if any(
+            item.session_id == session_id and item.status in {"running", "waiting_for_approval"}
+            for item in mcp_turns.values()
+        ):
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "turn_active",
+                    "message": "Another turn is active for this session",
+                },
+            )
+        turn = _McpTurnRuntime(id=str(uuid.uuid4()), session_id=session_id)
+        mcp_turns[turn.id] = turn
+    await run_in_threadpool(_persist_mcp_turn_state, session_id, turn.id, "running", None)
+    _emit_turn(turn, "turn_started", {"turn_id": turn.id})
+    worker = asyncio.create_task(_run_mcp_turn(turn, request))
+    with mcp_turns_lock:
+        mcp_turn_workers[turn.id] = worker
+    return _turn_response(turn)
+
+
+def _require_mcp_turn(session_id: str, turn_id: str) -> _McpTurnRuntime:
+    with mcp_turns_lock:
+        turn = mcp_turns.get(turn_id)
+    if turn is None or turn.session_id != session_id:
+        raise HTTPException(404, detail={"code": "turn_not_found", "message": "Turn not found"})
+    return turn
+
+
+@app.get("/sessions/{session_id}/turns/{turn_id}", response_model=McpTurnResponse)
+async def get_mcp_turn(session_id: str, turn_id: str) -> McpTurnResponse:
+    return _turn_response(_require_mcp_turn(session_id, turn_id))
+
+
+@app.get("/sessions/{session_id}/turns/{turn_id}/events")
+async def stream_mcp_turn_events(
+    session_id: str, turn_id: str, request: Request
+) -> StreamingResponse:
+    turn = _require_mcp_turn(session_id, turn_id)
+
+    async def events():
+        index = 0
+        while True:
+            if await request.is_disconnected():
+                return
+            with turn.lock:
+                pending = list(turn.events[index:])
+                terminal = turn.status in {"completed", "failed"}
+            for event in pending:
+                index += 1
+                yield f"id: {event['id']}\nevent: {event['type']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"
+            if terminal and index >= len(turn.events):
+                return
+            await asyncio.sleep(0.1)
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/sessions/{session_id}/mcp-approvals/{approval_id}")
+async def decide_mcp_approval(
+    session_id: str, approval_id: str, request: McpApprovalDecision
+) -> dict[str, Any]:
+    with mcp_turns_lock:
+        turn = next(
+            (
+                item
+                for item in mcp_turns.values()
+                if item.session_id == session_id
+                and item.approval is not None
+                and item.approval.id == approval_id
+            ),
+            None,
+        )
+    if turn is not None:
+        with turn.lock:
+            if turn.decision is not None:
+                raise HTTPException(
+                    409,
+                    detail={"code": "approval_decided", "message": "Approval was already decided"},
+                )
+            turn.decision = request.decision == "approve"
+            turn.decision_event.set()
+        return {"status": "accepted", "turn_id": turn.id}
+    with task_mcp_approvals_lock:
+        task_runtime = task_mcp_approvals.get(approval_id)
+        if task_runtime is not None and task_runtime.session_id == session_id:
+            if task_runtime.decision is not None:
+                raise HTTPException(
+                    409,
+                    detail={"code": "approval_decided", "message": "Approval was already decided"},
+                )
+            task_runtime.decision = request.decision == "approve"
+            task_runtime.event.set()
+            return {"status": "accepted", "task_id": task_runtime.task_id}
+    raise HTTPException(404, detail={"code": "approval_not_found", "message": "Approval not found"})
 
 
 @app.get("/sessions/{session_id}/agent-logs/{agent_log_id}", response_model=AgentLogResponse)
@@ -2821,6 +3550,7 @@ def _ask_agent(
     content: str,
     agent_log_id: str | None = None,
     session_lock_held: bool = False,
+    completion=None,
 ) -> LLMResponse:
     message_lock = None if session_lock_held else _session_message_lock(session_id)
     if message_lock is not None:
@@ -2830,14 +3560,22 @@ def _ask_agent(
             if sessions.load(session_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session")
         if agent_log_id is None:
-            return agent.ask(content)
+            return (
+                agent.ask(content)
+                if completion is None
+                else agent.ask(content, completion=completion)
+            )
         with agent_log_turn(
             session_id,
             agent_log_id,
             provider=agent.config.provider,
             model=agent.config.model,
         ):
-            return agent.ask(content, agent_log_id=agent_log_id)
+            return (
+                agent.ask(content, agent_log_id=agent_log_id)
+                if completion is None
+                else agent.ask(content, agent_log_id=agent_log_id, completion=completion)
+            )
     finally:
         if message_lock is not None:
             message_lock.lock.release()

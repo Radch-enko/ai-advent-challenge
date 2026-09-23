@@ -12,6 +12,8 @@ from ..models.config import (
     ProviderCapabilities,
     ProviderModel,
     ProviderName,
+    ToolDefinition,
+    ToolLoopMessage,
 )
 
 
@@ -30,12 +32,21 @@ class LLMRouter:
             ProviderName.GIGACHAT: GigaChatProvider(log_store=agent_log_store),
         }
 
-    def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
+    def complete(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> LLMResponse:
         try:
             provider = self._providers[config.provider]
         except KeyError as error:
             raise ProviderError(f"Unsupported provider: {config.provider.value}") from error
-        response = provider.complete(messages, config)
+        response = (
+            provider.complete(messages, config, tools)
+            if tools is not None
+            else provider.complete(messages, config)
+        )
         response.context_window = context_window_for(config.provider, config.model)
         return response
 

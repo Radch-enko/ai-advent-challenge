@@ -6,6 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import ProviderName
+from .mcp import McpApproval
 
 
 class TaskStage(StrEnum):
@@ -94,6 +95,8 @@ class TaskState(BaseModel):
     updated_at: datetime
     checkpoint_revision: int = Field(default=0, ge=0)
     recovered: bool = False
+    mcp_approval: McpApproval | None = None
+    mcp_running_tool: str | None = None
 
 
 class TaskModeUpdate(BaseModel):

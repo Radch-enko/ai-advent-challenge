@@ -52,6 +52,11 @@ import {
   retryTask,
   resumeTask,
   startTask,
+  listMcpConnections,
+  startMcpTurn,
+  getMcpTurn,
+  streamMcpTurnEvents,
+  decideMcpApproval,
 } from './data/api/copiaApi'
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
@@ -71,6 +76,7 @@ import {
   TokenUsage,
 } from './domain/models/chat'
 import { TaskPlanStep, TaskState } from './domain/models/task'
+import { McpApproval, McpConnection } from './domain/models/mcp'
 import { AgentLogBlock } from './ui/components/AgentLogBlock'
 import { InvariantPanel } from './ui/components/InvariantPanel'
 import { MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
@@ -217,6 +223,9 @@ export function App() {
   const [models, setModels] = useState<ProviderModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, AgentConfig>>({})
+  const [mcpConnections, setMcpConnections] = useState<McpConnection[]>([])
+  const [mcpApproval, setMcpApproval] = useState<McpApproval | null>(null)
+  const [runningMcpTool, setRunningMcpTool] = useState<string | null>(null)
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([])
   const [userProfilesLoading, setUserProfilesLoading] = useState(false)
   const [userProfilesError, setUserProfilesError] = useState<string | null>(null)
@@ -296,7 +305,101 @@ export function App() {
     getProfiles()
       .then(setProfiles)
       .catch(() => setProfiles({}))
+    listMcpConnections()
+      .then(setMcpConnections)
+      .catch(() => setMcpConnections([]))
   }, [])
+  useEffect(() => {
+    if (mode === 'agents') {
+      void listMcpConnections()
+        .then(setMcpConnections)
+        .catch(() => setMcpConnections([]))
+    }
+  }, [mode])
+  useEffect(() => {
+    const sessionId = activeSession?.id
+    if (!sessionId) return
+    const storageKey = `copia.mcpTurn.${sessionId}`
+    const turnId =
+      localStorage.getItem(storageKey) ??
+      (activeSession.mcp_turn_status === 'running' ||
+      activeSession.mcp_turn_status === 'waiting_for_approval'
+        ? activeSession.mcp_turn_id
+        : null)
+    if (!turnId) return
+    let cancelled = false
+    const controller = new AbortController()
+    const restoreSession = async () => {
+      const latest = await getSession(sessionId)
+      if (cancelled) return
+      setActiveSession(latest)
+      setMessages(
+        latest.messages.map((item, index) => ({
+          id: index,
+          role: item.role,
+          content: item.content,
+          timestamp: formatMessageTimestamp(item.created_at),
+          usage: item.usage ?? undefined,
+          contextWindow: item.context_window ?? undefined,
+          agentLogId: item.agent_log_id ?? undefined,
+          taskId: item.task_id ?? undefined,
+          taskStepId: item.task_step_id ?? undefined,
+          transcriptIndex: index,
+        })),
+      )
+    }
+    void (async () => {
+      try {
+        const current = await getMcpTurn(sessionId, turnId)
+        if (cancelled) return
+        setMcpApproval(current.approval)
+        if (current.status === 'completed' || current.status === 'failed') {
+          localStorage.removeItem(storageKey)
+          await restoreSession()
+          return
+        }
+        await streamMcpTurnEvents(
+          sessionId,
+          turnId,
+          (event) => {
+            if (cancelled) return
+            if (event.type === 'tool_approval_required') setMcpApproval(event.data as McpApproval)
+            if (event.type === 'tool_running') {
+              setMcpApproval(null)
+              setRunningMcpTool((event.data as { tool_name?: string }).tool_name ?? null)
+            }
+            if (event.type === 'tool_completed') setRunningMcpTool(null)
+          },
+          controller.signal,
+        )
+        if (!cancelled) {
+          localStorage.removeItem(storageKey)
+          setMcpApproval(null)
+          setRunningMcpTool(null)
+          await restoreSession()
+        }
+      } catch (restoreError) {
+        if (!cancelled) {
+          localStorage.removeItem(storageKey)
+          if (restoreError instanceof ApiRequestError && restoreError.status === 404) {
+            setMessages((currentMessages) => [
+              ...currentMessages,
+              {
+                id: Date.now(),
+                role: 'error',
+                content: 'MCP turn прерван перезапуском backend.',
+                timestamp: now(),
+              },
+            ])
+          }
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [activeSession?.id, activeSession?.mcp_turn_id, activeSession?.mcp_turn_status])
   const refreshUserProfiles = useCallback(async (showError = true): Promise<boolean> => {
     setUserProfilesLoading(true)
     try {
@@ -491,8 +594,9 @@ export function App() {
       system_prompt: systemPrompt.trim() || undefined,
       generation: { max_output_tokens: Number(maxTokens) },
       context_management: contextManagement,
+      mcp_access: activeSession?.config.mcp_access ?? [],
     }),
-    [contextManagement, maxTokens, model, provider, systemPrompt],
+    [activeSession?.config.mcp_access, contextManagement, maxTokens, model, provider, systemPrompt],
   )
 
   function buildConfig(): AgentConfig {
@@ -607,8 +711,32 @@ export function App() {
       ) {
         setSummarizingSessionIds((current) => [...current, requestSession.id])
       }
-      const result = await sendSessionMessageWithMeta(requestSession.id, content, sessionConfig)
-      const response = result.data
+      let response
+      if ((effectiveConfig.mcp_access?.length ?? 0) > 0) {
+        const turn = await startMcpTurn(requestSession.id, content, sessionConfig)
+        localStorage.setItem(`copia.mcpTurn.${requestSession.id}`, turn.id)
+        await streamMcpTurnEvents(requestSession.id, turn.id, (event) => {
+          if (event.type === 'tool_approval_required') {
+            setMcpApproval(event.data as McpApproval)
+            setRunningMcpTool(null)
+          } else if (event.type === 'tool_running') {
+            const data = event.data as { tool_name?: string }
+            setMcpApproval(null)
+            setRunningMcpTool(data.tool_name ?? null)
+          } else if (event.type === 'tool_completed') {
+            setRunningMcpTool(null)
+          }
+        })
+        const completed = await getMcpTurn(requestSession.id, turn.id)
+        if (!completed.result) throw new Error(completed.error ?? 'MCP turn failed')
+        response = completed.result
+        localStorage.removeItem(`copia.mcpTurn.${requestSession.id}`)
+        setMcpApproval(null)
+        setRunningMcpTool(null)
+      } else {
+        response = (await sendSessionMessageWithMeta(requestSession.id, content, sessionConfig))
+          .data
+      }
       if (activeSessionIdRef.current === requestSession.id) {
         if (response.summarization_events.length) {
           setSummarizationEvents((current) =>
@@ -695,6 +823,27 @@ export function App() {
         setPendingSessionIds((current) => current.filter((id) => id !== requestSessionId))
         setSummarizingSessionIds((current) => current.filter((id) => id !== requestSessionId))
       }
+    }
+  }
+
+  async function respondToMcpApproval(approval: McpApproval, decision: 'approve' | 'reject') {
+    if (!activeSession) return
+    try {
+      await decideMcpApproval(activeSession.id, approval.id, decision)
+      setMcpApproval(null)
+      if (decision === 'approve' && approval.id !== activeTask?.mcp_approval?.id)
+        setRunningMcpTool(approval.tool_name)
+    } catch (approvalError) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: Date.now(),
+          role: 'error',
+          content:
+            approvalError instanceof Error ? approvalError.message : 'Не удалось отправить решение',
+          timestamp: now(),
+        },
+      ])
     }
   }
 
@@ -1453,6 +1602,7 @@ export function App() {
         ) : mode === 'agents' ? (
           <Agents
             profiles={profiles}
+            mcpConnections={mcpConnections}
             onLaunch={async (profile) => {
               openSession(await createSessionFromProfile(profile))
               setMode('chat')
@@ -1679,28 +1829,85 @@ export function App() {
                     </div>
                   </div>
                 )}
-                {isLoading && !isSummarizing && (
-                  <article className="message assistant loading">
-                    <span className="avatar">
-                      {activeSession?.config.avatar_path ? (
-                        <img
-                          src={activeSession.config.avatar_path}
-                          alt={activeSession.config.name}
-                        />
-                      ) : (
-                        '◇'
-                      )}
-                    </span>
+                {(mcpApproval ?? activeTask?.mcp_approval) && (
+                  <article className="message assistant mcp-approval-card">
+                    <span className="avatar">◇</span>
                     <div className="message-body">
-                      <p>
-                        <i />
-                        <i />
-                        <i />
-                      </p>
-                      <footer>Loading…</footer>
+                      <strong>
+                        Подтвердите {(mcpApproval ?? activeTask?.mcp_approval)!.tool_name}
+                      </strong>
+                      <p>Server: {(mcpApproval ?? activeTask?.mcp_approval)!.connection_name}</p>
+                      <pre>
+                        {JSON.stringify(
+                          (mcpApproval ?? activeTask?.mcp_approval)!.arguments,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                      <div className="mcp-approval-actions">
+                        <button
+                          type="button"
+                          className="mcp-action-button mcp-action-primary"
+                          onClick={() =>
+                            void respondToMcpApproval(
+                              (mcpApproval ?? activeTask?.mcp_approval)!,
+                              'approve',
+                            )
+                          }
+                        >
+                          Разрешить
+                        </button>
+                        <button
+                          type="button"
+                          className="mcp-action-button mcp-action-danger"
+                          onClick={() =>
+                            void respondToMcpApproval(
+                              (mcpApproval ?? activeTask?.mcp_approval)!,
+                              'reject',
+                            )
+                          }
+                        >
+                          Отклонить
+                        </button>
+                      </div>
                     </div>
                   </article>
                 )}
+                {(runningMcpTool ?? activeTask?.mcp_running_tool) && (
+                  <article className="message assistant loading">
+                    <span className="avatar">◇</span>
+                    <div className="message-body">
+                      <p>Выполняю {runningMcpTool ?? activeTask?.mcp_running_tool}</p>
+                    </div>
+                  </article>
+                )}
+                {isLoading &&
+                  !isSummarizing &&
+                  !mcpApproval &&
+                  !activeTask?.mcp_approval &&
+                  !runningMcpTool &&
+                  !activeTask?.mcp_running_tool && (
+                    <article className="message assistant loading">
+                      <span className="avatar">
+                        {activeSession?.config.avatar_path ? (
+                          <img
+                            src={activeSession.config.avatar_path}
+                            alt={activeSession.config.name}
+                          />
+                        ) : (
+                          '◇'
+                        )}
+                      </span>
+                      <div className="message-body">
+                        <p>
+                          <i />
+                          <i />
+                          <i />
+                        </p>
+                        <footer>Loading…</footer>
+                      </div>
+                    </article>
+                  )}
               </div>
             </div>
             <div className="composer-area">
@@ -1759,17 +1966,19 @@ export function App() {
                   )}
                 </div>
               )}
-              {activeTask?.status === 'waiting_for_approval' && (
-                <TaskPlanApprovalBar
-                  task={activeTask}
-                  feedback={planFeedback}
-                  submitting={planApprovalSubmitting}
-                  error={planApprovalError}
-                  onFeedbackChange={setPlanFeedback}
-                  onApprove={() => void approveActiveTaskPlan()}
-                  onRequestChanges={() => void requestActiveTaskPlanChanges()}
-                />
-              )}
+              {activeTask?.status === 'waiting_for_approval' &&
+                activeTask.stage === 'plan_review' &&
+                !activeTask.mcp_approval && (
+                  <TaskPlanApprovalBar
+                    task={activeTask}
+                    feedback={planFeedback}
+                    submitting={planApprovalSubmitting}
+                    error={planApprovalError}
+                    onFeedbackChange={setPlanFeedback}
+                    onApprove={() => void approveActiveTaskPlan()}
+                    onRequestChanges={() => void requestActiveTaskPlanChanges()}
+                  />
+                )}
               <form className="composer" ref={formRef} onSubmit={submit}>
                 <span
                   className="model-indicator"
@@ -2740,10 +2949,12 @@ function ModelsSelect({
 
 function Agents({
   profiles,
+  mcpConnections,
   onLaunch,
   onCreate,
 }: {
   profiles: Record<string, AgentConfig>
+  mcpConnections: McpConnection[]
   onLaunch: (profile: string) => Promise<void>
   onCreate: (config: AgentConfig) => Promise<void>
 }) {
@@ -2764,6 +2975,7 @@ function Agents({
   const [summarizerModelsLoading, setSummarizerModelsLoading] = useState(false)
   const [factsModels, setFactsModels] = useState<ProviderModel[]>([])
   const [factsModelsLoading, setFactsModelsLoading] = useState(false)
+  const [mcpAccess, setMcpAccess] = useState<AgentConfig['mcp_access']>([])
   const summarizerProvider = contextManagement.summarizer.provider ?? provider
   const summarizerModel = contextManagement.summarizer.model ?? model
   const factsProvider = contextManagement.facts_updater.provider ?? provider
@@ -2794,6 +3006,7 @@ function Agents({
         top_p: Number(topP),
       },
       context_management: contextManagement,
+      mcp_access: mcpAccess,
     })
   }
   return (
@@ -2887,6 +3100,54 @@ function Agents({
             factsModelsLoading={factsModelsLoading}
             factsSupportsSampling={supportsSamplingParameters(factsProvider, factsModel)}
           />
+          {mcpConnections.length > 0 && (
+            <fieldset className="agent-mcp-settings">
+              <legend>MCP tools</legend>
+              <p>Каждый вызов потребует отдельного подтверждения в чате.</p>
+              {mcpConnections.map((connection) => {
+                const selected = mcpAccess?.find((access) => access.connection_id === connection.id)
+                return (
+                  <div key={connection.id}>
+                    <strong>{connection.name}</strong>
+                    {connection.tools.map((tool) => {
+                      const checked = selected?.enabled_tools.includes(tool.name) ?? false
+                      return (
+                        <label key={tool.name}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) =>
+                              setMcpAccess((current = []) => {
+                                const existing = current.find(
+                                  (item) => item.connection_id === connection.id,
+                                )
+                                const tools = new Set(existing?.enabled_tools ?? [])
+                                if (event.target.checked) tools.add(tool.name)
+                                else tools.delete(tool.name)
+                                const rest = current.filter(
+                                  (item) => item.connection_id !== connection.id,
+                                )
+                                return tools.size
+                                  ? [
+                                      ...rest,
+                                      {
+                                        connection_id: connection.id,
+                                        enabled_tools: [...tools],
+                                      },
+                                    ]
+                                  : rest
+                              })
+                            }
+                          />{' '}
+                          {tool.name}
+                        </label>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+            </fieldset>
+          )}
           <button className="create-submit" type="submit">
             Создать и открыть чат
           </button>

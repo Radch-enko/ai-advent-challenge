@@ -17,6 +17,7 @@ export type AgentConfig = {
     strict: boolean
   }
   context_management: ContextManagementConfig
+  mcp_access?: Array<{ connection_id: string; enabled_tools: string[] }>
 }
 
 export type CompletionConfig = Omit<

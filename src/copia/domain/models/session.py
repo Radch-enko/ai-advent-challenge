@@ -86,6 +86,9 @@ class ChatSession(BaseModel):
     tasks: list[TaskState] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    mcp_turn_id: str | None = None
+    mcp_turn_status: Literal["running", "waiting_for_approval", "completed", "failed"] | None = None
+    mcp_turn_error: str | None = None
 
     @model_validator(mode="after")
     def synchronize_task_history(self) -> ChatSession:

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import RLock
+from typing import Any
 
 from ..domain.contracts import AgentLogRepository
 from ..domain.models.agent_log import AgentLogExchange, AgentLogOperation, AgentLogTurn
 from ..domain.models.config import ProviderName
-from ..domain.services.credential_sanitizer import sanitize_error
+from ..domain.services.credential_sanitizer import sanitize_error, sanitize_value
 
 MAX_AGENT_LOG_BODY_BYTES = 64 * 1024
 MAX_AGENT_LOG_TURNS = 100
@@ -32,6 +34,7 @@ class _TurnRecord:
     error: str | None = None
     exchanges: list[AgentLogExchange] = field(default_factory=list)
     operations: list[AgentLogOperation] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AgentLogStore:
@@ -119,6 +122,26 @@ class AgentLogStore:
                 return
             record.operations.append(operation)
             self._persist(record)
+
+    def append_tool_call(self, agent_turn_id: str, entry: dict[str, Any]) -> None:
+        with self._lock:
+            record = self._turns.get(agent_turn_id)
+            if record is None:
+                return
+            sanitized = sanitize_value(entry)
+            if isinstance(sanitized, dict):
+                encoded = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
+                if len(encoded) > self.max_body_bytes:
+                    sanitized = {
+                        "connection_id": sanitized.get("connection_id"),
+                        "tool_name": sanitized.get("tool_name"),
+                        "decision": sanitized.get("decision"),
+                        "status": sanitized.get("status"),
+                        "duration_seconds": sanitized.get("duration_seconds"),
+                        "truncated": True,
+                    }
+                record.tool_calls.append(sanitized)
+                self._persist(record)
 
     def finish_turn(
         self,
@@ -254,6 +277,7 @@ def _snapshot(record: _TurnRecord) -> AgentLogTurn:
         error=record.error,
         exchanges=[exchange.model_copy(deep=True) for exchange in record.exchanges],
         operations=[operation.model_copy(deep=True) for operation in record.operations],
+        tool_calls=[dict(entry) for entry in record.tool_calls],
     )
 
 

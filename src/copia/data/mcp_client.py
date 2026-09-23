@@ -16,7 +16,7 @@ from mcp import Client, types
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 
-from ..domain.models.mcp import McpDiscoveryResult, McpServerSummary, McpToolSummary
+from ..domain.models.mcp import McpCallResult, McpDiscoveryResult, McpServerSummary, McpToolSummary
 
 MAX_ENDPOINT_LENGTH = 2048
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -128,7 +128,18 @@ def _is_blocked_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
     )
 
 
-def _parse_endpoint(endpoint: str) -> SplitResult:
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return (mapped or address).is_loopback
+
+
+def _parse_endpoint(endpoint: str, *, allow_local: bool = False) -> SplitResult:
     if len(endpoint) > MAX_ENDPOINT_LENGTH:
         raise _reject("MCP endpoint exceeds the allowed length")
     try:
@@ -137,8 +148,10 @@ def _parse_endpoint(endpoint: str) -> SplitResult:
         port = parsed.port
     except ValueError as error:
         raise _reject() from error
+    scheme = parsed.scheme.lower()
+    local_endpoint = bool(hostname) and allow_local and _is_loopback_hostname(hostname)
     if (
-        parsed.scheme.lower() != "https"
+        (scheme != "https" and not (local_endpoint and scheme == "http"))
         or not hostname
         or parsed.username is not None
         or parsed.password is not None
@@ -151,7 +164,7 @@ def _parse_endpoint(endpoint: str) -> SplitResult:
     if "%" in hostname:
         raise _reject()
     if port is None:
-        port = 443
+        port = 80 if scheme == "http" else 443
     if not 1 <= port <= 65535:
         raise _reject()
     return parsed
@@ -179,11 +192,11 @@ def _request_headers(header_name: str | None, header_value: str | None) -> dict[
     return {normalized_name: normalized_value}
 
 
-async def _validate_endpoint(endpoint: str) -> _ValidatedEndpoint:
-    parsed = _parse_endpoint(endpoint)
+async def _validate_endpoint(endpoint: str, *, allow_local: bool = False) -> _ValidatedEndpoint:
+    parsed = _parse_endpoint(endpoint, allow_local=allow_local)
     hostname = parsed.hostname
     assert hostname is not None
-    port = parsed.port or 443
+    port = parsed.port or (80 if parsed.scheme.lower() == "http" else 443)
     try:
         address_info = await asyncio.to_thread(
             socket.getaddrinfo,
@@ -203,7 +216,12 @@ async def _validate_endpoint(endpoint: str) -> _ValidatedEndpoint:
             address = ipaddress.ip_address(raw_address)
         except ValueError as error:
             raise _reject() from error
-        if _is_blocked_address(address):
+        local_endpoint = allow_local and _is_loopback_hostname(hostname)
+        mapped = getattr(address, "ipv4_mapped", None)
+        effective_address = mapped or address
+        if local_endpoint and not effective_address.is_loopback:
+            raise _reject("Local MCP endpoint must resolve only to loopback addresses")
+        if not local_endpoint and _is_blocked_address(address):
             raise _reject("MCP endpoint resolves to a blocked network address")
         if family in (socket.AF_INET, socket.AF_INET6) and raw_address not in addresses:
             addresses.append(raw_address)
@@ -377,6 +395,11 @@ def _tool_summaries(pages: list[types.ListToolsResult]) -> list[McpToolSummary]:
                 McpToolSummary(
                     name=name,
                     description=_safe_text(tool.description, MAX_DESCRIPTION_LENGTH),
+                    input_schema=(
+                        getattr(tool, "input_schema", {})
+                        if isinstance(getattr(tool, "input_schema", {}), dict)
+                        else {}
+                    ),
                 )
             )
     return summaries
@@ -443,11 +466,12 @@ async def discover_mcp_tools(
     *,
     header_name: str | None = None,
     header_value: str | None = None,
+    allow_local: bool = True,
 ) -> McpDiscoveryResult:
     try:
         request_headers = _request_headers(header_name, header_value)
         with anyio.fail_after(OVERALL_TIMEOUT_SECONDS):
-            validated = await _validate_endpoint(endpoint)
+            validated = await _validate_endpoint(endpoint, allow_local=allow_local)
             return await _discover(validated, request_headers)
     except McpDiscoveryError:
         raise
@@ -479,3 +503,87 @@ async def discover_mcp_tools(
             MCP_PROTOCOL_ERROR,
             _safe_protocol_message(error),
         ) from error
+
+
+async def _call_tool(
+    validated: _ValidatedEndpoint,
+    request_headers: dict[str, str],
+    tool_name: str,
+    arguments: dict[str, object],
+) -> McpCallResult:
+    timeout = httpx2.Timeout(
+        connect=CONNECT_TIMEOUT_SECONDS,
+        read=READ_TIMEOUT_SECONDS,
+        write=WRITE_TIMEOUT_SECONDS,
+        pool=CONNECT_TIMEOUT_SECONDS,
+    )
+    transport = _LimitedPinnedTransport(validated.address)
+    async with httpx2.AsyncClient(
+        transport=transport,
+        timeout=timeout,
+        follow_redirects=False,
+        max_redirects=0,
+        trust_env=False,
+        headers=request_headers,
+    ) as http_client:
+        async with Client(
+            streamable_http_client(
+                validated.url,
+                http_client=http_client,
+                terminate_on_close=True,
+            ),
+            mode="auto",
+            read_timeout_seconds=READ_TIMEOUT_SECONDS,
+            cache=None,
+        ) as client:
+            result = await client.call_tool(tool_name, arguments)
+            content = [item.model_dump(mode="json") for item in result.content]
+            encoded_size = len(str(content).encode("utf-8"))
+            if encoded_size > MAX_RESPONSE_BYTES:
+                raise McpDiscoveryError(
+                    MCP_RESPONSE_TOO_LARGE, "MCP response exceeds the allowed size"
+                )
+            return McpCallResult(
+                content=content,
+                structured_content=(
+                    result.structured_content
+                    if isinstance(result.structured_content, dict)
+                    else None
+                ),
+                is_error=bool(result.is_error),
+            )
+
+
+async def call_mcp_tool(
+    endpoint: str,
+    tool_name: str,
+    arguments: dict[str, object],
+    *,
+    header_name: str | None = None,
+    header_value: str | None = None,
+    allow_local: bool = True,
+) -> McpCallResult:
+    try:
+        request_headers = _request_headers(header_name, header_value)
+        with anyio.fail_after(OVERALL_TIMEOUT_SECONDS):
+            validated = await _validate_endpoint(endpoint, allow_local=allow_local)
+            return await _call_tool(validated, request_headers, tool_name, arguments)
+    except McpDiscoveryError:
+        raise
+    except TimeoutError as error:
+        raise McpDiscoveryError(
+            MCP_TIMEOUT, "MCP server did not respond within the allowed time"
+        ) from error
+    except (httpx2.TimeoutException, anyio.get_cancelled_exc_class()) as error:
+        raise McpDiscoveryError(
+            MCP_TIMEOUT, "MCP server did not respond within the allowed time"
+        ) from error
+    except (httpx2.HTTPError, OSError, RuntimeError) as error:
+        raise McpDiscoveryError(MCP_CONNECTION_FAILED, "Could not connect to MCP server") from error
+    except MCPError as error:
+        raise McpDiscoveryError(MCP_PROTOCOL_ERROR, _safe_protocol_message(error)) from error
+    except Exception as error:
+        nested = _find_nested_exception(error, McpDiscoveryError)
+        if isinstance(nested, McpDiscoveryError):
+            raise nested from error
+        raise McpDiscoveryError(MCP_PROTOCOL_ERROR, _safe_protocol_message(error)) from error
