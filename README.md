@@ -27,6 +27,14 @@ Stop the local API and web client without starting them again:
 
 Set at least one provider key in `.env`. The API runs on `http://127.0.0.1:8000`; the web client runs on `http://127.0.0.1:5173`.
 
+## Scheduled expense summaries
+
+Copy [`schedules.example.json`](schedules.example.json) to `~/.copia/schedules.json` and restart the API. The example runs a current-day expense summary every minute and a completed-week summary every Monday at midnight in `Asia/Omsk`. Calendar schedules use an IANA timezone, a `HH:MM` local time, and an optional `day_of_week` (`mon` through `sun`). Interval schedules use `minutes`. `report_period: {"type": "current_day", "timezone": "Asia/Omsk"}` makes every run cover local midnight through the actual execution time; without `report_period`, the report covers consecutive planned runs. Only enabled jobs run. The optional `name` appears in the summary screen; otherwise the job ID is shown. The accountant profile must have an MCP connection offering `search_expenses`.
+
+The API activates a new or changed schedule at startup. After a later restart it runs at most the latest missed interval; it does not replay every missed period. Each run is saved atomically in `~/.copia/scheduled-runs/<job-id>/`, with the latest 50 retained. `~/.copia/scheduler-state.json` records activation and the last processed slot. The “Сводки” screen shows each enabled job's status and time until its next planned run, plus the latest completed agent answer as Markdown and any failure from the latest run. The screen uses `react-markdown` and `remark-gfm` for report headings, lists, and tables without rendering raw HTML. The backend scheduler assumes one API process.
+
+The config, state, and run paths can be overridden with `COPIA_SCHEDULES_PATH`, `COPIA_SCHEDULER_STATE_PATH`, and `COPIA_SCHEDULED_RUNS_PATH`.
+
 ## Main components
 
 - `LLMRouter` selects specific adapter for LLM provider for example: Open Ai , Gigachat.

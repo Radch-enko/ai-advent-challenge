@@ -34,6 +34,7 @@ import {
   getPendingMemory,
   getSessions,
   getAgentLog,
+  getScheduledRunAgentLog,
   rejectMemory,
   undoWorkingMemory,
   updateWorkingMemory,
@@ -85,6 +86,7 @@ import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
 import { TaskProgressPanel } from './ui/components/TaskProgressPanel'
 import { TaskPlanApprovalBar } from './ui/components/TaskPlanApprovalBar'
 import { McpSettingsScreen } from './ui/components/McpSettingsScreen'
+import { SummariesScreen } from './ui/components/SummariesScreen'
 
 const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
@@ -170,7 +172,9 @@ function defaultContextManagement(provider: Provider, model: string): ContextMan
 }
 
 export function App() {
-  const [mode, setMode] = useState<'chat' | 'agents' | 'profiles' | 'invariants' | 'mcp'>('chat')
+  const [mode, setMode] = useState<
+    'chat' | 'agents' | 'profiles' | 'invariants' | 'mcp' | 'summaries'
+  >('chat')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState(providerModels.openai)
   const [systemPrompt, setSystemPrompt] = useState('You are Copia, a helpful personal assistant.')
@@ -1278,6 +1282,14 @@ export function App() {
     }
   }
 
+  async function openScheduledSummaryLogs(jobId: string, scheduledAt: string) {
+    const detail = await getScheduledRunAgentLog(jobId, scheduledAt)
+    if (detail.exchanges.length === 0) throw new Error('Запросы к LLM провайдеру не найдены')
+    setActiveLogGroup(detail.exchanges)
+    setActiveLog(detail.exchanges[detail.exchanges.length - 1])
+    setLogTab('request')
+  }
+
   async function openAllTaskLogs(taskId: string) {
     const sessionId = activeSession?.id
     const calls = tasksById.get(taskId)?.llm_calls ?? []
@@ -1548,6 +1560,12 @@ export function App() {
               </span>{' '}
               MCP
             </button>
+            <button
+              className={`agents-nav ${mode === 'summaries' ? 'active' : ''}`}
+              onClick={() => setMode('summaries')}
+            >
+              Сводки
+            </button>
             <div className="saved-chats">
               {savedSessions.map((session) => (
                 <div className="saved-chat" key={session.id}>
@@ -1585,6 +1603,8 @@ export function App() {
       <section className="chat-stage">
         {mode === 'mcp' ? (
           <McpSettingsScreen />
+        ) : mode === 'summaries' ? (
+          <SummariesScreen onOpenLogs={openScheduledSummaryLogs} />
         ) : mode === 'invariants' ? (
           <section className="invariants-screen">{invariantPanelContent}</section>
         ) : mode === 'profiles' ? (

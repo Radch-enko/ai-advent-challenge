@@ -9,9 +9,9 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -47,6 +47,7 @@ from ..data.profile_memory_repository import (
 )
 from ..data.profiles_repository import ProfilesRepository
 from ..data.providers.llm import ProviderError
+from ..data.scheduled_runs_repository import ScheduledRunsRepository
 from ..data.sessions_repository import SessionsRepository
 from ..data.user_profiles_repository import (
     JsonUserProfilesRepository,
@@ -70,6 +71,7 @@ from ..domain.models.config import (
     GenerationConfig,
     LLMConfig,
     LLMResponse,
+    McpAccessConfig,
     ProviderCapabilities,
     ProviderModel,
     ProviderName,
@@ -93,6 +95,7 @@ from ..domain.models.memory import (
     PendingMemorySuggestion,
     WorkingMemoryItem,
 )
+from ..domain.models.scheduled_job import ScheduledJob, ScheduledRun
 from ..domain.models.session import (
     ChatSession,
     ChatSessionSummary,
@@ -126,11 +129,16 @@ from ..domain.services.mcp_tool_loop import (
 from ..domain.services.memory_classifier import LLMMemoryClassifier
 from ..domain.services.router import LLMRouter
 from ..domain.services.runtime_context import with_current_datetime_context
+from ..domain.services.scheduled_report import (
+    human_datetime,
+    humanize_report_datetimes,
+)
 from ..domain.services.task_state_machine import (
     InvalidTaskTransition,
     TaskEvent,
     TaskStateMachine,
 )
+from .scheduled_runner import ScheduledJobFailure, ScheduledRunner
 
 load_dotenv()
 
@@ -160,6 +168,15 @@ session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
 task_workers: dict[str, asyncio.Task[None]] = {}
 task_workers_lock = threading.RLock()
+scheduled_runs = ScheduledRunsRepository(
+    Path(os.getenv("COPIA_SCHEDULED_RUNS_PATH", "~/.copia/scheduled-runs"))
+)
+scheduled_runner = ScheduledRunner(
+    Path(os.getenv("COPIA_SCHEDULES_PATH", "~/.copia/schedules.json")),
+    Path(os.getenv("COPIA_SCHEDULER_STATE_PATH", "~/.copia/scheduler-state.json")),
+    scheduled_runs,
+    {"expense_summary": lambda job, start, end: _expense_summary_job(job, start, end)},
+)
 
 
 @dataclass
@@ -218,7 +235,17 @@ approved_memory_mutations: OrderedDict[tuple[str, str], LongTermMemoryMutationRe
     OrderedDict()
 )
 
-app = FastAPI(title="Copia API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    scheduled_runner.start()
+    try:
+        yield
+    finally:
+        scheduled_runner.shutdown()
+
+
+app = FastAPI(title="Copia API", version="0.1.0", lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2852,6 +2879,166 @@ def _execute_resolved_tool(tool: ResolvedMcpTool, arguments: dict[str, Any]) -> 
     )
 
 
+def _expense_period_label(job: ScheduledJob) -> str:
+    if job.report_period.type == "current_day":
+        return "сегодняшний день"
+    schedule = job.schedule
+    if schedule.type == "calendar":
+        return "неделю" if schedule.day_of_week else "день"
+    assert schedule.minutes is not None
+    if schedule.minutes == 1:
+        return "последнюю минуту"
+    if schedule.minutes == 60:
+        return "последний час"
+    if schedule.minutes % 60 == 0:
+        return f"последние {schedule.minutes // 60} ч"
+    return f"последние {schedule.minutes} мин"
+
+
+def _expense_report_timezone(job: ScheduledJob) -> str:
+    return job.report_period.timezone or job.schedule.timezone or "UTC"
+
+
+def _expense_summary_job(
+    job: ScheduledJob, period_from: datetime, period_to: datetime
+) -> tuple[str, str]:
+    report_timezone = _expense_report_timezone(job)
+    if job.profile != "accountant":
+        raise RuntimeError("Expense summary requires the accountant profile")
+    profile = ProfilesRepository(profiles_path).load().get(job.profile)
+    if profile is None:
+        raise RuntimeError(f"Scheduled profile {job.profile} is unavailable")
+    allowed = [access for access in profile.mcp_access if "search_expenses" in access.enabled_tools]
+    if len(allowed) != 1:
+        raise RuntimeError("Scheduled profile must have exactly one search_expenses connection")
+    config = profile.model_copy(
+        update={
+            "system_prompt": (
+                "You are the accountant producing a scheduled, one-way expense report. "
+                "Use only expenses returned by search_expenses for the specified period. "
+                "Report only facts present in the expense records; do not infer trip durations "
+                "or add other details that the records do not contain. "
+                "Write a concise factual report in Russian. Markdown headings and lists are allowed. "
+                f"Render dates in natural Russian using the {report_timezone} timezone; "
+                "never expose ISO 8601 timestamps or raw UTC offsets in the report. "
+                "Do not address the user as in a chat, ask questions, offer to continue, "
+                "propose follow-up work, or add general advice or next steps. "
+                "End immediately after the report. If the period has no expenses, state that plainly."
+            ),
+            "mcp_access": [
+                McpAccessConfig(
+                    connection_id=allowed[0].connection_id, enabled_tools=["search_expenses"]
+                )
+            ],
+            "context_management": profile.context_management.model_copy(update={"enabled": False}),
+        }
+    )
+    tools = asyncio.run(_resolved_mcp_tools(config))
+    if len(tools) != 1 or tools[0].tool_name != "search_expenses":
+        raise RuntimeError("Expense search MCP tool is unavailable")
+
+    upper = period_to - timedelta(microseconds=1)
+    expected_cursor: str | None = None
+    called = False
+    finished = False
+    expense_count = 0
+    audits: list[dict[str, Any]] = []
+
+    def prepare(_tool: ResolvedMcpTool, arguments: dict[str, Any]) -> dict[str, Any]:
+        cursor = arguments.get("cursor")
+        if (
+            finished
+            or cursor != expected_cursor
+            or (cursor is not None and not isinstance(cursor, str))
+        ):
+            raise RuntimeError("Unexpected expense page cursor")
+        actual = {
+            "occurred_from": period_from.astimezone(UTC).isoformat(),
+            "occurred_to": upper.astimezone(UTC).isoformat(),
+            "page_size": 100,
+        }
+        if cursor is not None:
+            actual["cursor"] = cursor
+        return actual
+
+    def execute(tool: ResolvedMcpTool, arguments: dict[str, Any]) -> ToolExecutionResult:
+        nonlocal called, finished, expected_cursor, expense_count
+        result = _execute_resolved_tool(tool, arguments)
+        called = True
+        if result.is_error:
+            raise RuntimeError("Expense search MCP tool returned an error")
+        try:
+            payload = json.loads(result.content)
+            page = payload["structured_content"]
+            items = page["items"]
+            next_cursor = page["next_cursor"]
+            if not isinstance(items, list) or not (
+                next_cursor is None or isinstance(next_cursor, str) and next_cursor
+            ):
+                raise ValueError("Invalid expense page")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError("Expense search MCP tool returned an invalid page") from error
+        expected_cursor = next_cursor
+        finished = next_cursor is None
+        expense_count += len(items)
+        return ToolExecutionResult(
+            encode_tool_result({"expense_count": len(items), "structured_content": page})
+        )
+
+    loop = McpToolLoop(
+        router,
+        tools,
+        request_approval=lambda _approval: True,
+        execute=execute,
+        emit=lambda _event, _data: None,
+        audit=audits.append,
+        prepare_arguments=prepare,
+        max_tool_calls=100,
+    )
+    session_id = f"scheduled-{job.id}"
+    log_id = agent_log_store.start_turn(session_id)
+    prompt = (
+        f"Подготовь сводку расходов за {_expense_period_label(job)}. "
+        f"Период по {report_timezone}: с {human_datetime(period_from, report_timezone)} "
+        f"до {human_datetime(period_to, report_timezone)}. "
+        "Точные границы запроса задаёт backend. "
+        "Обязательно вызови search_expenses и прочитай все страницы до next_cursor=null. "
+        "Смотри на expense_count и structured_content.items в ответе инструмента; "
+        "если expense_count больше нуля, обязательно опиши найденные расходы. "
+        "Указывай только сведения из записей расходов; не придумывай длительность поездок "
+        "или другие отсутствующие детали. "
+        "Если расходов нет, скажи об этом. Начни ответ словами «Ваши расходы за "
+        f"{_expense_period_label(job)}». Не выдумывай расходы. "
+        "Даты в ответе пиши по-русски, например «25 сентября 2026 года, 13:03»; "
+        "не выводи даты в ISO 8601 или UTC. "
+        "Это автоматический отчёт без возможности продолжить беседу: "
+        "не задавай вопросов и не предлагай дальнейшие действия."
+    )
+    try:
+        agent = Agent(config, router, session_id=session_id)
+        with agent_log_turn(session_id, log_id, provider=config.provider, model=config.model):
+            response = agent.ask(prompt, agent_log_id=log_id, completion=loop.complete)
+        if not called or not finished:
+            raise RuntimeError("Agent did not read every expense page")
+        if not response.content.strip():
+            raise RuntimeError("Agent returned an empty summary")
+        for entry in audits:
+            agent_log_store.append_tool_call(log_id, entry)
+        _finish_agent_log(
+            log_id,
+            provider=response.provider,
+            model=response.model,
+            usage=response.usage,
+            status="completed",
+        )
+        return humanize_report_datetimes(response.content.strip(), report_timezone), log_id
+    except Exception as error:
+        for entry in audits:
+            agent_log_store.append_tool_call(log_id, entry)
+        _finish_agent_log(log_id, status="failed", error=sanitize_error(str(error)))
+        raise ScheduledJobFailure(sanitize_error(str(error)), log_id) from error
+
+
 async def _run_mcp_turn(turn: _McpTurnRuntime, request: MessageRequest) -> None:
     message_lock = _session_message_lock(turn.session_id)
     await run_in_threadpool(message_lock.lock.acquire)
@@ -3022,6 +3209,88 @@ async def get_agent_log(session_id: str, agent_log_id: str) -> AgentLogResponse:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Agent log is unavailable"
         )
+    return _agent_log_response(turn)
+
+
+class ScheduledSummaryResponse(BaseModel):
+    job_id: str | None
+    latest_run: ScheduledRun | None
+    published_run: ScheduledRun | None
+
+
+class ScheduledJobStatusResponse(BaseModel):
+    id: str
+    name: str
+    status: Literal["wait", "progress", "completed"]
+    next_run_at: datetime | None
+
+
+@app.get("/scheduled-jobs/status", response_model=list[ScheduledJobStatusResponse])
+async def get_scheduled_job_statuses() -> list[ScheduledJobStatusResponse]:
+    values = await run_in_threadpool(scheduled_runner.job_statuses)
+    return [ScheduledJobStatusResponse.model_validate(value) for value in values]
+
+
+@app.get("/scheduled-summaries/latest", response_model=ScheduledSummaryResponse)
+async def get_latest_scheduled_summary() -> ScheduledSummaryResponse:
+    summary_jobs = [job for job in scheduled_runner.jobs.values() if job.kind == "expense_summary"]
+    if not summary_jobs:
+        return ScheduledSummaryResponse(job_id=None, latest_run=None, published_run=None)
+    latest_runs = [await run_in_threadpool(scheduled_runs.latest, job.id) for job in summary_jobs]
+    published_runs = [
+        await run_in_threadpool(scheduled_runs.latest_completed, job.id) for job in summary_jobs
+    ]
+    latest = max(
+        (run for run in latest_runs if run), key=lambda run: run.scheduled_at, default=None
+    )
+    published = max(
+        (run for run in published_runs if run), key=lambda run: run.scheduled_at, default=None
+    )
+    return ScheduledSummaryResponse(
+        job_id=published.job_id if published else latest.job_id if latest else summary_jobs[0].id,
+        latest_run=latest,
+        published_run=published,
+    )
+
+
+@app.get("/scheduled-jobs/{job_id}/runs/latest", response_model=ScheduledSummaryResponse)
+async def get_latest_scheduled_run(job_id: str) -> ScheduledSummaryResponse:
+    if job_id not in scheduled_runner.jobs:
+        raise HTTPException(404, detail="Scheduled job is unavailable")
+    return ScheduledSummaryResponse(
+        job_id=job_id,
+        latest_run=await run_in_threadpool(scheduled_runs.latest, job_id),
+        published_run=await run_in_threadpool(scheduled_runs.latest_completed, job_id),
+    )
+
+
+@app.get("/scheduled-jobs/{job_id}/runs/latest/log", response_model=AgentLogResponse)
+async def get_latest_scheduled_run_log(job_id: str) -> AgentLogResponse:
+    if job_id not in scheduled_runner.jobs:
+        raise HTTPException(404, detail="Scheduled job is unavailable")
+    run = await run_in_threadpool(scheduled_runs.latest, job_id)
+    if run is None or run.agent_log_id is None:
+        raise HTTPException(404, detail="Scheduled agent log is unavailable")
+    turn = await run_in_threadpool(
+        agent_log_store.get_turn, f"scheduled-{job_id}", run.agent_log_id
+    )
+    if turn is None:
+        raise HTTPException(404, detail="Scheduled agent log is unavailable")
+    return _agent_log_response(turn)
+
+
+@app.get("/scheduled-jobs/{job_id}/runs/{scheduled_at}/log", response_model=AgentLogResponse)
+async def get_scheduled_run_log(job_id: str, scheduled_at: datetime) -> AgentLogResponse:
+    if job_id not in scheduled_runner.jobs:
+        raise HTTPException(404, detail="Scheduled job is unavailable")
+    run = await run_in_threadpool(scheduled_runs.get, job_id, scheduled_at)
+    if run is None or run.agent_log_id is None:
+        raise HTTPException(404, detail="Scheduled agent log is unavailable")
+    turn = await run_in_threadpool(
+        agent_log_store.get_turn, f"scheduled-{job_id}", run.agent_log_id
+    )
+    if turn is None:
+        raise HTTPException(404, detail="Scheduled agent log is unavailable")
     return _agent_log_response(turn)
 
 

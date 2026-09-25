@@ -58,6 +58,9 @@ class McpToolLoop:
         execute: Callable[[ResolvedMcpTool, dict[str, Any]], ToolExecutionResult],
         emit: Callable[[str, dict[str, Any]], None],
         audit: Callable[[dict[str, Any]], None] | None = None,
+        prepare_arguments: Callable[[ResolvedMcpTool, dict[str, Any]], dict[str, Any]]
+        | None = None,
+        max_tool_calls: int = MAX_TOOL_CALLS_PER_TURN,
     ) -> None:
         self._router = router
         self._tools = {tool.alias: tool for tool in tools}
@@ -65,6 +68,10 @@ class McpToolLoop:
         self._execute = execute
         self._emit = emit
         self._audit = audit or (lambda _: None)
+        self._prepare_arguments = prepare_arguments or (lambda _tool, arguments: arguments)
+        if max_tool_calls < 1:
+            raise ValueError("MCP tool call limit must be positive")
+        self._max_tool_calls = max_tool_calls
 
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
         conversation: list[ChatMessage | ToolLoopMessage] = list(messages)
@@ -83,7 +90,7 @@ class McpToolLoop:
             )
             for call in response.tool_calls:
                 call_count += 1
-                if call_count > MAX_TOOL_CALLS_PER_TURN:
+                if call_count > self._max_tool_calls:
                     raise McpToolLoopError("MCP tool call limit exceeded")
                 result = self._handle_call(call)
                 conversation.append(
@@ -99,12 +106,13 @@ class McpToolLoop:
         tool = self._tools.get(call.name)
         if tool is None:
             raise McpToolLoopError("Provider requested an unavailable MCP tool")
+        arguments = self._prepare_arguments(tool, call.arguments)
         approval = McpApproval(
             id=call.id,
             connection_id=tool.connection_id,
             connection_name=tool.connection_name,
             tool_name=tool.tool_name,
-            arguments=call.arguments,
+            arguments=arguments,
         )
         self._emit("tool_approval_required", approval.model_dump(mode="json"))
         approved = self._request_approval(approval)
@@ -114,7 +122,7 @@ class McpToolLoop:
                 {
                     "connection_id": tool.connection_id,
                     "tool_name": tool.tool_name,
-                    "arguments": call.arguments,
+                    "arguments": arguments,
                     "decision": "rejected",
                     "status": "skipped",
                     "result": result.content,
@@ -125,14 +133,14 @@ class McpToolLoop:
         self._emit("tool_running", {**approval.model_dump(mode="json"), "decision": "approved"})
         started = time.monotonic()
         try:
-            result = self._execute(tool, call.arguments)
+            result = self._execute(tool, arguments)
         except Exception as error:
             duration = time.monotonic() - started
             self._audit(
                 {
                     "connection_id": tool.connection_id,
                     "tool_name": tool.tool_name,
-                    "arguments": call.arguments,
+                    "arguments": arguments,
                     "decision": "approved",
                     "status": "failed",
                     "result": str(error)[:1000],
@@ -144,7 +152,7 @@ class McpToolLoop:
         audit = {
             "connection_id": tool.connection_id,
             "tool_name": tool.tool_name,
-            "arguments": call.arguments,
+            "arguments": arguments,
             "decision": "approved",
             "status": "completed",
             "result": result.content,

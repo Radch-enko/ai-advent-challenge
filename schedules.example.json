@@ -1,0 +1,24 @@
+{
+  "jobs": [
+    {
+      "id": "expense-summary-daily",
+      "name": "Расходы за сегодняшний день",
+      "kind": "expense_summary",
+      "profile": "accountant",
+      "schedule": {"type": "interval", "minutes": 1},
+      "report_period": {"type": "current_day", "timezone": "Asia/Omsk"}
+    },
+    {
+      "id": "expense-summary-weekly",
+      "name": "Недельная сводка расходов",
+      "kind": "expense_summary",
+      "profile": "accountant",
+      "schedule": {
+        "type": "calendar",
+        "day_of_week": "mon",
+        "time": "00:00",
+        "timezone": "Asia/Omsk"
+      }
+    }
+  ]
+}

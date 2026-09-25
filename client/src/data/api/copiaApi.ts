@@ -8,6 +8,7 @@ import {
 } from '../../domain/models/chat'
 import { Provider, ProviderModel } from '../../domain/models/provider'
 import { TaskState } from '../../domain/models/task'
+import { ScheduledJobStatus, ScheduledSummary } from '../../domain/models/scheduled'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import { Invariant, InvariantInput } from '../../domain/models/invariant'
 import {
@@ -459,6 +460,20 @@ export function getAgentLog(sessionId: string, agentLogId: string): Promise<Agen
   return request(
     `/sessions/${encodeURIComponent(sessionId)}/agent-logs/${encodeURIComponent(agentLogId)}`,
   )
+}
+export function getScheduledRunAgentLog(
+  jobId: string,
+  scheduledAt: string,
+): Promise<AgentLogDetail> {
+  return request(
+    `/scheduled-jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(scheduledAt)}/log`,
+  )
+}
+export function getLatestScheduledSummary(): Promise<ScheduledSummary> {
+  return request('/scheduled-summaries/latest')
+}
+export function getScheduledJobStatuses(): Promise<ScheduledJobStatus[]> {
+  return request('/scheduled-jobs/status')
 }
 export function getWorkingMemory(sessionId: string): Promise<WorkingMemoryItem[]> {
   return request(`/sessions/${sessionId}/working-memory`)
