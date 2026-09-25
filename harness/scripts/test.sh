@@ -12,4 +12,4 @@ cp -R "$ROOT_DIR/src" "$ROOT_DIR/tests" "$ROOT_DIR/pyproject.toml" "$ROOT_DIR/pr
 
 echo "==> Python tests"
 cd "$TEST_ROOT"
-PYTHONPATH=src "$PYTHON" -m pytest -q tests -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" -m pytest -q tests

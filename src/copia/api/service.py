@@ -143,15 +143,16 @@ from .scheduled_runner import ScheduledJobFailure, ScheduledRunner
 load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
 profiles_path = Path(os.getenv("COPIA_PROFILES_PATH", PROJECT_ROOT / "profiles.json"))
-sessions_path = Path(os.getenv("COPIA_SESSIONS_PATH", "~/.copia/sessions"))
+sessions_path = Path(os.getenv("COPIA_SESSIONS_PATH", data_root / "sessions"))
 invariants_path = Path(os.getenv("COPIA_INVARIANTS_PATH", sessions_path.parent / "invariants.json"))
 agent_log_store = AgentLogStore(repository=JsonAgentLogRepository(sessions_path))
 router = LLMRouter(agent_log_store=agent_log_store)
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}
 sessions = SessionsRepository(sessions_path)
-profile_memory = ProfileMemoryRepository(Path(os.getenv("COPIA_MEMORY_PATH", "~/.copia/memory")))
+profile_memory = ProfileMemoryRepository(Path(os.getenv("COPIA_MEMORY_PATH", data_root / "memory")))
 working_memory = WorkingMemoryRepository(sessions_path)
 pending_memory: dict[str, list[PendingMemorySuggestion]] = {}
 pending_memory_repository = PendingMemoryRepository(sessions_path)
@@ -159,21 +160,23 @@ invariants_repository = InvariantsRepository(
     invariants_path,
     legacy_sessions_root=sessions_path,
 )
-user_profiles = JsonUserProfilesRepository()
-expenses = ExpensesRepository(Path("~/.copia/files/finances.xlsx"))
+user_profiles = JsonUserProfilesRepository(data_root / "user_profiles.json")
+expenses = ExpensesRepository(
+    Path(os.getenv("COPIA_EXPENSES_PATH", data_root / "files/finances.xlsx"))
+)
 mcp_connections = McpConnectionsRepository(
-    Path(os.getenv("COPIA_MCP_CONNECTIONS_PATH", "~/.copia/mcp_connections.json"))
+    Path(os.getenv("COPIA_MCP_CONNECTIONS_PATH", data_root / "mcp_connections.json"))
 )
 session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
 task_workers: dict[str, asyncio.Task[None]] = {}
 task_workers_lock = threading.RLock()
 scheduled_runs = ScheduledRunsRepository(
-    Path(os.getenv("COPIA_SCHEDULED_RUNS_PATH", "~/.copia/scheduled-runs"))
+    Path(os.getenv("COPIA_SCHEDULED_RUNS_PATH", data_root / "scheduled-runs"))
 )
 scheduled_runner = ScheduledRunner(
-    Path(os.getenv("COPIA_SCHEDULES_PATH", "~/.copia/schedules.json")),
-    Path(os.getenv("COPIA_SCHEDULER_STATE_PATH", "~/.copia/scheduler-state.json")),
+    Path(os.getenv("COPIA_SCHEDULES_PATH", data_root / "schedules.json")),
+    Path(os.getenv("COPIA_SCHEDULER_STATE_PATH", data_root / "scheduler-state.json")),
     scheduled_runs,
     {"expense_summary": lambda job, start, end: _expense_summary_job(job, start, end)},
 )

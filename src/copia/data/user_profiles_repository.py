@@ -20,9 +20,8 @@ class UserProfileNameConflictError(ValueError):
 class JsonUserProfilesRepository:
     def __init__(self, path: Path | None = None) -> None:
         configured = os.getenv("COPIA_USER_PROFILES_PATH")
-        self._path = (
-            Path(configured) if configured else (path or Path("~/.copia/user_profiles.json"))
-        )
+        data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
+        self._path = Path(configured) if configured else (path or data_root / "user_profiles.json")
         self._path = self._path.expanduser()
         self._lock = RLock()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -19,7 +20,8 @@ class McpConnectionConflictError(RuntimeError):
 
 class McpConnectionsRepository:
     def __init__(self, path: Path | None = None) -> None:
-        self._path = (path or Path("~/.copia/mcp_connections.json")).expanduser()
+        data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
+        self._path = (path or data_root / "mcp_connections.json").expanduser()
         self._lock = threading.RLock()
 
     def list(self) -> list[McpConnection]:

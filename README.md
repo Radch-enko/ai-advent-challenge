@@ -27,6 +27,8 @@ Stop the local API and web client without starting them again:
 
 Set at least one provider key in `.env`. The API runs on `http://127.0.0.1:8000`; the web client runs on `http://127.0.0.1:5173`.
 
+Persistent data uses `~/.copia` by default. Set `COPIA_DATA_ROOT` to use a different data directory; existing per-store path overrides still take precedence.
+
 ## Scheduled expense summaries
 
 Copy [`schedules.example.json`](schedules.example.json) to `~/.copia/schedules.json` and restart the API. The example runs a current-day expense summary every minute and a completed-week summary every Monday at midnight in `Asia/Omsk`. Calendar schedules use an IANA timezone, a `HH:MM` local time, and an optional `day_of_week` (`mon` through `sun`). Interval schedules use `minutes`. `report_period: {"type": "current_day", "timezone": "Asia/Omsk"}` makes every run cover local midnight through the actual execution time; without `report_period`, the report covers consecutive planned runs. Only enabled jobs run. The optional `name` appears in the summary screen; otherwise the job ID is shown. The accountant profile must have an MCP connection offering `search_expenses`.
