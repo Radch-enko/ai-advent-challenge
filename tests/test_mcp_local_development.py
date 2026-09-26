@@ -6,9 +6,10 @@ import socket
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.data import mcp_client
-from copia.domain.models.mcp import McpDiscoveryResult, McpServerSummary
+from copia import service
+from copia.mcp.data import mcp_client
+from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
+from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
 
 
 def run(coroutine):

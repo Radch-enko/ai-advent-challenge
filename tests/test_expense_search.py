@@ -5,10 +5,11 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.domain.models.expense import Expense, ExpenseSearchFilters
-from copia.domain.services.expense_search import filter_expenses
+from copia import service
+from copia.expenses.domain.models.expense import Expense
+from copia.expenses.domain.models.expense_search_filters import ExpenseSearchFilters
+from copia.expenses.domain.services.expense_search import filter_expenses
+from copia.service import app
 
 
 def _expense(

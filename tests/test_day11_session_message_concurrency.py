@@ -4,15 +4,16 @@ from threading import Event, Lock
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.models.memory import MemoryCandidate
-from copia.domain.models.session import ChatSession
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def test_concurrent_messages_preserve_transcript_and_pending_memory(monkeypatch, tmp_path):

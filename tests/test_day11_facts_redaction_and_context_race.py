@@ -4,12 +4,14 @@ from threading import Event
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import AgentConfig, LLMResponse, ProviderTrace
-from copia.domain.models.session import ChatSession
-from copia.domain.services.router import ProviderError
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.application.llm_router import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def _facts_session(session_id: str) -> ChatSession:

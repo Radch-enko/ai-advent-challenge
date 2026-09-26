@@ -65,7 +65,7 @@ Task context
 
 ## Границы
 
-- Не вводи feature-to-feature dependencies.
+- Не вводи циклические зависимости между фичами; новую прямую зависимость обоснуй владельцем модели или контракта.
 - При integration changes сохраняй согласованность backend/client contracts и provider-agnostic models.
 - Не переделывай UI, dependency wiring или package structure, если это не требуется task.
 - Не redesign architecture вне task scope.

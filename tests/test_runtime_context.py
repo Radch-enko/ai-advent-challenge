@@ -3,20 +3,22 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta, timezone
 
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    LLMResponse,
-    ProviderName,
-    ToolDefinition,
-)
-from copia.domain.models.session import ChatSession
-from copia.domain.models.task import TaskStage
-from copia.domain.services.mcp_tool_loop import McpToolLoop, ResolvedMcpTool, ToolExecutionResult
-from copia.domain.services.runtime_context import (
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.common.domain.services.runtime_context import (
     render_current_datetime_context,
     with_current_datetime_context,
 )
+from copia.mcp.domain.services.mcp_tool_loop import (
+    McpToolLoop,
+    ResolvedMcpTool,
+    ToolExecutionResult,
+)
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.tasks.domain.models.task_stage import TaskStage
 
 
 def test_runtime_context_is_rfc3339_and_replaces_previous_value() -> None:
@@ -37,7 +39,7 @@ def test_runtime_context_is_rfc3339_and_replaces_previous_value() -> None:
 
 
 def test_agent_request_gets_runtime_context_without_persisting_it() -> None:
-    from copia.domain.models.agent import Agent
+    from copia.agents.domain.models.agent import Agent
 
     captured = []
 
@@ -71,7 +73,7 @@ def test_mcp_loop_refreshes_runtime_context_for_each_provider_call() -> None:
             captured.append(messages[0].content)
             self.calls += 1
             if self.calls == 1:
-                from copia.domain.models.config import ToolCall
+                from copia.providers.domain.models.tool_call import ToolCall
 
                 return LLMResponse(
                     content="",
@@ -98,7 +100,7 @@ def test_mcp_loop_refreshes_runtime_context_for_each_provider_call() -> None:
 
 
 def test_task_complete_call_adds_runtime_context(monkeypatch) -> None:
-    from copia.api import service
+    from copia import service
 
     captured = []
     config = AgentConfig(name="Agent", provider="openai", model="model")

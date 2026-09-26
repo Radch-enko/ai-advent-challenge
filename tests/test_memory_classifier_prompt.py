@@ -1,9 +1,10 @@
 import json
 
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.services.memory_classifier import (
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.session_memory.domain.services.llm_memory_classifier import LLMMemoryClassifier
+from copia.session_memory.domain.services.memory_classifier_prompt import (
     MEMORY_CLASSIFIER_SYSTEM_PROMPT,
-    LLMMemoryClassifier,
 )
 
 

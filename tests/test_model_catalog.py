@@ -1,5 +1,5 @@
-from copia.data.model_catalog import context_window_for
-from copia.domain.models.config import ProviderName
+from copia.providers.data.model_catalog import context_window_for
+from copia.providers.domain.models.provider_name import ProviderName
 
 
 def test_returns_context_window_for_known_model() -> None:

@@ -6,13 +6,15 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.scheduled_runner import ScheduledRunner
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.scheduled_runs_repository import ScheduledRunsRepository
-from copia.domain.models.config import LLMResponse, ToolCall, ToolDefinition
-from copia.domain.models.scheduled_job import ScheduledJob
-from copia.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.tool_call import ToolCall
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.scheduled_jobs.application.scheduled_runner import ScheduledRunner
+from copia.scheduled_jobs.data.scheduled_runs_repository import ScheduledRunsRepository
+from copia.scheduled_jobs.domain.models.scheduled_job import ScheduledJob
 
 
 def test_job_statuses_and_next_run_are_visible_in_api(monkeypatch, tmp_path) -> None:

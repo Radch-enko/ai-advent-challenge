@@ -3,8 +3,11 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.domain.models.mcp import McpDiscoveryResult, McpServerSummary, McpToolSummary
+from copia import service
+from copia.mcp.data.mcp_client import McpDiscoveryError
+from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
+from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
+from copia.mcp.domain.models.mcp_tool_summary import McpToolSummary
 
 
 def test_mcp_discover_returns_only_safe_tool_summary(monkeypatch) -> None:
@@ -32,7 +35,7 @@ def test_mcp_discover_returns_only_safe_tool_summary(monkeypatch) -> None:
 
 def test_mcp_discover_maps_safe_error_code(monkeypatch) -> None:
     async def fake_discovery(endpoint: str) -> McpDiscoveryResult:
-        raise service.McpDiscoveryError(
+        raise McpDiscoveryError(
             "mcp_redirect_rejected",
             "MCP server redirects are not supported",
         )
@@ -95,7 +98,7 @@ def test_mcp_discover_passes_optional_header(monkeypatch) -> None:
 )
 def test_mcp_discover_maps_auth_errors(monkeypatch, code: str, status_code: int) -> None:
     async def fake_discovery(endpoint: str) -> McpDiscoveryResult:
-        raise service.McpDiscoveryError(code, "MCP authentication failed")
+        raise McpDiscoveryError(code, "MCP authentication failed")
 
     monkeypatch.setattr(service, "discover_mcp_tools", fake_discovery)
 

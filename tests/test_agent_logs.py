@@ -5,16 +5,19 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.providers.http_logging import _redact_url
-from copia.data.providers.llm import GigaChatProvider, OpenAIProvider, ProviderError
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.agent_log import AgentLogExchange
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse, ProviderName
-from copia.domain.services.agent_log_context import agent_log_turn
-from copia.domain.services.router import LLMRouter
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.models.agent_log_exchange import AgentLogExchange
+from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.application.llm_router import LLMRouter
+from copia.providers.data.http_logging import _redact_url
+from copia.providers.data.llm import GigaChatProvider, OpenAIProvider, ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def _exchange(

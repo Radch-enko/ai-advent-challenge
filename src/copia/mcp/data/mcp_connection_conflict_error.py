@@ -1,0 +1,2 @@
+class McpConnectionConflictError(RuntimeError):
+    pass

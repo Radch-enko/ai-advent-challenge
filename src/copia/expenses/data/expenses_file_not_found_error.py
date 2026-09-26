@@ -1,0 +1,2 @@
+class ExpensesFileNotFoundError(FileNotFoundError):
+    pass

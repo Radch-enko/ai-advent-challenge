@@ -6,30 +6,30 @@ from threading import Thread
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import (
-    AgentConfig,
-    LLMResponse,
-    McpAccessConfig,
-    ProviderName,
-    ToolCall,
-    ToolDefinition,
-)
-from copia.domain.models.mcp import McpApproval
-from copia.domain.models.session import ChatSession
-from copia.domain.models.task import TaskState
-from copia.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
+from copia.mcp.domain.models.mcp_access_config import McpAccessConfig
+from copia.mcp.domain.models.mcp_approval import McpApproval
+from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.tool_call import ToolCall
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.sessions.api.models.message_request import MessageRequest
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.tasks.domain.models.task_state import TaskState
 
 
 def test_mcp_enabled_session_requires_async_turn_api(monkeypatch, tmp_path) -> None:
     repository = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", repository)
+    monkeypatch.setattr(service, "working_memory", WorkingMemoryRepository(tmp_path / "sessions"))
     monkeypatch.setattr(
-        service, "working_memory", service.WorkingMemoryRepository(tmp_path / "sessions")
-    )
-    monkeypatch.setattr(
-        service, "pending_memory_repository", service.PendingMemoryRepository(tmp_path / "sessions")
+        service, "pending_memory_repository", PendingMemoryRepository(tmp_path / "sessions")
     )
     session = ChatSession(
         id="session",
@@ -53,7 +53,7 @@ def test_mcp_enabled_session_requires_async_turn_api(monkeypatch, tmp_path) -> N
 
 
 def test_approval_endpoint_resumes_pending_turn() -> None:
-    turn = service._McpTurnRuntime(id="turn", session_id="session")
+    turn = McpTurnRuntime(id="turn", session_id="session")
     turn.approval = McpApproval(
         id="approval",
         connection_id="finances",
@@ -78,7 +78,7 @@ def test_approval_endpoint_resumes_pending_turn() -> None:
 
 
 def test_sse_replays_turn_events() -> None:
-    turn = service._McpTurnRuntime(id="turn", session_id="session", status="completed")
+    turn = McpTurnRuntime(id="turn", session_id="session", status="completed")
     service._emit_turn(turn, "turn_started", {"turn_id": "turn"})
     service._emit_turn(turn, "final", {"response": {"content": "done"}})
     with service.mcp_turns_lock:
@@ -97,11 +97,9 @@ def test_sse_replays_turn_events() -> None:
 def test_background_turn_waits_for_approval_executes_and_finishes(monkeypatch, tmp_path) -> None:
     repository = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", repository)
+    monkeypatch.setattr(service, "working_memory", WorkingMemoryRepository(tmp_path / "sessions"))
     monkeypatch.setattr(
-        service, "working_memory", service.WorkingMemoryRepository(tmp_path / "sessions")
-    )
-    monkeypatch.setattr(
-        service, "pending_memory_repository", service.PendingMemoryRepository(tmp_path / "sessions")
+        service, "pending_memory_repository", PendingMemoryRepository(tmp_path / "sessions")
     )
     session = ChatSession(
         id="session",
@@ -158,11 +156,9 @@ def test_background_turn_waits_for_approval_executes_and_finishes(monkeypatch, t
 
     monkeypatch.setattr(service.router, "complete", complete)
 
-    async def exercise() -> service._McpTurnRuntime:
-        turn = service._McpTurnRuntime(id="turn", session_id="session")
-        worker = asyncio.create_task(
-            service._run_mcp_turn(turn, service.MessageRequest(content="search"))
-        )
+    async def exercise() -> McpTurnRuntime:
+        turn = McpTurnRuntime(id="turn", session_id="session")
+        worker = asyncio.create_task(service._run_mcp_turn(turn, MessageRequest(content="search")))
         for _ in range(100):
             if turn.approval is not None:
                 break

@@ -1,13 +1,11 @@
 import httpx
 
-from copia.data.providers.llm import GigaChatProvider, OpenAIProvider
-from copia.domain.models.config import (
-    ChatMessage,
-    LLMConfig,
-    ProviderName,
-    ToolDefinition,
-    ToolLoopMessage,
-)
+from copia.providers.data.llm import GigaChatProvider, OpenAIProvider
+from copia.providers.domain.models.llm_config import LLMConfig
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.providers.domain.models.tool_loop_message import ToolLoopMessage
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def test_openai_serializes_tools_and_parses_tool_call() -> None:

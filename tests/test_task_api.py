@@ -5,14 +5,16 @@ from pathlib import Path
 
 import httpx
 
-from copia.api import service
-from copia.data.invariants_repository import InvariantsRepository
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import LLMResponse
-from copia.domain.models.session import ChatSession
-from copia.domain.models.task import TaskStage, TaskState, TaskStatus
+from copia import service
+from copia.invariants.data.invariants_repository import InvariantsRepository
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.tasks.domain.models.task_stage import TaskStage
+from copia.tasks.domain.models.task_state import TaskState
+from copia.tasks.domain.models.task_status import TaskStatus
 
 
 class FakeTaskRouter:

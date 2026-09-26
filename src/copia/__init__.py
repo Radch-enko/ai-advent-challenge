@@ -1,7 +1,7 @@
 """Copia personal assistant."""
 
-from .domain.models.agent import Agent, AgentFactory
-from .domain.models.config import AgentConfig
-from .domain.services.router import LLMRouter
+from copia.agents.domain.models.agent import Agent, AgentFactory
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.application.llm_router import LLMRouter
 
 __all__ = ["Agent", "AgentConfig", "AgentFactory", "LLMRouter"]

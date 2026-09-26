@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    LLMResponse,
-    ProviderName,
-    ToolCall,
-    ToolDefinition,
-)
-from copia.domain.services.mcp_tool_loop import (
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.mcp.domain.services.mcp_tool_loop import (
     MAX_TOOL_CALLS_PER_TURN,
     McpToolLoop,
     McpToolLoopError,
@@ -16,6 +9,11 @@ from copia.domain.services.mcp_tool_loop import (
     ToolExecutionResult,
     provider_tool_alias,
 )
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.tool_call import ToolCall
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def tool() -> ResolvedMcpTool:

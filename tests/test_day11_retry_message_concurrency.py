@@ -4,23 +4,21 @@ from threading import Event, Lock, Thread
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    ContextManagementConfig,
-    LLMResponse,
-)
-from copia.domain.models.memory import (
-    MemoryCandidate,
-    PendingMemorySuggestion,
-    WorkingMemoryItem,
-)
-from copia.domain.models.session import ChatSession, ConversationContext, SummarizationEvent
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.sessions.domain.models.context_management_config import ContextManagementConfig
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.models.summarization_event import SummarizationEvent
 
 
 def _failed_session(session_id: str) -> ChatSession:

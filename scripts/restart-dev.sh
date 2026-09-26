@@ -41,7 +41,7 @@ stop_owned_process "$API_PID_FILE"
 stop_owned_process "$WEB_PID_FILE"
 
 cd "$PROJECT_DIR"
-./.venv/bin/uvicorn copia.api.service:app --host 127.0.0.1 --port 8000 >"$RUNTIME_DIR/api.log" 2>&1 &
+./.venv/bin/uvicorn copia.service:app --host 127.0.0.1 --port 8000 >"$RUNTIME_DIR/api.log" 2>&1 &
 echo $! >"$API_PID_FILE"
 
 (

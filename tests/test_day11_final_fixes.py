@@ -3,14 +3,17 @@ from threading import Event, Thread
 
 import pytest
 
-from copia.api import service
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import AgentConfig
-from copia.domain.models.memory import MemoryCandidate, PendingMemorySuggestion
-from copia.domain.models.session import ChatSession
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp_path):
@@ -48,7 +51,7 @@ def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp
 
     class Agent:
         def ask(self, content):
-            item = service.WorkingMemoryItem(
+            item = WorkingMemoryItem(
                 id="item",
                 key="goal",
                 value=content,
@@ -57,7 +60,7 @@ def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp
             )
             working.save_automatic(session.id, [], [item])
             assert save_started.is_set()
-            return service.LLMResponse(content="ok", provider="openai", model="model")
+            return LLMResponse(content="ok", provider="openai", model="model")
 
     assert service._ask_agent(session.id, Agent(), "classified")
     # The delete started while the lifecycle lock was held and completes after ask returns.
@@ -119,8 +122,13 @@ def test_memory_repository_removes_temporary_file_when_replace_fails(
     monkeypatch, tmp_path, repository, save_args, prefix
 ):
     instance = repository(tmp_path)
+    repository_module = (
+        "copia.session_memory.data.pending_memory_repository"
+        if prefix == ".pending-"
+        else "copia.profile_memory.data.profile_memory_repository"
+    )
     monkeypatch.setattr(
-        f"copia.data.{('pending_memory' if prefix == '.pending-' else 'profile_memory')}_repository.os.replace",
+        f"{repository_module}.os.replace",
         lambda source, target: (_ for _ in ()).throw(OSError("replace failed")),
     )
 

@@ -2,9 +2,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.data.mcp_connections_repository import McpConnectionsRepository
-from copia.domain.models.mcp import McpDiscoveryResult, McpServerSummary, McpToolSummary
+from copia import service
+from copia.mcp.data.mcp_connections_repository import McpConnectionsRepository
+from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
+from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
+from copia.mcp.domain.models.mcp_tool_summary import McpToolSummary
 
 
 def test_connection_crud_uses_environment_reference_without_returning_secret(

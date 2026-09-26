@@ -1,0 +1,2 @@
+class ProfileMemoryLimitExceeded(ValueError):
+    pass

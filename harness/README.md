@@ -42,3 +42,6 @@ request -> task context -> plan -> scoped implementation -> focused checks
 
 `check.sh` — каноническая контрольная проверка. Скрипты неинтерактивны, кроме установки зависимостей, и должны
 завершаться с ненулевым кодом, если обязательная проверка не пройдена.
+
+Backend постепенно переходит на структуру `src/copia/<feature>/{api,domain,data}`. Правила размещения и допустимых
+зависимостей описаны в `policies/architecture.md`; проверка `architecture-check.sh` охватывает и старые, и новые пути.

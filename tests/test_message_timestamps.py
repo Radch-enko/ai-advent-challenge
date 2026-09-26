@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse
-from copia.domain.models.session import ChatSession
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 class FakeRouter:

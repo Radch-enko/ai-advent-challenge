@@ -4,9 +4,9 @@ Personal multi-provider AI assistant. Copia supports persistent chats and reusab
 
 ## Modules
 
-- `src/copia/domain` — chat, agent, configuration, and routing concepts.
-- `src/copia/data` — OpenAI/GigaChat adapters and local session storage.
-- `src/copia/api` — FastAPI HTTP endpoints.
+- `src/copia/<feature>/domain` — chat, agent, configuration, and routing concepts.
+- `src/copia/<feature>/data` — provider adapters and local storage.
+- `src/copia/<feature>/api` — FastAPI HTTP endpoints; `src/copia/service.py` assembles the app.
 - `client` — React + TypeScript web client.
 - `profiles.json` — reusable agent templates.
 - `client/public/agents` — agent avatar assets.
@@ -44,7 +44,7 @@ The config, state, and run paths can be overridden with `COPIA_SCHEDULES_PATH`, 
 - At startup, the API reads these JSON files again; opening a saved chat continues its previous LLM context.
 - After the first reply, Copia generates a short title in a separate structured-output request. This request never enters the chat history.
 - `AgentFactory` loads named profiles from `profiles.json`.
-- Each assistant reply stores the provider-reported input, output, and total token usage. The chat displays these values and compares the latest input plus output with the model limit from `src/copia/data/model_context_windows.json`.
+- Each assistant reply stores the provider-reported input, output, and total token usage. The chat displays these values and compares the latest input plus output with the model limit from `src/copia/providers/data/model_context_windows.json`.
 - Context progress updates after a successful response. Unknown models still show their reported usage, but no percentage is calculated.
 - Context compression keeps the full transcript for the UI while sending the LLM an evolving summary plus recent original messages. The summary prompt, provider, model, generation settings, number of recent user-assistant pairs, and summary batch size in pairs are configurable per chat or agent.
 - Sliding Window keeps the full transcript in the session and UI, but sends only the latest configured number of transcript messages to the LLM. The system prompt does not count toward this limit.

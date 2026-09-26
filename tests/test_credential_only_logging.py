@@ -1,7 +1,10 @@
-from copia.data.agent_log_store import AgentLogStore
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse, ProviderTrace
-from copia.domain.models.session import ConversationContext
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.conversation_context import ConversationContext
 
 
 class SummaryRouter:

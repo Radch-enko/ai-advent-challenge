@@ -7,23 +7,25 @@ from threading import Event
 import httpx
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.providers.http_logging import (
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.providers.data.http_logging import (
     install_http_logging,
     record_response,
     record_transport_error,
 )
-from copia.data.providers.llm import OpenAIProvider
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse
-from copia.domain.models.memory import WorkingMemoryItem
-from copia.domain.models.session import ChatSession
-from copia.domain.services.agent_log_context import agent_log_turn
+from copia.providers.data.llm import OpenAIProvider
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def _session_client(monkeypatch, tmp_path, store: AgentLogStore) -> tuple[TestClient, str]:

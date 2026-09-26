@@ -3,13 +3,13 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.user_profiles_repository import JsonUserProfilesRepository
-from copia.domain.models.config import LLMResponse
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
 
 
 @pytest.mark.parametrize(

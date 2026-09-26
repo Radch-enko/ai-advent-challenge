@@ -1,16 +1,14 @@
 from datetime import UTC, datetime
 
-from copia.api import service
-from copia.domain.models.invariant import Invariant
-from copia.domain.models.task import (
-    TaskPlan,
-    TaskPlanStep,
-    TaskPlanStepStatus,
-    TaskStage,
-    TaskState,
-    TaskStatus,
-    TaskValidationResult,
-)
+from copia import service
+from copia.invariants.domain.models.invariant import Invariant
+from copia.tasks.domain.models.task_plan import TaskPlan
+from copia.tasks.domain.models.task_plan_step import TaskPlanStep
+from copia.tasks.domain.models.task_plan_step_status import TaskPlanStepStatus
+from copia.tasks.domain.models.task_stage import TaskStage
+from copia.tasks.domain.models.task_state import TaskState
+from copia.tasks.domain.models.task_status import TaskStatus
+from copia.tasks.domain.models.task_validation_result import TaskValidationResult
 
 
 def invariant(item_id: str = "weekends") -> Invariant:

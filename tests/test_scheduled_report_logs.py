@@ -3,12 +3,12 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.scheduled_runs_repository import ScheduledRunsRepository
-from copia.domain.models.agent_log import AgentLogExchange
-from copia.domain.models.scheduled_job import ScheduledRun
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.models.agent_log_exchange import AgentLogExchange
+from copia.scheduled_jobs.data.scheduled_runs_repository import ScheduledRunsRepository
+from copia.scheduled_jobs.domain.models.scheduled_run import ScheduledRun
 
 
 def test_scheduled_log_endpoint_uses_the_displayed_run(monkeypatch, tmp_path) -> None:

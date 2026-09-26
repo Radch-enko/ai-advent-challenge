@@ -1,13 +1,17 @@
 from datetime import UTC, datetime
 
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.contracts import LongTermMemoryStore, ShortTermTranscriptStore, WorkingMemoryStore
-from copia.domain.models.config import AgentConfig, ChatMessage
-from copia.domain.models.memory import LongTermMemoryItem, WorkingMemoryItem
-from copia.domain.models.session import ConversationContext
-from copia.domain.services.context_strategy import context_strategy_for
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.profile_memory.domain.contracts.long_term_memory_store import LongTermMemoryStore
+from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.contracts.working_memory_store import WorkingMemoryStore
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.contracts.short_term_transcript_store import ShortTermTranscriptStore
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.services.context_strategy import context_strategy_for
 
 
 def _long(key: str, value: str) -> LongTermMemoryItem:

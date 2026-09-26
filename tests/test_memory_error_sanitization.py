@@ -3,15 +3,16 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.providers.llm import ProviderError
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.models.memory import WorkingMemoryItem
-from copia.domain.services.memory_classifier import LLMMemoryClassifier
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.session_memory.domain.services.llm_memory_classifier import LLMMemoryClassifier
+from copia.sessions.data.sessions_repository import SessionsRepository
 
 
 def _working_memory() -> list[WorkingMemoryItem]:

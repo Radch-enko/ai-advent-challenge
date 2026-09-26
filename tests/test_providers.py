@@ -1,12 +1,10 @@
 import httpx
 
-from copia.data.providers.llm import GigaChatProvider, OpenAIProvider
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    GenerationConfig,
-    StructuredOutputConfig,
-)
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.llm import GigaChatProvider, OpenAIProvider
+from copia.providers.domain.models.generation_config import GenerationConfig
+from copia.providers.domain.models.structured_output_config import StructuredOutputConfig
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def test_openai_maps_common_configuration() -> None:

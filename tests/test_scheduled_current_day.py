@@ -6,10 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from copia.api import service
-from copia.api.scheduled_runner import ScheduledRunner, report_window
-from copia.data.scheduled_runs_repository import ScheduledRunsRepository
-from copia.domain.models.scheduled_job import ScheduledJob
+from copia import service
+from copia.scheduled_jobs.application.schedule_timing import report_window
+from copia.scheduled_jobs.application.scheduled_runner import ScheduledRunner
+from copia.scheduled_jobs.data.scheduled_runs_repository import ScheduledRunsRepository
+from copia.scheduled_jobs.domain.models.scheduled_job import ScheduledJob
 
 
 def current_day_job() -> ScheduledJob:

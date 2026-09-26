@@ -3,12 +3,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from copia.data.providers.llm import ProviderError
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse
-from copia.domain.models.memory import WorkingMemoryItem
-from copia.domain.services.memory_classifier import LLMMemoryClassifier
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.session_memory.domain.services.llm_memory_classifier import LLMMemoryClassifier
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def working_item(value: str = "old") -> WorkingMemoryItem:
@@ -134,7 +136,9 @@ def test_working_memory_atomic_failure_preserves_files_and_automatic_undo(
     def fail_replace(source, target):
         raise OSError("replace failed")
 
-    monkeypatch.setattr("copia.data.working_memory_repository.os.replace", fail_replace)
+    monkeypatch.setattr(
+        "copia.session_memory.data.working_memory_repository.os.replace", fail_replace
+    )
     with pytest.raises(OSError):
         repository.save_automatic("session", before, after)
 

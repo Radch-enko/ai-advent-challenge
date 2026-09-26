@@ -2,11 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from copia.data.mcp_connections_repository import (
-    McpConnectionConflictError,
-    McpConnectionsRepository,
-)
-from copia.domain.models.mcp import McpConnection
+from copia.mcp.data.mcp_connection_conflict_error import McpConnectionConflictError
+from copia.mcp.data.mcp_connections_repository import McpConnectionsRepository
+from copia.mcp.domain.models.mcp_connection import McpConnection
 
 
 def connection(connection_id: str = "finances") -> McpConnection:

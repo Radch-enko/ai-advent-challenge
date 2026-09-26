@@ -4,22 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from copia.data.providers.llm import ProviderError
-from copia.domain.models.agent import (
+from copia.agents.domain.models.agent import (
     Agent,
     AgentFactory,
     FactsUpdateFailed,
     SummarizationFailed,
     SummarizationRetryRequired,
 )
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    LLMResponse,
-    ProviderName,
-    ProviderTrace,
-)
-from copia.domain.models.session import ConversationContext
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.conversation_context import ConversationContext
 
 
 def stable_message_contents(messages: list[ChatMessage]) -> list[str]:
@@ -81,7 +79,7 @@ def test_agents_keep_independent_history() -> None:
 def test_factory_loads_profiles(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles.json"
     profiles.write_text('{"writer": {"name": "writer", "provider": "openai", "model": "test"}}')
-    from copia.data.profiles_repository import ProfilesRepository
+    from copia.agents.data.profiles_repository import ProfilesRepository
 
     factory = AgentFactory(FakeRouter(), ProfilesRepository(profiles))  # type: ignore[arg-type]
 

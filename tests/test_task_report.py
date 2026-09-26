@@ -1,4 +1,4 @@
-from copia.api.service import _valid_task_report
+from copia.service import _valid_task_report
 
 
 def test_task_report_requires_answer_focused_template() -> None:

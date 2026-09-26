@@ -15,5 +15,6 @@ criteria с verification, реализуй минимальное изменен
 изменении tests, запускай focused checks и `./harness/scripts/check.sh`, если это возможно, проверь diff и подготовь
 отчёт по `harness/templates/completion-report.md`.
 
-Не перестраивай architecture, не скрывай failing checks, не создавай feature-to-feature dependencies и не выполняй
+Размещай новый backend-код внутри его feature package по `harness/policies/architecture.md`. Не перестраивай
+architecture вне scope задачи, не скрывай failing checks, не создавай циклические feature dependencies и не выполняй
 commit/push без явного запроса.

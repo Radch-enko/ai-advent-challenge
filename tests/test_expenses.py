@@ -6,11 +6,15 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
-from copia.api import service
-from copia.api.service import app
-from copia.data import expenses_repository
-from copia.data.expenses_repository import HEADERS, ExpensesRepository, ExpensesStorageError
-from copia.domain.models.expense import ExpenseCreate
+from copia import service
+from copia.expenses.data import expenses_repository
+from copia.expenses.data.expenses_repository import (
+    HEADERS,
+    ExpensesRepository,
+    ExpensesStorageError,
+)
+from copia.expenses.domain.models.expense_create import ExpenseCreate
+from copia.service import app
 
 
 def _create_workbook(path: Path, rows: list[list[object]] | None = None) -> None:

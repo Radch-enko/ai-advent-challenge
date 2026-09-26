@@ -5,24 +5,26 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app, router
-from copia.data.providers.http_logging import _redacted_body
-from copia.data.user_profiles_repository import (
-    JsonUserProfilesRepository,
-    UserProfileNameConflictError,
-    UserProfileStorageError,
-)
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse, ProviderTrace
-from copia.domain.models.memory import LongTermMemoryItem
-from copia.domain.models.session import ConversationContext
-from copia.domain.models.user_profile import UserProfile
-from copia.domain.services.context_strategy import (
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
+from copia.providers.data.http_logging import _redacted_body
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.service import app, router
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.services.context_strategy import (
     _estimated_message_tokens,
     context_strategy_for,
 )
+from copia.user_profiles.data.user_profile_name_conflict_error import UserProfileNameConflictError
+from copia.user_profiles.data.user_profile_storage_error import UserProfileStorageError
+from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
+from copia.user_profiles.domain.models.user_profile import UserProfile
 
 
 def profile(name: str) -> UserProfile:
@@ -172,7 +174,7 @@ def test_profile_crud_maps_conflicts_not_found_and_in_use(monkeypatch, tmp_path)
     monkeypatch.setattr(
         service, "user_profiles", JsonUserProfilesRepository(tmp_path / "profiles.json")
     )
-    monkeypatch.setattr(service, "sessions", service.SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     client = TestClient(app)
 
     created = client.post("/user-profiles", json=profile_payload("Personal"))
@@ -213,7 +215,7 @@ def test_missing_profile_skips_provider_for_message_and_retry(monkeypatch, tmp_p
     repository = JsonUserProfilesRepository(tmp_path / "profiles.json")
     stored = repository.create(profile("Personal"))
     monkeypatch.setattr(service, "user_profiles", repository)
-    monkeypatch.setattr(service, "sessions", service.SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     client = TestClient(app)
     session = client.post(
         "/sessions",
@@ -248,7 +250,7 @@ def test_profile_load_is_skipped_without_id_and_precedes_provider(monkeypatch, t
     monkeypatch.setattr(
         service, "user_profiles", JsonUserProfilesRepository(tmp_path / "profiles.json")
     )
-    monkeypatch.setattr(service, "sessions", service.SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     client = TestClient(app)
     session = client.post(
         "/sessions",
@@ -274,7 +276,7 @@ def test_corrupt_profile_storage_prevents_provider_request(monkeypatch, tmp_path
     profile_path = tmp_path / "profiles.json"
     profile_path.write_text("not json", encoding="utf-8")
     monkeypatch.setattr(service, "user_profiles", JsonUserProfilesRepository(profile_path))
-    monkeypatch.setattr(service, "sessions", service.SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     client = TestClient(app)
     session = client.post(
         "/sessions",

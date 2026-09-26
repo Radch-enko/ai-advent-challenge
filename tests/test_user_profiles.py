@@ -3,14 +3,17 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app, router
-from copia.data.user_profiles_repository import JsonUserProfilesRepository, UserProfileStorageError
-from copia.domain.models.agent_log import AgentLogOperation
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.models.session import ConversationContext
-from copia.domain.models.user_profile import UserProfile
-from copia.domain.services.context_strategy import context_strategy_for
+from copia import service
+from copia.agent_logs.domain.models.agent_log_operation import AgentLogOperation
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app, router
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.services.context_strategy import context_strategy_for
+from copia.user_profiles.data.user_profile_storage_error import UserProfileStorageError
+from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
+from copia.user_profiles.domain.models.user_profile import UserProfile
 
 
 def profile(name: str = "Personal") -> UserProfile:
@@ -62,7 +65,7 @@ def test_profile_api_links_session_and_records_operation(monkeypatch, tmp_path) 
     monkeypatch.setattr(
         service, "user_profiles", JsonUserProfilesRepository(tmp_path / "profiles.json")
     )
-    monkeypatch.setattr(service, "sessions", service.SessionsRepository(tmp_path / "sessions"))
+    monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     created_profile = TestClient(app).post(
         "/user-profiles",
         json={

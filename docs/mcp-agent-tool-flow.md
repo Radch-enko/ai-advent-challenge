@@ -97,10 +97,10 @@ MCP connections хранятся в `~/.copia/mcp_connections.json`. Persisted c
 
 Основная реализация:
 
-- [src/copia/api/service.py](../src/copia/api/service.py)
-- [src/copia/data/mcp_connections_repository.py](../src/copia/data/mcp_connections_repository.py)
-- [src/copia/data/mcp_client.py](../src/copia/data/mcp_client.py)
-- [src/copia/domain/models/mcp.py](../src/copia/domain/models/mcp.py)
+- [src/copia/service.py](../src/copia/service.py)
+- [src/copia/mcp/data/mcp_connections_repository.py](../src/copia/mcp/data/mcp_connections_repository.py)
+- [src/copia/mcp/data/mcp_client.py](../src/copia/mcp/data/mcp_client.py)
+- [src/copia/mcp/domain/models/mcp_connection.py](../src/copia/mcp/domain/models/mcp_connection.py)
 
 ### `GET /mcp/connections`
 
@@ -207,8 +207,8 @@ Backend запускает worker, блокирует второй активн�
 
 Основная domain-реализация:
 
-- [src/copia/domain/services/mcp_tool_loop.py](../src/copia/domain/services/mcp_tool_loop.py)
-- [src/copia/domain/models/config.py](../src/copia/domain/models/config.py)
+- [src/copia/mcp/domain/services/mcp_tool_loop.py](../src/copia/mcp/domain/services/mcp_tool_loop.py)
+- [src/copia/agents/domain/models/agent_config.py](../src/copia/agents/domain/models/agent_config.py)
 
 ### Шаг 3. Вызов LLM с tool schemas
 
@@ -221,8 +221,8 @@ Summarizer, memory classifier, facts updater и title generation tool schemas н
 
 Provider adapters:
 
-- [src/copia/data/providers/llm.py](../src/copia/data/providers/llm.py)
-- [src/copia/domain/services/router.py](../src/copia/domain/services/router.py)
+- [src/copia/providers/data/llm.py](../src/copia/providers/data/llm.py)
+- [src/copia/providers/application/llm_router.py](../src/copia/providers/application/llm_router.py)
 
 ### Шаг 4. Модель возвращает tool call
 
@@ -341,4 +341,3 @@ GET /sessions/{session_id}/turns/{turn_id}
 - `tool_completed`;
 - `final`;
 - `error`.
-

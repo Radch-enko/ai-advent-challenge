@@ -2,22 +2,23 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.models.memory import (
-    LongTermMemoryItem,
-    MemoryCandidate,
-    PendingMemorySuggestion,
-    WorkingMemoryItem,
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.session_memory.domain.services.deterministic_fake_memory_classifier import (
+    DeterministicFakeMemoryClassifier,
 )
-from copia.domain.services.memory_classifier import DeterministicFakeMemoryClassifier
-from copia.domain.services.memory_policy import HybridMemoryPolicy
+from copia.session_memory.domain.services.hybrid_memory_policy import HybridMemoryPolicy
+from copia.sessions.data.sessions_repository import SessionsRepository
 
 
 def test_classifier_failure_retains_message_and_working_memory(tmp_path):

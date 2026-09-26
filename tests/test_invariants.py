@@ -3,18 +3,20 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app, router
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.invariants_repository import InvariantsRepository
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, ChatMessage, LLMResponse
-from copia.domain.models.invariant import Invariant
-from copia.domain.models.session import ChatSession
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.invariants.data.invariants_repository import InvariantsRepository
+from copia.invariants.domain.models.invariant import Invariant
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app, router
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def invariant(

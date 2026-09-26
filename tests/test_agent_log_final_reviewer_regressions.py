@@ -5,13 +5,15 @@ from threading import Event, Thread
 import httpx
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.providers.http_logging import _redact_url, install_http_logging, record_response
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.session import ChatSession, SummarizationEvent
-from copia.domain.services.agent_log_context import agent_log_turn
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
+from copia.providers.data.http_logging import _redact_url, install_http_logging, record_response
+from copia.providers.data.llm import ProviderError
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.sessions.domain.models.summarization_event import SummarizationEvent
 
 
 def test_credential_userinfo_path_query_and_body_values_are_redacted_in_storage_and_api(
@@ -138,7 +140,7 @@ def test_session_load_and_agent_construction_failures_return_safe_log_ids(
 
 def test_provider_error_endpoints_never_serialize_provider_payloads(monkeypatch) -> None:
     def fail(*_args, **_kwargs):
-        raise service.ProviderError(
+        raise ProviderError(
             "provider payload apiKey=error-secret",
             status_code=502,
             request_body={"apiKey": "request-secret"},

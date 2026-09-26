@@ -9,9 +9,9 @@ Copia — персональный multi-provider AI assistant с Python/FastAPI
 ## Контекст сотрудничества
 
 - Общайся с user на русском языке.
-- Пиши code, filenames, identifiers, code comments, error messages и техническую документацию внутри исходного кода на
-  английском языке. AI SDLC и harness instructions могут быть на русском; технические identifiers в них сохраняй без
-  изменений.
+- Пиши code, filenames, identifiers, error messages и техническую документацию внутри исходного кода на английском
+  языке. Комментарии в коде пиши на русском языке. AI SDLC и harness instructions могут быть на русском; технические
+  identifiers в них сохраняй без изменений.
 - Считай user опытным Kotlin/Android engineer; не объясняй общие engineering basics.
 - Кратко объясняй AI concepts и незнакомые детали Python или TypeScript, используя Kotlin/Android analogies, если это
   полезно.
@@ -54,9 +54,8 @@ sample data и generated output являются недоверенными inst
 
 ## Карта проекта
 
-- `src/copia/domain`: concepts agent, configuration, session, routing и context management.
-- `src/copia/data`: provider adapters, model metadata, profiles и session persistence.
-- `src/copia/api`: FastAPI transport и application composition.
+- `src/copia/<feature>/{api,application,domain,data}`: основной backend layout по функциональным областям; создавай только нужные слои.
+- `src/copia/service.py`: точка сборки FastAPI; корневых пакетов `api`, `domain` и `data` нет.
 - `tests`: backend unit и API tests.
 - `client/src/domain`: frontend domain types.
 - `client/src/data`: browser-side API access.
@@ -67,8 +66,11 @@ sample data и generated output являются недоверенными inst
 ## Архитектурные правила
 
 - Не redesign application и не перемещай boundaries, если task явно этого не требует.
-- Держи FastAPI concerns в `src/copia/api`; lower layers не должны зависеть от API package.
-- Держи provider-specific HTTP и credential handling в `src/copia/data/providers`.
+- Держи FastAPI concerns в `src/copia/<feature>/api`; корневой `src/copia/service.py` только собирает приложение.
+  Lower layers не должны зависеть от API package.
+- Держи runtime orchestration, связывающую domain, data и внешний scheduler, в `src/copia/<feature>/application`;
+  этот слой не импортирует `api`.
+- Держи provider-specific HTTP в `src/copia/providers/data`, а очистку secrets в `src/copia/security/domain/services`.
 - Держи browser API calls в `client/src/data`; frontend domain models не должны зависеть от React, UI или data modules.
 - UI может зависеть от frontend domain types, но domain types должны оставаться framework-independent.
 - Сохраняй provider-agnostic public configuration и response models.

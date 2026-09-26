@@ -3,12 +3,12 @@ import json
 import httpx
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.providers.http_logging import install_http_logging, record_response
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.services.agent_log_context import agent_log_turn
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
+from copia.providers.data.http_logging import install_http_logging, record_response
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
 
 
 def test_credential_query_values_are_redacted_before_agent_log_api_serialization(

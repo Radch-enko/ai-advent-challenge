@@ -1,0 +1,2 @@
+class McpConnectionsStorageError(RuntimeError):
+    pass

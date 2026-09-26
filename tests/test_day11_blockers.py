@@ -3,16 +3,20 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import _save_agent_state, app
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, LLMResponse
-from copia.domain.models.memory import MemoryCandidate, PendingMemorySuggestion
-from copia.domain.services.memory_policy import HybridMemoryPolicy
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import _save_agent_state, app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.session_memory.domain.services.hybrid_memory_policy import HybridMemoryPolicy
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def test_repository_identifiers_reject_traversal_and_noncanonical_values(tmp_path):
@@ -57,16 +61,14 @@ def test_save_agent_state_preserves_automatic_undo_snapshot(tmp_path, monkeypatc
     monkeypatch.setattr(service, "sessions", sessions)
     monkeypatch.setattr(service, "working_memory", working)
     now = datetime.now(UTC)
-    session = service.ChatSession(
+    session = ChatSession(
         id="session",
         config=AgentConfig(name="x", provider="openai", model="m"),
         created_at=now,
         updated_at=now,
     )
     sessions.save(session)
-    before = service.WorkingMemoryItem(
-        id="one", key="goal", value="old", created_at=now, updated_at=now
-    )
+    before = WorkingMemoryItem(id="one", key="goal", value="old", created_at=now, updated_at=now)
     after = before.model_copy(update={"value": "new"})
     working.save_automatic(session.id, [before], [after])
     agent = Agent(session.config, _Router(), working_memory=[after])
@@ -80,16 +82,14 @@ def test_working_update_returns_memory_events_and_api_rejects_bad_session(tmp_pa
     monkeypatch.setattr(service, "sessions", sessions)
     monkeypatch.setattr(service, "working_memory", working)
     now = datetime.now(UTC)
-    session = service.ChatSession(
+    session = ChatSession(
         id="session",
         config=AgentConfig(name="x", provider="openai", model="m"),
         created_at=now,
         updated_at=now,
     )
     sessions.save(session)
-    item = service.WorkingMemoryItem(
-        id="one", key="goal", value="old", created_at=now, updated_at=now
-    )
+    item = WorkingMemoryItem(id="one", key="goal", value="old", created_at=now, updated_at=now)
     working.save(session.id, [item])
     response = TestClient(app).patch("/sessions/session/working-memory/one", json={"value": "new"})
     assert response.status_code == 200

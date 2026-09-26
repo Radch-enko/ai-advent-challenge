@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
 
-from copia.api import service
-from copia.data.mcp_connections_repository import McpConnectionsRepository
-from copia.data.user_profiles_repository import JsonUserProfilesRepository
+from copia import service
+from copia.mcp.data.mcp_connections_repository import McpConnectionsRepository
+from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
 
 
 def test_service_storage_uses_temporary_data_root() -> None:

@@ -1,10 +1,11 @@
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app, router
-from copia.data.providers.llm import ProviderError
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import ChatMessage, LLMResponse
+from copia import service
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app, router
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def test_failed_summarization_error_is_sanitized_in_session_json_and_get_response(

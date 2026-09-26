@@ -5,22 +5,22 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app, router
-from copia.data.profile_memory_repository import ProfileMemoryLimitExceeded, ProfileMemoryRepository
-from copia.data.providers.llm import ProviderError
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    ContextStrategyName,
-    LLMResponse,
-    ProviderTrace,
-)
-from copia.domain.models.memory import LongTermMemoryItem
-from copia.domain.models.session import ChatSession, ConversationContext
-from copia.domain.services.context_strategy import context_strategy_for
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_limit_exceeded import ProfileMemoryLimitExceeded
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.service import app, router
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.sessions.domain.models.context_strategy_name import ContextStrategyName
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.services.context_strategy import context_strategy_for
 
 
 class MemoryRouter:

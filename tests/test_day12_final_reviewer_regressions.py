@@ -4,11 +4,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.providers.http_logging import _capture_body
-from copia.data.sessions_repository import SessionsRepository
+from copia import service
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.providers.data.http_logging import _capture_body
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
 
 
 def test_credential_redaction_precedes_body_truncation() -> None:
@@ -54,7 +55,7 @@ def test_escaped_profile_size_fails_before_completed_operation_or_provider(
     }
     profile_path = tmp_path / "profiles.json"
     profile_path.write_text(json.dumps(oversized), encoding="utf-8")
-    monkeypatch.setattr(service, "user_profiles", service.JsonUserProfilesRepository(profile_path))
+    monkeypatch.setattr(service, "user_profiles", JsonUserProfilesRepository(profile_path))
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     store = AgentLogStore()
     monkeypatch.setattr(service, "agent_log_store", store)

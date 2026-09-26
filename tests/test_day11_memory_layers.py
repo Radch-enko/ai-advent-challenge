@@ -1,9 +1,12 @@
 from datetime import UTC, datetime
 
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.memory import MemoryCandidate, WorkingMemoryItem
-from copia.domain.services.memory_classifier import DeterministicFakeMemoryClassifier
-from copia.domain.services.memory_policy import HybridMemoryPolicy
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.session_memory.domain.services.deterministic_fake_memory_classifier import (
+    DeterministicFakeMemoryClassifier,
+)
+from copia.session_memory.domain.services.hybrid_memory_policy import HybridMemoryPolicy
 
 
 def test_working_memory_repository_is_atomic_round_trip_and_session_scoped(tmp_path):

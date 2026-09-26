@@ -2,12 +2,12 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.agent_log import AgentLogExchange
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.agent_logs.domain.models.agent_log_exchange import AgentLogExchange
+from copia.service import app
+from copia.sessions.data.sessions_repository import SessionsRepository
 
 
 def _exchange(turn_id: str, session_id: str) -> AgentLogExchange:

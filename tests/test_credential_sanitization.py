@@ -1,9 +1,11 @@
-from copia.api.service import _safe_trace, provider_error_detail
-from copia.data.providers.http_logging import _capture_body, _redact_headers
-from copia.data.providers.llm import ProviderError
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig, LLMResponse, ProviderTrace
-from copia.domain.services.credential_sanitizer import sanitize_value
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.http_logging import _capture_body, _redact_headers
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.security.domain.services.credential_sanitizer import sanitize_value
+from copia.service import _safe_trace, provider_error_detail
 
 
 def test_http_body_preserves_personal_context_and_redacts_credentials_before_truncation() -> None:

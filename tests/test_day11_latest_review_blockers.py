@@ -3,24 +3,23 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import app
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.config import (
-    AgentConfig,
-    ChatMessage,
-    ContextManagementConfig,
-    LLMResponse,
-)
-from copia.domain.models.memory import (
-    MemoryCandidate,
-    PendingMemorySuggestion,
-    WorkingMemoryItem,
-)
-from copia.domain.models.session import ChatSession, ConversationContext, SummarizationEvent
-from copia.domain.services.context_strategy import StickyFactsStrategy
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.service import app
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.sessions.domain.models.context_management_config import ContextManagementConfig
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.models.summarization_event import SummarizationEvent
+from copia.sessions.domain.services.context_strategy import StickyFactsStrategy
 
 
 def item(value: str) -> WorkingMemoryItem:
@@ -47,7 +46,9 @@ def test_automatic_save_rolls_back_both_files_when_second_replace_fails(monkeypa
             raise OSError("undo replace failed")
         original_replace(source, target)
 
-    monkeypatch.setattr("copia.data.working_memory_repository.os.replace", fail_second_replace)
+    monkeypatch.setattr(
+        "copia.session_memory.data.working_memory_repository.os.replace", fail_second_replace
+    )
     with pytest.raises(OSError, match="undo replace failed"):
         repository.save_automatic("session", before, [item("after")])
 
@@ -168,7 +169,7 @@ def test_provider_error_preserves_memory_and_sanitizes_credentials(monkeypatch, 
         def complete(self, messages, request_config):
             self.calls += 1
             if self.calls == 1:
-                raise service.ProviderError(
+                raise ProviderError(
                     "failed", request_body={"memory": "value"}, response_body={"raw": "value"}
                 )
             return LLMResponse(content="unused", provider="openai", model="model")

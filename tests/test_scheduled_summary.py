@@ -6,19 +6,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.scheduled_runner import (
-    ScheduledJobFailure,
-    ScheduledRunner,
-    preceding_fire,
-    previous_fire,
-)
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.scheduled_runs_repository import ScheduledRunsRepository
-from copia.domain.models.config import LLMResponse, ToolCall, ToolDefinition
-from copia.domain.models.scheduled_job import ScheduledJob, ScheduledRun
-from copia.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.tool_call import ToolCall
+from copia.providers.domain.models.tool_definition import ToolDefinition
+from copia.scheduled_jobs.application.schedule_timing import preceding_fire, previous_fire
+from copia.scheduled_jobs.application.scheduled_job_failure import ScheduledJobFailure
+from copia.scheduled_jobs.application.scheduled_runner import ScheduledRunner
+from copia.scheduled_jobs.data.scheduled_runs_repository import ScheduledRunsRepository
+from copia.scheduled_jobs.domain.models.scheduled_job import ScheduledJob
+from copia.scheduled_jobs.domain.models.scheduled_run import ScheduledRun
 
 
 def hourly_job() -> ScheduledJob:

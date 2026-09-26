@@ -2,11 +2,14 @@ import re
 
 from fastapi.testclient import TestClient
 
-from copia.api import service
-from copia.api.service import agents, app, router
-from copia.data.providers.llm import ProviderError
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import ChatMessage, LLMResponse, ProviderName, ProviderTrace
+from copia import service
+from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
+from copia.providers.domain.models.provider_trace import ProviderTrace
+from copia.service import agents, app, router
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 def stable_prompt_messages(messages: list[str]) -> list[str]:

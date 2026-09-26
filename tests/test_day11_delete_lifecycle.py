@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 
-from copia.api import service
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.data.working_memory_repository import WorkingMemoryRepository
-from copia.domain.models.agent import Agent
-from copia.domain.models.config import AgentConfig
-from copia.domain.models.session import ChatSession
+from copia import service
+from copia.agents.domain.models.agent import Agent
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
 
 
 def test_save_agent_state_does_not_resurrect_deleted_session(monkeypatch, tmp_path):

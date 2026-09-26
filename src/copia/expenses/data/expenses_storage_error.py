@@ -1,0 +1,2 @@
+class ExpensesStorageError(RuntimeError):
+    pass

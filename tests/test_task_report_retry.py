@@ -4,12 +4,12 @@ from pathlib import Path
 
 import httpx
 
-from copia.api import service
-from copia.data.agent_log_repository import JsonAgentLogRepository
-from copia.data.agent_log_store import AgentLogStore
-from copia.data.invariants_repository import InvariantsRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import LLMResponse
+from copia import service
+from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
+from copia.agent_logs.data.agent_log_store import AgentLogStore
+from copia.invariants.data.invariants_repository import InvariantsRepository
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.sessions.data.sessions_repository import SessionsRepository
 
 
 class MalformedThenValidReportRouter:

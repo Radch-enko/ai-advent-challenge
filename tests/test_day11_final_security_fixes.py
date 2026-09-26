@@ -1,13 +1,17 @@
 from datetime import UTC, datetime
 
-from copia.api import service
-from copia.data.pending_memory_repository import PendingMemoryRepository
-from copia.data.profile_memory_repository import ProfileMemoryRepository
-from copia.data.sessions_repository import SessionsRepository
-from copia.domain.models.config import AgentConfig, ContextManagementConfig, ContextStrategyName
-from copia.domain.models.memory import MemoryCandidate, PendingMemorySuggestion
-from copia.domain.models.session import ChatSession, ConversationContext
-from copia.domain.services.context_strategy import SummaryStrategy
+from copia import service
+from copia.agents.domain.models.agent_config import AgentConfig
+from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
+from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
+from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
+from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
+from copia.sessions.data.sessions_repository import SessionsRepository
+from copia.sessions.domain.models.chat_session import ChatSession
+from copia.sessions.domain.models.context_management_config import ContextManagementConfig
+from copia.sessions.domain.models.context_strategy_name import ContextStrategyName
+from copia.sessions.domain.models.conversation_context import ConversationContext
+from copia.sessions.domain.services.context_strategy import SummaryStrategy
 
 
 def test_summary_escapes_adversarial_markup():

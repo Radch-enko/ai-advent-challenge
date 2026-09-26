@@ -10,7 +10,7 @@ from mcp import Client
 from mcp.server.mcpserver import MCPServer
 from mcp.shared.exceptions import MCPError
 
-from copia.data import mcp_client
+from copia.mcp.data import mcp_client
 
 
 def run(coroutine):
@@ -196,3 +196,35 @@ def test_tool_listing_follows_sdk_pagination_without_calling_tools() -> None:
 
     assert len(pages) == 2
     assert cursors == [None, "page-2"]
+
+
+def test_tool_call_rejects_response_exceeding_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(
+                content=[SimpleNamespace(model_dump=lambda **kwargs: {"text": "too large"})],
+                structured_content=None,
+                is_error=False,
+            )
+
+    monkeypatch.setattr(mcp_client, "_LimitedPinnedTransport", lambda address: object())
+    monkeypatch.setattr(mcp_client.httpx2, "AsyncClient", lambda **kwargs: FakeContext())
+    monkeypatch.setattr(mcp_client, "streamable_http_client", lambda *args, **kwargs: object())
+    monkeypatch.setattr(mcp_client, "Client", lambda *args, **kwargs: FakeContext())
+    monkeypatch.setattr(mcp_client, "MAX_RESPONSE_BYTES", 5)
+    endpoint = mcp_client._ValidatedEndpoint(
+        "https://example.com/mcp", "example.com", 443, "8.8.8.8"
+    )
+
+    with pytest.raises(mcp_client.McpDiscoveryError) as error:
+        run(mcp_client._call_tool(endpoint, {}, "search", {}))
+
+    assert error.value.code == mcp_client.MCP_RESPONSE_TOO_LARGE
