@@ -20,6 +20,7 @@ from copia.mcp.domain.models.mcp_call_result import McpCallResult
 from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
 from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
 from copia.mcp.domain.models.mcp_tool_summary import McpToolSummary
+from copia.security.domain.services.credential_sanitizer import sanitize_text
 
 MAX_ENDPOINT_LENGTH = 2048
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -30,10 +31,10 @@ MAX_ERROR_MESSAGE_LENGTH = 1000
 MAX_HEADER_NAME_LENGTH = 256
 MAX_HEADER_VALUE_LENGTH = 4096
 MAX_ERROR_BODY_BYTES = 8 * 1024
-CONNECT_TIMEOUT_SECONDS = 5.0
-READ_TIMEOUT_SECONDS = 10.0
+CONNECT_TIMEOUT_SECONDS = 15.0
+READ_TIMEOUT_SECONDS = 40.0
 WRITE_TIMEOUT_SECONDS = 5.0
-OVERALL_TIMEOUT_SECONDS = 20.0
+OVERALL_TIMEOUT_SECONDS = 40.0
 
 MCP_ENDPOINT_REJECTED = "mcp_endpoint_rejected"
 MCP_TIMEOUT = "mcp_timeout"
@@ -375,11 +376,27 @@ def _safe_protocol_message(error: BaseException) -> str:
     nested_mcp_error = _find_nested_exception(error, MCPError)
     if isinstance(nested_mcp_error, MCPError):
         message = nested_mcp_error.message.strip()
-    elif isinstance(error, McpDiscoveryError):
-        message = error.message.strip()
+    elif isinstance(nested := _find_nested_exception(error, McpDiscoveryError), McpDiscoveryError):
+        message = nested.message.strip()
+    elif isinstance(error, BaseExceptionGroup):
+        message = next(
+            (str(nested).strip() for nested in _leaf_exceptions(error) if str(nested).strip()),
+            "",
+        )
     else:
         message = " ".join(str(error).split())
-    return message[:MAX_ERROR_MESSAGE_LENGTH] or "MCP server returned an invalid protocol response"
+    return (
+        sanitize_text(message)[:MAX_ERROR_MESSAGE_LENGTH]
+        or "MCP server returned an invalid protocol response"
+    )
+
+
+def _leaf_exceptions(error: BaseException) -> Iterable[BaseException]:
+    if isinstance(error, BaseExceptionGroup):
+        for nested in error.exceptions:
+            yield from _leaf_exceptions(nested)
+    else:
+        yield error
 
 
 def _tool_summaries(pages: list[types.ListToolsResult]) -> list[McpToolSummary]:
@@ -498,6 +515,21 @@ async def discover_mcp_tools(
         nested_discovery_error = _find_nested_exception(error, McpDiscoveryError)
         if isinstance(nested_discovery_error, McpDiscoveryError):
             raise nested_discovery_error from error
+        if _find_nested_exception(error, MCPError):
+            raise McpDiscoveryError(MCP_PROTOCOL_ERROR, _safe_protocol_message(error)) from error
+        if _find_nested_exception(error, TimeoutError) or _find_nested_exception(
+            error, httpx2.TimeoutException
+        ):
+            raise McpDiscoveryError(
+                MCP_TIMEOUT, "MCP server did not respond within the allowed time"
+            ) from error
+        if any(
+            _find_nested_exception(error, exception_type)
+            for exception_type in (httpx2.HTTPError, OSError)
+        ):
+            raise McpDiscoveryError(
+                MCP_CONNECTION_FAILED, "Could not connect to MCP server"
+            ) from error
         raise McpDiscoveryError(
             MCP_PROTOCOL_ERROR,
             _safe_protocol_message(error),
@@ -586,4 +618,19 @@ async def call_mcp_tool(
         nested = _find_nested_exception(error, McpDiscoveryError)
         if isinstance(nested, McpDiscoveryError):
             raise nested from error
+        if _find_nested_exception(error, MCPError):
+            raise McpDiscoveryError(MCP_PROTOCOL_ERROR, _safe_protocol_message(error)) from error
+        if _find_nested_exception(error, TimeoutError) or _find_nested_exception(
+            error, httpx2.TimeoutException
+        ):
+            raise McpDiscoveryError(
+                MCP_TIMEOUT, "MCP server did not respond within the allowed time"
+            ) from error
+        if any(
+            _find_nested_exception(error, exception_type)
+            for exception_type in (httpx2.HTTPError, OSError)
+        ):
+            raise McpDiscoveryError(
+                MCP_CONNECTION_FAILED, "Could not connect to MCP server"
+            ) from error
         raise McpDiscoveryError(MCP_PROTOCOL_ERROR, _safe_protocol_message(error)) from error

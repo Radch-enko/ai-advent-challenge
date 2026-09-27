@@ -333,24 +333,30 @@ export function App() {
     if (!turnId) return
     let cancelled = false
     const controller = new AbortController()
-    const restoreSession = async () => {
+    const restoreSession = async (turnError?: string | null) => {
       const latest = await getSession(sessionId)
       if (cancelled) return
       setActiveSession(latest)
-      setMessages(
-        latest.messages.map((item, index) => ({
-          id: index,
-          role: item.role,
-          content: item.content,
-          timestamp: formatMessageTimestamp(item.created_at),
-          usage: item.usage ?? undefined,
-          contextWindow: item.context_window ?? undefined,
-          agentLogId: item.agent_log_id ?? undefined,
-          taskId: item.task_id ?? undefined,
-          taskStepId: item.task_step_id ?? undefined,
-          transcriptIndex: index,
-        })),
-      )
+      const restoredMessages: ChatMessage[] = latest.messages.map((item, index) => ({
+        id: index,
+        role: item.role,
+        content: item.content,
+        timestamp: formatMessageTimestamp(item.created_at),
+        usage: item.usage ?? undefined,
+        contextWindow: item.context_window ?? undefined,
+        agentLogId: item.agent_log_id ?? undefined,
+        taskId: item.task_id ?? undefined,
+        taskStepId: item.task_step_id ?? undefined,
+        transcriptIndex: index,
+      }))
+      const failure =
+        latest.mcp_turn_status === 'failed'
+          ? (turnError ?? latest.mcp_turn_error ?? 'MCP turn failed')
+          : null
+      if (failure) {
+        restoredMessages.push({ id: Date.now(), role: 'error', content: failure, timestamp: now() })
+      }
+      setMessages(restoredMessages)
     }
     void (async () => {
       try {
@@ -359,7 +365,9 @@ export function App() {
         setMcpApproval(current.approval)
         if (current.status === 'completed' || current.status === 'failed') {
           localStorage.removeItem(storageKey)
-          await restoreSession()
+          setMcpApproval(null)
+          setRunningMcpTool(null)
+          await restoreSession(current.error)
           return
         }
         await streamMcpTurnEvents(
@@ -373,6 +381,10 @@ export function App() {
               setRunningMcpTool((event.data as { tool_name?: string }).tool_name ?? null)
             }
             if (event.type === 'tool_completed') setRunningMcpTool(null)
+            if (event.type === 'error') {
+              setMcpApproval(null)
+              setRunningMcpTool(null)
+            }
           },
           controller.signal,
         )
@@ -385,6 +397,8 @@ export function App() {
       } catch (restoreError) {
         if (!cancelled) {
           localStorage.removeItem(storageKey)
+          setMcpApproval(null)
+          setRunningMcpTool(null)
           if (restoreError instanceof ApiRequestError && restoreError.status === 404) {
             setMessages((currentMessages) => [
               ...currentMessages,
@@ -392,6 +406,16 @@ export function App() {
                 id: Date.now(),
                 role: 'error',
                 content: 'MCP turn прерван перезапуском backend.',
+                timestamp: now(),
+              },
+            ])
+          } else {
+            setMessages((currentMessages) => [
+              ...currentMessages,
+              {
+                id: Date.now(),
+                role: 'error',
+                content: restoreError instanceof Error ? restoreError.message : 'MCP turn failed',
                 timestamp: now(),
               },
             ])
@@ -684,6 +708,8 @@ export function App() {
 
     let session: ChatSession | null = null
     let requestSessionId: string | null = null
+    let mcpTurnId: string | null = null
+    let mcpTurnFinished = false
     try {
       const config = buildConfig()
       const timestamp = now()
@@ -718,6 +744,7 @@ export function App() {
       let response
       if ((effectiveConfig.mcp_access?.length ?? 0) > 0) {
         const turn = await startMcpTurn(requestSession.id, content, sessionConfig)
+        mcpTurnId = turn.id
         localStorage.setItem(`copia.mcpTurn.${requestSession.id}`, turn.id)
         await streamMcpTurnEvents(requestSession.id, turn.id, (event) => {
           if (event.type === 'tool_approval_required') {
@@ -729,12 +756,15 @@ export function App() {
             setRunningMcpTool(data.tool_name ?? null)
           } else if (event.type === 'tool_completed') {
             setRunningMcpTool(null)
+          } else if (event.type === 'error') {
+            setMcpApproval(null)
+            setRunningMcpTool(null)
           }
         })
         const completed = await getMcpTurn(requestSession.id, turn.id)
+        mcpTurnFinished = completed.status === 'completed' || completed.status === 'failed'
         if (!completed.result) throw new Error(completed.error ?? 'MCP turn failed')
         response = completed.result
-        localStorage.removeItem(`copia.mcpTurn.${requestSession.id}`)
         setMcpApproval(null)
         setRunningMcpTool(null)
       } else {
@@ -824,6 +854,13 @@ export function App() {
       }
     } finally {
       if (requestSessionId) {
+        if (mcpTurnId) {
+          if (mcpTurnFinished) localStorage.removeItem(`copia.mcpTurn.${requestSessionId}`)
+          if (activeSessionIdRef.current === requestSessionId) {
+            setMcpApproval(null)
+            setRunningMcpTool(null)
+          }
+        }
         setPendingSessionIds((current) => current.filter((id) => id !== requestSessionId))
         setSummarizingSessionIds((current) => current.filter((id) => id !== requestSessionId))
       }
@@ -925,6 +962,8 @@ export function App() {
   function openSession(session: ChatSession) {
     setMode('chat')
     setActiveSession(session)
+    setMcpApproval(null)
+    setRunningMcpTool(null)
     setTaskModeDraft(session.task_mode_enabled)
     setRetryingTaskId(null)
     setTaskRetryError(null)
@@ -932,20 +971,27 @@ export function App() {
     activeSessionIdRef.current = session.id
     localStorage.setItem('copia.activeSessionId', session.id)
     if (session.profile_name == null) applyConfig(session.config)
-    setMessages(
-      session.messages.map((item, index) => ({
-        id: index,
-        role: item.role,
-        content: item.content,
-        timestamp: formatMessageTimestamp(item.created_at),
-        usage: item.usage,
-        contextWindow: item.context_window,
-        agentLogId: item.agent_log_id ?? undefined,
-        taskId: item.task_id ?? undefined,
-        taskStepId: item.task_step_id ?? undefined,
-        transcriptIndex: index,
-      })),
-    )
+    const sessionMessages: ChatMessage[] = session.messages.map((item, index) => ({
+      id: index,
+      role: item.role,
+      content: item.content,
+      timestamp: formatMessageTimestamp(item.created_at),
+      usage: item.usage,
+      contextWindow: item.context_window,
+      agentLogId: item.agent_log_id ?? undefined,
+      taskId: item.task_id ?? undefined,
+      taskStepId: item.task_step_id ?? undefined,
+      transcriptIndex: index,
+    }))
+    if (session.mcp_turn_status === 'failed') {
+      sessionMessages.push({
+        id: Date.now(),
+        role: 'error',
+        content: session.mcp_turn_error ?? 'MCP turn failed',
+        timestamp: now(),
+      })
+    }
+    setMessages(sessionMessages)
     setSummarizationEvents(session.context.events)
     setFactsEvents(session.context.facts_events ?? [])
     setMemoryEvents([])
@@ -1037,6 +1083,8 @@ export function App() {
   function startNewChat() {
     setMode('chat')
     setActiveSession(null)
+    setMcpApproval(null)
+    setRunningMcpTool(null)
     setTaskModeDraft(false)
     activeSessionIdRef.current = null
     localStorage.removeItem('copia.activeSessionId')

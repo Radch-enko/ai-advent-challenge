@@ -120,6 +120,16 @@
           "top_p": 1.0
         }
       }
-    }
+    },
+    "mcp_access": [
+      {
+        "connection_id": "mapmap",
+        "enabled_tools": ["geocode", "route"]
+      },
+      {
+        "connection_id": "open_meteo",
+        "enabled_tools": ["openmeteo_get_forecast"]
+      }
+    ]
   }
 }
