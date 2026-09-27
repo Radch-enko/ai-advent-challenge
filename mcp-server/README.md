@@ -1,9 +1,14 @@
 # Copia Finances MCP Server
 
-LLM-neutral MCP server exposing two tools over standard stdio and Streamable HTTP transports:
+LLM-neutral MCP server exposing four tools over standard stdio and Streamable HTTP transports:
 
 - `search_expenses` searches and paginates expenses;
+- `compare_expense_periods` deterministically compares two expense periods;
+- `save_expense_chart` renders a comparison as PNG image content;
 - `add_expense` creates one expense.
+
+The comparison and chart tools are provider-independent. The MCP client stores returned PNG artifacts in Copia's
+session-scoped artifact storage and appends the chart to the final assistant message.
 
 The server delegates storage to the Copia FastAPI backend. Start the backend first and make sure
 `~/.copia/files/finances.xlsx` has the expected `Expenses` sheet and headers.

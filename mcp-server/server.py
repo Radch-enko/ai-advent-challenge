@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 import httpx
+from matplotlib import pyplot as plt
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.utilities.types import Image
+from mcp_types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 HTTP_TIMEOUT_SECONDS = 10.0
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_ERROR_MESSAGE_LENGTH = 1000
-
 
 class ExpenseCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -76,6 +83,95 @@ class Expense(ExpenseCreate):
 class ExpensePage(BaseModel):
     items: list[Expense]
     next_cursor: str | None = None
+
+
+class ExpenseComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_expenses: list[Expense] = Field(default_factory=list)
+    previous_expenses: list[Expense] = Field(default_factory=list)
+    current_label: str = Field(default="Current period", min_length=1)
+    previous_label: str = Field(default="Previous period", min_length=1)
+
+
+class ExpenseCategoryComparison(BaseModel):
+    category: str
+    current_total_rub: Decimal
+    previous_total_rub: Decimal
+    difference_rub: Decimal
+
+
+class ExpenseChartPoint(BaseModel):
+    label: str
+    current_total_rub: Decimal
+    previous_total_rub: Decimal
+
+
+class ExpenseComparison(BaseModel):
+    current_label: str
+    previous_label: str
+    current_total_rub: Decimal
+    previous_total_rub: Decimal
+    difference_rub: Decimal
+    percentage_change: Decimal | None
+    current_count: int
+    previous_count: int
+    categories: list[ExpenseCategoryComparison]
+    chart_data: list[ExpenseChartPoint]
+
+
+def _total(expenses: list[Expense]) -> Decimal:
+    return sum((expense.amount_rub for expense in expenses), Decimal("0"))
+
+
+def _category_totals(expenses: list[Expense]) -> dict[str, Decimal]:
+    totals: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for expense in expenses:
+        totals[expense.category] += expense.amount_rub
+    return dict(totals)
+
+
+def _percentage_change(current: Decimal, previous: Decimal) -> Decimal | None:
+    if previous == 0:
+        return None
+    return (current - previous) / previous * Decimal("100")
+
+
+def compare_expense_periods(request: ExpenseComparisonRequest) -> ExpenseComparison:
+    current_total = _total(request.current_expenses)
+    previous_total = _total(request.previous_expenses)
+    current_categories = _category_totals(request.current_expenses)
+    previous_categories = _category_totals(request.previous_expenses)
+    categories = [
+        ExpenseCategoryComparison(
+            category=category,
+            current_total_rub=current_categories.get(category, Decimal("0")),
+            previous_total_rub=previous_categories.get(category, Decimal("0")),
+            difference_rub=current_categories.get(category, Decimal("0"))
+            - previous_categories.get(category, Decimal("0")),
+        )
+        for category in sorted(current_categories.keys() | previous_categories.keys())
+    ]
+    chart_data = [
+        ExpenseChartPoint(
+            label=item.category,
+            current_total_rub=item.current_total_rub,
+            previous_total_rub=item.previous_total_rub,
+        )
+        for item in categories
+    ]
+    return ExpenseComparison(
+        current_label=request.current_label,
+        previous_label=request.previous_label,
+        current_total_rub=current_total,
+        previous_total_rub=previous_total,
+        difference_rub=current_total - previous_total,
+        percentage_change=_percentage_change(current_total, previous_total),
+        current_count=len(request.current_expenses),
+        previous_count=len(request.previous_expenses),
+        categories=categories,
+        chart_data=chart_data,
+    )
 
 
 class ExpenseSearchRequest(BaseModel):
@@ -222,7 +318,12 @@ def _validation_error(error: ValidationError) -> ToolError:
 
 @server.tool(
     name="search_expenses",
-    description="Search expenses using optional filters and cursor pagination.",
+    description=(
+        "Search expenses using filters and cursor pagination. For weekly comparisons, use "
+        "separate timezone-aware occurred_from/occurred_to bounds for each calendar week in "
+        "the current local timezone. Bounds are inclusive. Set page_size to 100 and follow "
+        "cursor until next_cursor is null; do not infer missing expenses."
+    ),
     structured_output=True,
 )
 async def search_expenses(
@@ -257,6 +358,83 @@ async def search_expenses(
     except ValidationError as error:
         raise _validation_error(error) from error
     return await api_client.search_expenses(request)
+
+
+@server.tool(
+    name="compare_expense_periods",
+    description=(
+        "Compare two complete expense lists using deterministic totals and category analysis. "
+        "Pass current_expenses and previous_expenses as arrays of complete Expense objects "
+        "returned by search_expenses; do not group them by date or summarize them manually. "
+        "Set labels to the exact periods. Pass this tool's complete result as the comparison "
+        "argument to save_expense_chart."
+    ),
+    structured_output=True,
+)
+async def compare_expense_periods_tool(
+    current_expenses: list[Expense],
+    previous_expenses: list[Expense],
+    current_label: str = "Current period",
+    previous_label: str = "Previous period",
+) -> ExpenseComparison:
+    return compare_expense_periods(
+        ExpenseComparisonRequest(
+            current_expenses=current_expenses,
+            previous_expenses=previous_expenses,
+            current_label=current_label,
+            previous_label=previous_label,
+        )
+    )
+
+
+@server.tool(
+    name="save_expense_chart",
+    description=(
+        "Render an expense period comparison as a PNG chart. Pass the complete "
+        "ExpenseComparison result from compare_expense_periods as the comparison argument; "
+        "do not construct or recalculate the comparison yourself. After the tool returns, "
+        "include the exact artifact URL from its result once in your final answer using "
+        "Markdown image syntax: ![Expense comparison](URL). Never use the filename as the URL."
+    ),
+)
+async def save_expense_chart(comparison: ExpenseComparison) -> CallToolResult:
+    figure, axis = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
+    labels = [point.label for point in comparison.chart_data]
+    previous = [float(point.previous_total_rub) for point in comparison.chart_data]
+    current = [float(point.current_total_rub) for point in comparison.chart_data]
+    if labels:
+        positions = range(len(labels))
+        width = 0.36
+        axis.bar([position - width / 2 for position in positions], previous, width, label=comparison.previous_label, color="#94a3b8")
+        axis.bar([position + width / 2 for position in positions], current, width, label=comparison.current_label, color="#2563eb")
+        axis.set_xticks(list(positions), labels, rotation=30, ha="right")
+    else:
+        labels = [comparison.previous_label, comparison.current_label]
+        totals = [float(comparison.previous_total_rub), float(comparison.current_total_rub)]
+        axis.bar(labels, totals, color=["#94a3b8", "#2563eb"])
+        for index, value in enumerate(totals):
+            axis.text(index, value, f"{value:,.2f}", ha="center", va="bottom")
+    axis.set_title("Expense comparison")
+    axis.set_ylabel("RUB")
+    axis.grid(axis="y", alpha=0.25)
+    if comparison.chart_data:
+        axis.legend()
+
+    output = BytesIO()
+    figure.savefig(output, format="png", dpi=150)
+    plt.close(figure)
+    metadata = {
+        "filename": "expense-comparison.png",
+        "mime_type": "image/png",
+        "title": "Expense comparison",
+    }
+    return CallToolResult(
+        content=[
+            Image(data=output.getvalue(), format="png").to_image_content(),
+            TextContent(type="text", text=json.dumps(metadata)),
+        ],
+        structured_content=metadata,
+    )
 
 
 @server.tool(

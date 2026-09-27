@@ -398,6 +398,7 @@ def _tool_summaries(pages: list[types.ListToolsResult]) -> list[McpToolSummary]:
                 McpToolSummary(
                     name=name,
                     description=_safe_text(tool.description, MAX_DESCRIPTION_LENGTH),
+                    input_schema=getattr(tool, "input_schema", {}),
                 )
             )
     return summaries

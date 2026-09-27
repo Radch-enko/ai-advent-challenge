@@ -7,8 +7,10 @@ from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
 from copia.mcp.domain.models.mcp_approval import McpApproval
+from copia.mcp.domain.models.mcp_artifact import McpArtifact
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.providers.application.llm_router import LLMRouter
+from copia.providers.domain.models.llm_response import LLMResponse
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,8 @@ class McpTurnWorkerRuntime:
     router: LLMRouter
     turn_approval: Callable[[McpTurnRuntime, McpApproval], bool]
     execute_tool: Callable[[ResolvedMcpTool, dict[str, Any]], ToolExecutionResult]
+    publish_artifacts: Callable[[str, tuple[McpArtifact, ...]], tuple[str, ...]]
+    finalize_response: Callable[[str, LLMResponse, tuple[McpArtifact, ...]], LLMResponse]
     emit_turn: Callable[[McpTurnRuntime, str, dict[str, Any]], None]
     send_locked: Callable[..., Awaitable[Any]]
     agent_logs: AgentLogStore

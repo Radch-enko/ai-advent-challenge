@@ -3350,7 +3350,7 @@ function Markdown({ content }: { content: string }) {
 }
 
 function inlineMarkdown(value: string): ReactNode[] {
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*)/g
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|!\[[^\]]*\]\([^\s)]+\)|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*)/g
   return value
     .split(pattern)
     .filter(Boolean)
@@ -3359,6 +3359,11 @@ function inlineMarkdown(value: string): ReactNode[] {
       if (strong) return <strong key={index}>{strong[1]}</strong>
       const code = part.match(/^`([^`]+)`$/)
       if (code) return <code key={index}>{code[1]}</code>
+      const image = part.match(/^!\[([^\]]*)\]\(([^\s)]+)\)$/)
+      if (image && isSafeMarkdownHref(image[2]))
+        return (
+          <img key={index} src={image[2]} alt={image[1]} loading="lazy" className="message-image" />
+        )
       const link = part.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/)
       if (link && isSafeMarkdownHref(link[2]))
         return (

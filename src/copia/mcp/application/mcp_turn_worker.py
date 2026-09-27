@@ -30,6 +30,12 @@ class McpTurnWorker:
                 execute=runtime.execute_tool,
                 emit=lambda event_type, data: runtime.emit_turn(turn, event_type, data),
                 audit=lambda entry: turn.audits.append(entry),
+                finalize=lambda response, artifacts: runtime.finalize_response(
+                    turn.session_id, response, artifacts
+                ),
+                publish_artifacts=lambda artifacts: runtime.publish_artifacts(
+                    turn.session_id, artifacts
+                ),
             )
             response = await runtime.send_locked(
                 turn.session_id, request, background, completion=loop.complete

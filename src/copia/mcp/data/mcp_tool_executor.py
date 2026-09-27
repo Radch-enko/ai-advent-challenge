@@ -1,9 +1,12 @@
 import asyncio
+import base64
+import binascii
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from copia.mcp.data.mcp_client import McpDiscoveryError
+from copia.mcp.domain.models.mcp_artifact import McpArtifact
 from copia.mcp.domain.models.mcp_call_result import McpCallResult
 from copia.mcp.domain.models.mcp_connection import McpConnection
 from copia.mcp.domain.services.mcp_tool_loop import (
@@ -11,6 +14,8 @@ from copia.mcp.domain.services.mcp_tool_loop import (
     ToolExecutionResult,
     encode_tool_result,
 )
+
+MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
 
 
 class McpToolExecutor:
@@ -42,13 +47,37 @@ class McpToolExecutor:
             )
         except McpDiscoveryError as error:
             raise RuntimeError(error.message) from error
+        artifacts: list[McpArtifact] = []
+        model_content: list[dict[str, Any]] = []
+        for item in result.content:
+            if item.get("type") != "image":
+                model_content.append(item)
+                continue
+            encoded = item.get("data")
+            mime_type = item.get("mimeType") or item.get("mime_type")
+            if not isinstance(encoded, str) or mime_type != "image/png":
+                raise RuntimeError("MCP image artifact is invalid")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise RuntimeError("MCP image artifact is invalid") from error
+            if len(data) > MAX_ARTIFACT_BYTES:
+                raise RuntimeError("MCP image artifact is too large")
+            artifacts.append(
+                McpArtifact(
+                    data=data,
+                    mime_type=mime_type,
+                    filename="expense-comparison.png",
+                )
+            )
         return ToolExecutionResult(
             encode_tool_result(
                 {
-                    "content": result.content,
-                    "structured_content": result.structured_content,
+                    "content": model_content,
+                    "structured_content": None if artifacts else result.structured_content,
                     "is_error": result.is_error,
                 }
             ),
             is_error=result.is_error,
+            artifacts=tuple(artifacts),
         )

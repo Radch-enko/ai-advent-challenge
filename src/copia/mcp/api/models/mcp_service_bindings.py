@@ -17,6 +17,7 @@ class McpServiceBindings:
     _send_session_message_locked: Callable[[], Any]
     _session_message_lock: Callable[[], Any]
     _turn_approval: Callable[[], Any]
+    artifact_store: Callable[[], Any]
     agent_log_store: Callable[[], Any]
     agents: Callable[[], Any]
     call_mcp_tool: Callable[[], Any]

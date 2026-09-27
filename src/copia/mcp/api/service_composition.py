@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks
 
 from copia.agents.data.profiles_repository import ProfilesRepository
 from copia.agents.domain.models.agent_config import AgentConfig
+from copia.mcp.api.artifact_routes import McpArtifactRoutes
 from copia.mcp.api.discovery import make_discover_connection
 from copia.mcp.api.mappers.mcp_turn_response import make_mcp_turn_response
 from copia.mcp.api.mcp_turn_route_runtime import McpTurnRouteRuntime
@@ -20,6 +21,7 @@ from copia.mcp.application.mcp_turn_worker_runtime import McpTurnWorkerRuntime
 from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
 from copia.mcp.data.mcp_tool_executor import McpToolExecutor
 from copia.mcp.domain.models.mcp_approval import McpApproval
+from copia.mcp.domain.models.mcp_artifact import McpArtifact
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.security.domain.services.credential_sanitizer import sanitize_error
 
@@ -41,6 +43,7 @@ class McpServiceComposition:
                 _send_session_message_locked=lambda: service._send_session_message_locked,
                 _session_message_lock=lambda: service._session_message_lock,
                 _turn_approval=lambda: service._turn_approval,
+                artifact_store=lambda: service.mcp_artifact_store,
                 agent_log_store=lambda: service.agent_log_store,
                 agents=lambda: service.agents,
                 call_mcp_tool=lambda: service.call_mcp_tool,
@@ -78,6 +81,7 @@ class McpServiceComposition:
         )
         self.turn_worker = McpTurnWorker(self.worker_runtime)
         self.turn_routes = McpTurnRoutes(self.route_runtime)
+        self.artifact_routes = McpArtifactRoutes(lambda: service.artifact_store())
 
     def connection_is_used(self, connection_id: str) -> bool:
         service = self._bindings
@@ -139,6 +143,8 @@ class McpServiceComposition:
             router=service.router(),
             turn_approval=service._turn_approval(),
             execute_tool=service._execute_resolved_tool(),
+            publish_artifacts=self.publish_artifacts,
+            finalize_response=self.finalize_response,
             emit_turn=service._emit_turn(),
             send_locked=service._send_session_message_locked(),
             agent_logs=service.agent_log_store(),
@@ -147,6 +153,22 @@ class McpServiceComposition:
             workers=service.mcp_turn_workers(),
             sanitize_error=sanitize_error,
         )
+
+    def finalize_response(
+        self, session_id: str, response: Any, artifacts: tuple[McpArtifact, ...]
+    ) -> Any:
+        return response
+
+    def publish_artifacts(
+        self, session_id: str, artifacts: tuple[McpArtifact, ...]
+    ) -> tuple[str, ...]:
+        references = []
+        for artifact in artifacts:
+            stored = self._bindings.artifact_store().save(session_id, artifact)
+            references.append(
+                f"/api/sessions/{session_id}/artifacts/{stored.artifact_id}"
+            )
+        return tuple(references)
 
     def route_runtime(self) -> McpTurnRouteRuntime:
         service = self._bindings

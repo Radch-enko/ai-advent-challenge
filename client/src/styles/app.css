@@ -1288,6 +1288,14 @@ button {
 .markdown a {
   color: #aaa0ff;
 }
+.markdown .message-image {
+  display: block;
+  width: min(100%, 720px);
+  height: auto;
+  margin: 12px 0;
+  border: 1px solid #2e2e38;
+  border-radius: 8px;
+}
 .markdown strong {
   color: #fff;
 }

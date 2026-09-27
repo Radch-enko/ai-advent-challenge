@@ -37,6 +37,7 @@ from copia.mcp.api.discovery import mcp_header
 from copia.mcp.api.router import create_mcp_router
 from copia.mcp.api.service_composition import McpServiceComposition
 from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
+from copia.mcp.data.mcp_artifact_store import McpArtifactStore
 from copia.mcp.data.mcp_client import call_mcp_tool as call_mcp_tool
 from copia.mcp.data.mcp_client import discover_mcp_tools
 from copia.mcp.data.mcp_connections_repository import McpConnectionsRepository
@@ -130,6 +131,9 @@ expenses = ExpensesRepository(
 )
 mcp_connections = McpConnectionsRepository(
     Path(os.getenv("COPIA_MCP_CONNECTIONS_PATH", data_root / "mcp_connections.json"))
+)
+mcp_artifact_store = McpArtifactStore(
+    Path(os.getenv("COPIA_MCP_ARTIFACTS_PATH", data_root / "artifacts"))
 )
 session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
@@ -397,6 +401,7 @@ mcp_turn_worker = mcp_composition.turn_worker
 _run_mcp_turn = mcp_turn_worker.run
 mcp_turn_routes = mcp_composition.turn_routes
 app.include_router(mcp_turn_routes.router())
+app.include_router(mcp_composition.artifact_routes.router())
 start_mcp_turn = mcp_turn_routes.start_mcp_turn
 _require_mcp_turn = mcp_turn_routes.require_turn
 get_mcp_turn = mcp_turn_routes.get_mcp_turn

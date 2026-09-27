@@ -52,7 +52,12 @@ def test_mcp_protocol_lists_exact_tools_and_returns_structured_output(monkeypatc
 
     listing, result = run(exercise())
 
-    assert {tool.name for tool in listing.tools} == {"search_expenses", "add_expense"}
+    assert {tool.name for tool in listing.tools} == {
+        "search_expenses",
+        "compare_expense_periods",
+        "save_expense_chart",
+        "add_expense",
+    }
     search_schema = next(
         tool.input_schema for tool in listing.tools if tool.name == "search_expenses"
     )

@@ -10,6 +10,7 @@ from typing import Any
 
 from copia.common.domain.services.runtime_context import with_current_datetime_context
 from copia.mcp.domain.models.mcp_approval import McpApproval
+from copia.mcp.domain.models.mcp_artifact import McpArtifact
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
@@ -38,6 +39,7 @@ class ResolvedMcpTool:
 class ToolExecutionResult:
     content: str
     is_error: bool = False
+    artifacts: tuple[McpArtifact, ...] = ()
 
 
 def provider_tool_alias(connection_id: str, tool_name: str) -> str:
@@ -60,6 +62,8 @@ class McpToolLoop:
         | None = None,
         max_tool_calls: int = MAX_TOOL_CALLS_PER_TURN,
         review_final: Callable[[LLMResponse], str | None] | None = None,
+        finalize: Callable[[LLMResponse, tuple[McpArtifact, ...]], LLMResponse] | None = None,
+        publish_artifacts: Callable[[tuple[McpArtifact, ...]], tuple[str, ...]] | None = None,
     ) -> None:
         self._router = router
         self._tools = {tool.alias: tool for tool in tools}
@@ -72,11 +76,14 @@ class McpToolLoop:
             raise ValueError("MCP tool call limit must be positive")
         self._max_tool_calls = max_tool_calls
         self._review_final = review_final
+        self._finalize = finalize
+        self._publish_artifacts = publish_artifacts
 
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
         conversation: list[ChatMessage | ToolLoopMessage] = list(messages)
         definitions = [tool.definition for tool in self._tools.values()]
         call_count = 0
+        artifacts: list[McpArtifact] = []
         final_retry_count = 0
         while True:
             response = self._router.complete(
@@ -92,6 +99,8 @@ class McpToolLoop:
                     definitions = []
                     final_retry_count += 1
                     continue
+                if self._finalize is not None:
+                    response = self._finalize(response, tuple(artifacts))
                 return response
             conversation.append(
                 ToolLoopMessage(
@@ -103,6 +112,7 @@ class McpToolLoop:
                 if call_count > self._max_tool_calls:
                     raise McpToolLoopError("MCP tool call limit exceeded")
                 result = self._handle_call(call)
+                artifacts.extend(result.artifacts)
                 conversation.append(
                     ToolLoopMessage(
                         role="tool",
@@ -144,6 +154,17 @@ class McpToolLoop:
         started = time.monotonic()
         try:
             result = self._execute(tool, arguments)
+            if result.artifacts and self._publish_artifacts and not result.is_error:
+                artifact_urls = self._publish_artifacts(result.artifacts)
+                result = ToolExecutionResult(
+                    content=encode_tool_result(
+                        {
+                            "message": "Image artifact created successfully.",
+                            "artifact_urls": artifact_urls,
+                        }
+                    ),
+                    is_error=result.is_error,
+                )
         except Exception as error:
             duration = time.monotonic() - started
             self._audit(

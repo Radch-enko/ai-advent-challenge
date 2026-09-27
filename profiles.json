@@ -59,7 +59,9 @@
         "connection_id": "finances",
         "enabled_tools": [
           "search_expenses",
-          "add_expense"
+          "add_expense",
+          "compare_expense_periods",
+          "save_expense_chart"
         ]
       }
     ]
