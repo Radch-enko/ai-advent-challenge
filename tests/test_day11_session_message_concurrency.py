@@ -2,12 +2,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock
 
-from fastapi.testclient import TestClient
+from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.service import app
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
@@ -90,6 +91,13 @@ def test_concurrent_messages_preserve_transcript_and_pending_memory(monkeypatch,
         return LLMResponse(content=f"reply-{content}", provider="openai", model="model")
 
     monkeypatch.setattr(service.router, "complete", complete)
+
+    def stream(messages, config, tools=None):
+        result = complete(messages, config)
+        yield LLMStreamEvent(kind="text_delta", text=result.content)
+        yield LLMStreamEvent(kind="completed", response=result)
+
+    monkeypatch.setattr(service.router, "stream", stream)
     client = TestClient(app)
 
     def send(content):

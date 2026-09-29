@@ -38,8 +38,9 @@ import {
   rejectMemory,
   undoWorkingMemory,
   updateWorkingMemory,
-  retrySessionSummarizationWithMeta,
-  sendSessionMessageWithMeta,
+  retryConversationSummarization,
+  sendConversationMessage,
+  decideConversationApproval,
   updateSessionContextManagement,
   updateSessionLongTermMemory,
   updateSessionTaskMode,
@@ -54,11 +55,8 @@ import {
   resumeTask,
   startTask,
   listMcpConnections,
-  startMcpTurn,
-  getMcpTurn,
-  streamMcpTurnEvents,
-  decideMcpApproval,
 } from './data/api/copiaApi'
+import { ConversationEvent, resumeActiveConversations } from './data/api/conversationStream'
 import { AgentConfig, ContextManagementConfig, ContextStrategy } from './domain/models/agent'
 import { Provider, ProviderModel } from './domain/models/provider'
 import { UserProfile } from './domain/models/userProfile'
@@ -70,6 +68,7 @@ import {
   WorkingMemoryItem,
 } from './domain/models/memory'
 import { ChatMessage, FactsUpdateEvent, SummarizationEvent, TokenUsage } from './domain/models/chat'
+import { initialConversationState, reduceConversationEvent } from './domain/models/conversation'
 import { TaskPlanStep, TaskState } from './domain/models/task'
 import { McpApproval, McpConnection } from './domain/models/mcp'
 import { ExecutionSummary } from './ui/components/ExecutionSummary'
@@ -232,6 +231,7 @@ export function App() {
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const activeSessionIdRef = useRef<string | null>(null)
+  const recoveringConversationSessionRef = useRef<string | null>(null)
   const settingsRef = useOutsideClose(settingsOpen, () => setSettingsOpen(false))
   const supportsSampling = supportsSamplingParameters(provider, model)
   const summarizerProvider = contextManagement.summarizer.provider ?? provider
@@ -307,118 +307,6 @@ export function App() {
         .catch(() => setMcpConnections([]))
     }
   }, [mode])
-  useEffect(() => {
-    const sessionId = activeSession?.id
-    if (!sessionId) return
-    const storageKey = `copia.mcpTurn.${sessionId}`
-    const turnId =
-      localStorage.getItem(storageKey) ??
-      (activeSession.mcp_turn_status === 'running' ||
-      activeSession.mcp_turn_status === 'waiting_for_approval'
-        ? activeSession.mcp_turn_id
-        : null)
-    if (!turnId) return
-    let cancelled = false
-    const controller = new AbortController()
-    const restoreSession = async (turnError?: string | null) => {
-      const latest = await getSession(sessionId)
-      if (cancelled) return
-      setActiveSession(latest)
-      const restoredMessages: ChatMessage[] = latest.messages.map((item, index) => ({
-        id: index,
-        role: item.role,
-        content: item.content,
-        timestamp: formatMessageTimestamp(item.created_at),
-        usage: item.usage ?? undefined,
-        contextWindow: item.context_window ?? undefined,
-        provider: item.provider,
-        model: item.model,
-        durationSeconds: item.duration_seconds,
-        executionStatus: item.execution_status ?? undefined,
-        executionError: item.execution_error,
-        taskId: item.task_id ?? undefined,
-        taskStepId: item.task_step_id ?? undefined,
-        transcriptIndex: index,
-      }))
-      const failure =
-        latest.mcp_turn_status === 'failed'
-          ? (turnError ?? latest.mcp_turn_error ?? 'MCP turn failed')
-          : null
-      if (failure) {
-        restoredMessages.push({ id: Date.now(), role: 'error', content: failure, timestamp: now() })
-      }
-      setMessages(restoredMessages)
-    }
-    void (async () => {
-      try {
-        const current = await getMcpTurn(sessionId, turnId)
-        if (cancelled) return
-        setMcpApproval(current.approval)
-        if (current.status === 'completed' || current.status === 'failed') {
-          localStorage.removeItem(storageKey)
-          setMcpApproval(null)
-          setRunningMcpTool(null)
-          await restoreSession(current.error)
-          return
-        }
-        await streamMcpTurnEvents(
-          sessionId,
-          turnId,
-          (event) => {
-            if (cancelled) return
-            if (event.type === 'tool_approval_required') setMcpApproval(event.data as McpApproval)
-            if (event.type === 'tool_running') {
-              setMcpApproval(null)
-              setRunningMcpTool((event.data as { tool_name?: string }).tool_name ?? null)
-            }
-            if (event.type === 'tool_completed') setRunningMcpTool(null)
-            if (event.type === 'error') {
-              setMcpApproval(null)
-              setRunningMcpTool(null)
-            }
-          },
-          controller.signal,
-        )
-        if (!cancelled) {
-          localStorage.removeItem(storageKey)
-          setMcpApproval(null)
-          setRunningMcpTool(null)
-          await restoreSession()
-        }
-      } catch (restoreError) {
-        if (!cancelled) {
-          localStorage.removeItem(storageKey)
-          setMcpApproval(null)
-          setRunningMcpTool(null)
-          if (restoreError instanceof ApiRequestError && restoreError.status === 404) {
-            setMessages((currentMessages) => [
-              ...currentMessages,
-              {
-                id: Date.now(),
-                role: 'error',
-                content: 'MCP turn прерван перезапуском backend.',
-                timestamp: now(),
-              },
-            ])
-          } else {
-            setMessages((currentMessages) => [
-              ...currentMessages,
-              {
-                id: Date.now(),
-                role: 'error',
-                content: restoreError instanceof Error ? restoreError.message : 'MCP turn failed',
-                timestamp: now(),
-              },
-            ])
-          }
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-      controller.abort()
-    }
-  }, [activeSession?.id, activeSession?.mcp_turn_id, activeSession?.mcp_turn_status])
   const refreshUserProfiles = useCallback(async (showError = true): Promise<boolean> => {
     setUserProfilesLoading(true)
     try {
@@ -559,6 +447,146 @@ export function App() {
       }
     })()
   }, [refreshInvariants, refreshSessions])
+
+  useEffect(() => {
+    const sessionId = activeSession?.id
+    if (!sessionId || recoveringConversationSessionRef.current === sessionId) return
+    recoveringConversationSessionRef.current = sessionId
+    let assistantMessageId: number | null = null
+    const transcriptIndex = transcriptLength(messages)
+    const lastUserIndex = messages.reduce(
+      (last, entry, index) => (entry.role === 'user' ? index : last),
+      -1,
+    )
+    let text = ''
+    setPendingSessionIds((current) =>
+      current.includes(sessionId) ? current : [...current, sessionId],
+    )
+    void resumeActiveConversations(sessionId, (event) => {
+      if (activeSessionIdRef.current !== sessionId) return
+      if (event.event === 'message.delta') {
+        text += String(event.data.text ?? '')
+        if (assistantMessageId === null) {
+          const existingAssistant = messages.find(
+            (entry) =>
+              entry.role === 'assistant' &&
+              (entry.transcriptIndex ?? -1) > lastUserIndex &&
+              entry.content.startsWith(text),
+          )
+          assistantMessageId = existingAssistant?.id ?? Date.now()
+          const id = assistantMessageId
+          if (existingAssistant) {
+            setMessages((current) =>
+              current.map((entry) => (entry.id === id ? { ...entry, content: text } : entry)),
+            )
+          } else {
+            setMessages((current) => [
+              ...current,
+              { id, role: 'assistant', content: text, timestamp: now(), transcriptIndex },
+            ])
+          }
+        } else {
+          const id = assistantMessageId
+          setMessages((current) =>
+            current.map((entry) => (entry.id === id ? { ...entry, content: text } : entry)),
+          )
+        }
+      } else if (event.event === 'tool.approval_required') {
+        setMcpApproval(event.data as unknown as McpApproval)
+      } else if (event.event === 'tool.running') {
+        setMcpApproval(null)
+        setRunningMcpTool(String(event.data.tool_name ?? ''))
+      } else if (event.event === 'tool.completed') {
+        setRunningMcpTool(null)
+      } else if (event.event === 'conversation.completed') {
+        const result = event.data.result as
+          | {
+              response?: {
+                content?: string
+                usage?: TokenUsage
+                provider?: Provider
+                model?: string
+                context_window?: number
+              }
+              duration_seconds?: number
+              memory_events?: MemoryEvent[]
+            }
+          | undefined
+        if (result?.response) {
+          const id = assistantMessageId ?? Date.now()
+          if (assistantMessageId === null) assistantMessageId = id
+          setMessages((current) =>
+            current.some((entry) => entry.id === id)
+              ? current.map((entry) =>
+                  entry.id === id
+                    ? {
+                        ...entry,
+                        content: result.response?.content ?? text,
+                        usage: result.response?.usage,
+                        provider: result.response?.provider,
+                        model: result.response?.model,
+                        durationSeconds: result.duration_seconds,
+                        executionStatus: 'completed',
+                        memoryEvents: result.memory_events,
+                        contextWindow: result.response?.context_window,
+                      }
+                    : entry,
+                )
+              : [
+                  ...current,
+                  {
+                    id,
+                    role: 'assistant',
+                    content: result.response?.content ?? text,
+                    timestamp: now(),
+                    usage: result.response?.usage,
+                    provider: result.response?.provider,
+                    model: result.response?.model,
+                    durationSeconds: result.duration_seconds,
+                    executionStatus: 'completed',
+                    memoryEvents: result.memory_events,
+                    contextWindow: result.response?.context_window,
+                    transcriptIndex,
+                  },
+                ],
+          )
+        }
+        setMcpApproval(null)
+        setRunningMcpTool(null)
+      } else if (event.event === 'conversation.failed') {
+        setMcpApproval(null)
+        setRunningMcpTool(null)
+        setMessages((current) => [
+          ...current,
+          {
+            id: Date.now() + 1,
+            role: 'error',
+            content: String(event.data.message ?? 'Conversation failed'),
+            timestamp: now(),
+          },
+        ])
+      }
+    })
+      .catch((error: unknown) => {
+        if (activeSessionIdRef.current !== sessionId) return
+        setMessages((current) => [
+          ...current,
+          {
+            id: Date.now() + 1,
+            role: 'error',
+            content: error instanceof Error ? error.message : 'Conversation reconnect failed',
+            timestamp: now(),
+          },
+        ])
+      })
+      .finally(() => {
+        setPendingSessionIds((current) => current.filter((id) => id !== sessionId))
+        setSummarizingSessionIds((current) => current.filter((id) => id !== sessionId))
+        setMcpApproval(null)
+        setRunningMcpTool(null)
+        void refreshSessions()
+      })
+  }, [activeSession?.id, messages, refreshSessions])
 
   useEffect(() => {
     const sessionId = activeSession?.id
@@ -707,8 +735,8 @@ export function App() {
 
     let session: ChatSession | null = null
     let requestSessionId: string | null = null
-    let mcpTurnId: string | null = null
-    let mcpTurnFinished = false
+    let assistantMessageId: number | null = null
+    let conversationState = initialConversationState()
     try {
       const config = buildConfig()
       const timestamp = now()
@@ -740,36 +768,50 @@ export function App() {
       ) {
         setSummarizingSessionIds((current) => [...current, requestSession.id])
       }
-      let response
-      if ((effectiveConfig.mcp_access?.length ?? 0) > 0) {
-        const turn = await startMcpTurn(requestSession.id, content, sessionConfig)
-        mcpTurnId = turn.id
-        localStorage.setItem(`copia.mcpTurn.${requestSession.id}`, turn.id)
-        await streamMcpTurnEvents(requestSession.id, turn.id, (event) => {
-          if (event.type === 'tool_approval_required') {
-            setMcpApproval(event.data as McpApproval)
+      const response = await sendConversationMessage(
+        { kind: 'session', id: requestSession.id },
+        content,
+        sessionConfig,
+        (event: ConversationEvent) => {
+          if (activeSessionIdRef.current !== requestSession.id) return
+          conversationState = reduceConversationEvent(conversationState, event)
+          if (event.event === 'message.delta') {
+            if (!assistantMessageId) {
+              assistantMessageId = Date.now() + 1
+              setMessages((current) => [
+                ...current,
+                {
+                  id: assistantMessageId!,
+                  role: 'assistant',
+                  content: conversationState.text,
+                  timestamp: now(),
+                  transcriptIndex: userTranscriptIndex + 1,
+                },
+              ])
+            } else {
+              const id = assistantMessageId
+              setMessages((current) =>
+                current.map((entry) =>
+                  entry.id === id ? { ...entry, content: conversationState.text } : entry,
+                ),
+              )
+            }
+          } else if (event.event === 'tool.approval_required') {
+            setMcpApproval(event.data as unknown as McpApproval)
             setRunningMcpTool(null)
-          } else if (event.type === 'tool_running') {
-            const data = event.data as { tool_name?: string }
+          } else if (event.event === 'tool.running') {
             setMcpApproval(null)
-            setRunningMcpTool(data.tool_name ?? null)
-          } else if (event.type === 'tool_completed') {
-            setRunningMcpTool(null)
-          } else if (event.type === 'error') {
+            setRunningMcpTool(String(event.data.tool_name ?? ''))
+          } else if (
+            event.event === 'tool.completed' ||
+            event.event === 'conversation.completed' ||
+            event.event === 'conversation.failed'
+          ) {
             setMcpApproval(null)
             setRunningMcpTool(null)
           }
-        })
-        const completed = await getMcpTurn(requestSession.id, turn.id)
-        mcpTurnFinished = completed.status === 'completed' || completed.status === 'failed'
-        if (!completed.result) throw new Error(completed.error ?? 'MCP turn failed')
-        response = completed.result
-        setMcpApproval(null)
-        setRunningMcpTool(null)
-      } else {
-        response = (await sendSessionMessageWithMeta(requestSession.id, content, sessionConfig))
-          .data
-      }
+        },
+      )
       if (activeSessionIdRef.current === requestSession.id) {
         if (response.summarization_events.length) {
           setSummarizationEvents((current) =>
@@ -783,23 +825,27 @@ export function App() {
         setMemoryEvents(response.memory_events)
         setPendingMemory(response.pending_memory)
         setWorkingMemory(response.working_memory)
-        setMessages((current) => [
-          ...current,
-          {
-            id: Date.now() + 1,
-            role: 'assistant',
+        setMessages((current) => {
+          const message = {
+            id: assistantMessageId ?? Date.now() + 1,
+            role: 'assistant' as const,
             content: response.response.content,
             timestamp: now(),
             usage: response.response.usage,
             provider: response.response.provider,
             model: response.response.model,
             durationSeconds: response.duration_seconds,
-            executionStatus: 'completed',
+            executionStatus: 'completed' as const,
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             transcriptIndex: userTranscriptIndex + 1,
-          },
-        ])
+          }
+          return assistantMessageId === null
+            ? [...current, message]
+            : current.map((entry) =>
+                entry.id === assistantMessageId ? { ...entry, ...message } : entry,
+              )
+        })
         if (sessionConfig)
           setActiveSession((current) => (current ? { ...current, config: sessionConfig } : current))
       }
@@ -849,15 +895,12 @@ export function App() {
       }
     } finally {
       if (requestSessionId) {
-        if (mcpTurnId) {
-          if (mcpTurnFinished) localStorage.removeItem(`copia.mcpTurn.${requestSessionId}`)
-          if (activeSessionIdRef.current === requestSessionId) {
-            setMcpApproval(null)
-            setRunningMcpTool(null)
-          }
-        }
         setPendingSessionIds((current) => current.filter((id) => id !== requestSessionId))
         setSummarizingSessionIds((current) => current.filter((id) => id !== requestSessionId))
+        if (activeSessionIdRef.current === requestSessionId) {
+          setMcpApproval(null)
+          setRunningMcpTool(null)
+        }
       }
     }
   }
@@ -865,7 +908,11 @@ export function App() {
   async function respondToMcpApproval(approval: McpApproval, decision: 'approve' | 'reject') {
     if (!activeSession) return
     try {
-      await decideMcpApproval(activeSession.id, approval.id, decision)
+      await decideConversationApproval(activeSession.id, approval.id, decision, (event) => {
+        if (event.event === 'conversation.failed') {
+          throw new Error(String(event.data.message ?? 'Не удалось отправить решение'))
+        }
+      })
       setMcpApproval(null)
       if (decision === 'approve' && approval.id !== activeTask?.mcp_approval?.id)
         setRunningMcpTool(approval.tool_name)
@@ -888,18 +935,42 @@ export function App() {
     if (!session || isLoading) return
     setPendingSessionIds((current) => [...current, session.id])
     setSummarizingSessionIds((current) => [...current, session.id])
+    let assistantMessageId: number | null = null
+    let conversationState = initialConversationState()
     try {
-      const result = await retrySessionSummarizationWithMeta(session.id)
-      const response = result.data
+      const response = await retryConversationSummarization(session.id, (event) => {
+        conversationState = reduceConversationEvent(conversationState, event)
+        if (event.event !== 'message.delta' || activeSessionIdRef.current !== session.id) return
+        if (assistantMessageId === null) {
+          assistantMessageId = Date.now()
+          const id = assistantMessageId
+          setMessages((current) => [
+            ...current,
+            {
+              id,
+              role: 'assistant',
+              content: conversationState.text,
+              timestamp: now(),
+              transcriptIndex: transcriptLength(current),
+            },
+          ])
+        } else {
+          const id = assistantMessageId
+          setMessages((current) =>
+            current.map((entry) =>
+              entry.id === id ? { ...entry, content: conversationState.text } : entry,
+            ),
+          )
+        }
+      })
       if (activeSessionIdRef.current === session.id) {
         setSummarizationEvents((current) =>
           upsertSummarizationEvents(current, response.summarization_events),
         )
         setMemoryEvents(response.memory_events)
-        setMessages((current) => [
-          ...current,
-          {
-            id: Date.now(),
+        setMessages((current) => {
+          const message: ChatMessage = {
+            id: assistantMessageId ?? Date.now(),
             role: 'assistant',
             content: response.response.content,
             timestamp: now(),
@@ -911,8 +982,13 @@ export function App() {
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             transcriptIndex: transcriptLength(current),
-          },
-        ])
+          }
+          return assistantMessageId === null
+            ? [...current, message]
+            : current.map((entry) =>
+                entry.id === assistantMessageId ? { ...entry, ...message } : entry,
+              )
+        })
       }
       void refreshSessions()
     } catch (error) {
@@ -980,14 +1056,6 @@ export function App() {
       taskStepId: item.task_step_id ?? undefined,
       transcriptIndex: index,
     }))
-    if (session.mcp_turn_status === 'failed') {
-      sessionMessages.push({
-        id: Date.now(),
-        role: 'error',
-        content: session.mcp_turn_error ?? 'MCP turn failed',
-        timestamp: now(),
-      })
-    }
     setMessages(sessionMessages)
     setSummarizationEvents(session.context.events)
     setFactsEvents(session.context.facts_events ?? [])

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from copia.providers.api.models.completion_request import CompletionRequest
 from copia.providers.api.provider_route_runtime import ProviderRouteRuntime
+from copia.providers.application.collect_streamed_response import collect_streamed_response
 from copia.providers.data.llm import ProviderError
 from copia.providers.domain.models.provider_capabilities import ProviderCapabilities
 from copia.providers.domain.models.provider_model import ProviderModel
@@ -32,13 +33,38 @@ class ProviderRoutes:
             methods=["GET"],
             response_model=list[ProviderModel],
         )
-        router.add_api_route(
-            "/completions",
-            self.completion,
-            methods=["POST"],
-            response_model=MessageResponse,
-        )
         return router
+
+    async def execute_streaming_completion(
+        self,
+        request: CompletionRequest,
+        emit: Callable[[str, dict], None],
+    ) -> MessageResponse:
+        runtime = self._get_runtime()
+        messages = list(request.messages)
+        try:
+            invariant_context = render_invariants_context(runtime.invariants.load())
+        except (OSError, ValueError) as error:
+            raise runtime.memory_storage_error() from error
+        system_content = "\n\n".join(
+            part for part in (request.config.system_prompt, invariant_context) if part
+        )
+        if system_content:
+            messages.insert(0, ChatMessage(role="system", content=system_content))
+        try:
+            response = await runtime.threadpool(
+                collect_streamed_response,
+                runtime.router,
+                messages,
+                request.config,
+                emit,
+            )
+        except ProviderError as error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=runtime.provider_error_detail(error),
+            ) from error
+        return MessageResponse(response=response.model_copy(update={"trace": None}))
 
     def capabilities(self, provider_name: ProviderName) -> ProviderCapabilities:
         try:
@@ -57,24 +83,3 @@ class ProviderRoutes:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=runtime.provider_error_detail(error),
             ) from error
-
-    async def completion(self, request: CompletionRequest) -> MessageResponse:
-        runtime = self._get_runtime()
-        messages = list(request.messages)
-        try:
-            invariant_context = render_invariants_context(runtime.invariants.load())
-        except (OSError, ValueError) as error:
-            raise runtime.memory_storage_error() from error
-        system_content = "\n\n".join(
-            part for part in (request.config.system_prompt, invariant_context) if part
-        )
-        if system_content:
-            messages.insert(0, ChatMessage(role="system", content=system_content))
-        try:
-            response = await runtime.threadpool(runtime.router.complete, messages, request.config)
-        except ProviderError as error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=runtime.provider_error_detail(error),
-            ) from error
-        return MessageResponse(response=response.model_copy(update={"trace": None}))

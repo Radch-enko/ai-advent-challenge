@@ -46,8 +46,6 @@ class SessionServiceComposition:
                 factory=lambda: service.factory,
                 generate_session_title=lambda: service.generate_session_title,
                 invariants_repository=lambda: service.invariants_repository,
-                mcp_turns=lambda: service.mcp_turns,
-                mcp_turns_lock=lambda: service.mcp_turns_lock,
                 pending_memory=lambda: service.pending_memory,
                 pending_memory_repository=lambda: service.pending_memory_repository,
                 profile_memory=lambda: service.profile_memory,
@@ -91,8 +89,6 @@ class SessionServiceComposition:
         return SessionAccessRuntime(
             sessions=service.sessions(),
             threadpool=service.run_in_threadpool(),
-            mcp_turns=service.mcp_turns(),
-            mcp_turns_lock=service.mcp_turns_lock(),
             lifecycle_lock=service.session_lifecycle_lock(),
             message_locks=service.session_message_locks(),
         )

@@ -1,6 +1,6 @@
 import re
 
-from fastapi.testclient import TestClient
+from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
 from copia.providers.data.llm import ProviderError

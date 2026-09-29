@@ -2,11 +2,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
 
-from fastapi.testclient import TestClient
+from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.service import app
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
@@ -124,6 +125,13 @@ def test_retry_and_send_are_serialized_without_losing_session_state(monkeypatch,
         return LLMResponse(content="reply", provider="openai", model="main-model")
 
     monkeypatch.setattr(service.router, "complete", complete)
+
+    def stream(messages, config, tools=None):
+        result = complete(messages, config)
+        yield LLMStreamEvent(kind="text_delta", text=result.content)
+        yield LLMStreamEvent(kind="completed", response=result)
+
+    monkeypatch.setattr(service.router, "stream", stream)
     client = TestClient(app)
 
     with ThreadPoolExecutor(max_workers=2) as executor:

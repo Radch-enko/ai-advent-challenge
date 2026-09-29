@@ -64,6 +64,7 @@ class McpToolLoop:
         review_final: Callable[[LLMResponse], str | None] | None = None,
         finalize: Callable[[LLMResponse, tuple[McpArtifact, ...]], LLMResponse] | None = None,
         publish_artifacts: Callable[[tuple[McpArtifact, ...]], tuple[str, ...]] | None = None,
+        stream_completion: Callable[..., LLMResponse] | None = None,
     ) -> None:
         self._router = router
         self._tools = {tool.alias: tool for tool in tools}
@@ -78,6 +79,7 @@ class McpToolLoop:
         self._review_final = review_final
         self._finalize = finalize
         self._publish_artifacts = publish_artifacts
+        self._stream_completion = stream_completion
 
     def complete(self, messages: list[ChatMessage], config: LLMConfig) -> LLMResponse:
         conversation: list[ChatMessage | ToolLoopMessage] = list(messages)
@@ -86,9 +88,17 @@ class McpToolLoop:
         artifacts: list[McpArtifact] = []
         final_retry_count = 0
         while True:
-            response = self._router.complete(
-                with_current_datetime_context(conversation), config, definitions
-            )
+            request_messages = with_current_datetime_context(conversation)
+            if self._stream_completion is None:
+                response = self._router.complete(request_messages, config, definitions)
+            else:
+                response = self._stream_completion(
+                    self._router,
+                    request_messages,
+                    config,
+                    lambda text: self._emit("message.delta", {"text": text}),
+                    definitions,
+                )
             if not response.tool_calls:
                 correction = self._review_final(response) if self._review_final else None
                 if correction:

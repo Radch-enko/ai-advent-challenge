@@ -10,6 +10,24 @@ def record_response(response: httpx.Response) -> None:
     _emit_sig_noz_response(response.request, response)
 
 
+def record_stream_response(response: httpx.Response) -> None:
+    """Export stream metadata without buffering or logging generated content."""
+    from copia.common.observability import _safe_headers, emit_http_log
+
+    emit_http_log(
+        "http.client.response.complete",
+        {
+            "http.request.method": response.request.method,
+            "url.full": sanitize_url(str(response.request.url)),
+            "http.request.headers.safe": _safe_headers(response.request.headers),
+            "http.response.status_code": response.status_code,
+            "http.response.headers.safe": _safe_headers(response.headers),
+            "http.response.body_captured": False,
+        },
+        context=response.request.extensions.get("copia.otel.span_context"),
+    )
+
+
 def _emit_sig_noz_response(request: httpx.Request, response: httpx.Response) -> None:
     """Emit the normalized request/response event consumed by the SigNoz exporter."""
     from copia.common.observability import (

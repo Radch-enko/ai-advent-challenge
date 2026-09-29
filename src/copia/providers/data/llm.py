@@ -5,13 +5,15 @@ import os
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
-from copia.providers.data.http_logging import record_response
+from copia.providers.data.http_logging import record_response, record_stream_response
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.providers.domain.models.provider_capabilities import ProviderCapabilities
 from copia.providers.domain.models.provider_model import ProviderModel
 from copia.providers.domain.models.provider_name import ProviderName
@@ -39,6 +41,36 @@ class ProviderError(RuntimeError):
         self.response_body = response_body if response_body is not None else {"error": message}
 
 
+def _stream_data(response: httpx.Response) -> Iterator[dict[str, Any]]:
+    for line in response.iter_lines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            return
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise ProviderError("Provider returned invalid stream data") from error
+        if not isinstance(value, dict):
+            raise ProviderError("Provider returned invalid stream data")
+        yield value
+
+
+def _usage(raw_usage: object, cached_key: str) -> dict[str, int] | None:
+    if not isinstance(raw_usage, dict):
+        return None
+    usage = {
+        key: value
+        for key, value in raw_usage.items()
+        if key in {"prompt_tokens", "completion_tokens", "total_tokens"} and isinstance(value, int)
+    }
+    cached_tokens = raw_usage.get(cached_key)
+    if isinstance(cached_tokens, int):
+        usage["cached_prompt_tokens"] = cached_tokens
+    return usage or None
+
+
 class LLMProvider(ABC):
     capabilities: ProviderCapabilities
 
@@ -50,6 +82,17 @@ class LLMProvider(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> LLMResponse:
         raise NotImplementedError
+
+    def stream(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> Iterator[LLMStreamEvent]:
+        response = self.complete(messages, config, tools)
+        if response.content:
+            yield LLMStreamEvent(kind="text_delta", text=response.content)
+        yield LLMStreamEvent(kind="completed", response=response)
 
     @abstractmethod
     def list_models(self) -> list[ProviderModel]:
@@ -158,6 +201,7 @@ class OpenAIProvider(LLMProvider):
         provider=ProviderName.OPENAI,
         supported_parameters=["max_output_tokens", "temperature", "top_p"],
         supports_structured_output=True,
+        supports_streaming=True,
     )
 
     def __init__(
@@ -292,6 +336,137 @@ class OpenAIProvider(LLMProvider):
             tool_calls=tool_calls,
         )
 
+    def stream(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> Iterator[LLMStreamEvent]:
+        if not self._api_key:
+            raise ProviderError("OPENAI_API_KEY is not configured")
+        payload: dict[str, Any] = {
+            "model": config.model,
+            "messages": [_openai_message(message) for message in messages],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": tool.parameters or {"type": "object", "properties": {}},
+                    },
+                }
+                for tool in tools
+            ]
+            payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
+        generation = config.generation
+        if generation.max_output_tokens is not None:
+            payload["max_completion_tokens"] = generation.max_output_tokens
+        if generation.temperature is not None and self._supports_sampling(config.model):
+            payload["temperature"] = generation.temperature
+        if generation.top_p is not None and self._supports_sampling(config.model):
+            payload["top_p"] = generation.top_p
+        if config.structured_output is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "copia_response",
+                    "schema": config.structured_output.json_schema,
+                    "strict": config.structured_output.strict,
+                },
+            }
+        payload.update(config.provider_options)
+
+        content: list[str] = []
+        tool_deltas: dict[int, dict[str, Any]] = {}
+        usage: dict[str, Any] | None = None
+        response_model = config.model
+        response: httpx.Response | None = None
+        try:
+            with self._client.stream(
+                "POST",
+                self.CHAT_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            ) as response:
+                response.raise_for_status()
+                for event in _stream_data(response):
+                    if isinstance(event.get("model"), str):
+                        response_model = event["model"]
+                    usage = event.get("usage") or usage
+                    choices = event.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") if isinstance(choice, dict) else None
+                    if not isinstance(delta, dict):
+                        continue
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        content.append(text)
+                        yield LLMStreamEvent(kind="text_delta", text=text)
+                    calls = delta.get("tool_calls")
+                    if isinstance(calls, list):
+                        for item in calls:
+                            if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+                                continue
+                            index = item["index"]
+                            current = tool_deltas.setdefault(
+                                index,
+                                {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                },
+                            )
+                            if isinstance(item.get("id"), str):
+                                current["id"] = item["id"]
+                            function = item.get("function")
+                            if isinstance(function, dict):
+                                if isinstance(function.get("name"), str):
+                                    current["function"]["name"] += function["name"]
+                                if isinstance(function.get("arguments"), str):
+                                    current["function"]["arguments"] += function["arguments"]
+            raw_calls = [tool_deltas[index] for index in sorted(tool_deltas)]
+            content_text = "".join(content)
+            response_body = {
+                "model": response_model,
+                "choices": [{"message": {"content": content_text, "tool_calls": raw_calls}}],
+                "usage": usage,
+            }
+            result = LLMResponse(
+                content=content_text,
+                provider=ProviderName.OPENAI,
+                model=response_model,
+                usage=_usage(usage, "cached_tokens"),
+                structured_data=_structured_data(
+                    content_text, config.structured_output is not None
+                ),
+                trace=ProviderTrace(
+                    status_code=response.status_code if response else 200,
+                    request_body=payload,
+                    response_body=response_body,
+                ),
+                tool_calls=_openai_tool_calls(raw_calls),
+            )
+            yield LLMStreamEvent(kind="completed", response=result)
+        except ProviderError:
+            raise
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            raise ProviderError(
+                f"OpenAI stream failed: {error}",
+                status_code=response.status_code if response else 0,
+                request_body=payload,
+            ) from error
+        finally:
+            if response is not None:
+                record_stream_response(response)
+
     def list_models(self) -> list[ProviderModel]:
         if not self._api_key:
             raise ProviderError("OPENAI_API_KEY is not configured")
@@ -318,6 +493,7 @@ class GigaChatProvider(LLMProvider):
         provider=ProviderName.GIGACHAT,
         supported_parameters=["max_output_tokens", "temperature", "top_p"],
         supports_structured_output=True,
+        supports_streaming=True,
     )
 
     def __init__(
@@ -457,6 +633,111 @@ class GigaChatProvider(LLMProvider):
             ),
             tool_calls=tool_calls,
         )
+
+    def stream(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> Iterator[LLMStreamEvent]:
+        payload: dict[str, Any] = {
+            "model": config.model,
+            "messages": [_gigachat_message(message) for message in messages],
+            "stream": True,
+        }
+        if tools:
+            payload["functions"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "parameters": tool.parameters or {"type": "object", "properties": {}},
+                }
+                for tool in tools
+            ]
+            payload["function_call"] = "auto"
+        generation = config.generation
+        if generation.max_output_tokens is not None:
+            payload["max_tokens"] = generation.max_output_tokens
+        if generation.temperature is not None:
+            payload["temperature"] = generation.temperature
+        if generation.top_p is not None:
+            payload["top_p"] = generation.top_p
+        if config.structured_output is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "schema": config.structured_output.json_schema,
+                "strict": config.structured_output.strict,
+            }
+        payload.update(config.provider_options)
+
+        content: list[str] = []
+        function_call: dict[str, str] = {"name": "", "arguments": ""}
+        has_function_call = False
+        usage: dict[str, Any] | None = None
+        response_model = config.model
+        response: httpx.Response | None = None
+        try:
+            with self._client.stream(
+                "POST",
+                self.CHAT_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {self._token()}"},
+            ) as response:
+                response.raise_for_status()
+                for event in _stream_data(response):
+                    if isinstance(event.get("model"), str):
+                        response_model = event["model"]
+                    usage = event.get("usage") or usage
+                    choices = event.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") if isinstance(choice, dict) else None
+                    if not isinstance(delta, dict):
+                        continue
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        content.append(text)
+                        yield LLMStreamEvent(kind="text_delta", text=text)
+                    call_delta = delta.get("function_call")
+                    if isinstance(call_delta, dict):
+                        has_function_call = True
+                        for key in ("name", "arguments"):
+                            if isinstance(call_delta.get(key), str):
+                                function_call[key] += call_delta[key]
+            content_text = "".join(content)
+            response_body: dict[str, Any] = {
+                "model": response_model,
+                "choices": [{"message": {"content": content_text, "function_call": function_call}}],
+                "usage": usage,
+            }
+            result = LLMResponse(
+                content=content_text,
+                provider=ProviderName.GIGACHAT,
+                model=response_model,
+                usage=_usage(usage, "precached_prompt_tokens"),
+                structured_data=_structured_data(
+                    content_text, config.structured_output is not None
+                ),
+                trace=ProviderTrace(
+                    status_code=response.status_code if response else 200,
+                    request_body=payload,
+                    response_body=response_body,
+                ),
+                tool_calls=_gigachat_tool_calls(function_call) if has_function_call else [],
+            )
+            yield LLMStreamEvent(kind="completed", response=result)
+        except ProviderError:
+            raise
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            raise ProviderError(
+                f"GigaChat stream failed: {error}",
+                status_code=response.status_code if response else 0,
+                request_body=payload,
+            ) from error
+        finally:
+            if response is not None:
+                record_stream_response(response)
 
     def list_models(self) -> list[ProviderModel]:
         request = self._client.build_request(

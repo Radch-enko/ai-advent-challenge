@@ -8,93 +8,57 @@ from fastapi.testclient import TestClient
 
 from copia import service
 from copia.agents.domain.models.agent_config import AgentConfig
-from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
+from copia.conversations.api.models.conversation_command import SendMessageCommand
+from copia.conversations.application.conversation_store import ConversationStore
 from copia.mcp.domain.models.mcp_access_config import McpAccessConfig
 from copia.mcp.domain.models.mcp_approval import McpApproval
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.providers.domain.models.provider_name import ProviderName
 from copia.providers.domain.models.tool_call import ToolCall
 from copia.providers.domain.models.tool_definition import ToolDefinition
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
-from copia.sessions.api.models.message_request import MessageRequest
 from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_session import ChatSession
 from copia.tasks.domain.models.task_state import TaskState
 
 
-def test_mcp_enabled_session_requires_async_turn_api(monkeypatch, tmp_path) -> None:
-    repository = SessionsRepository(tmp_path / "sessions")
-    monkeypatch.setattr(service, "sessions", repository)
-    monkeypatch.setattr(service, "working_memory", WorkingMemoryRepository(tmp_path / "sessions"))
-    monkeypatch.setattr(
-        service, "pending_memory_repository", PendingMemoryRepository(tmp_path / "sessions")
-    )
-    session = ChatSession(
-        id="session",
-        config=AgentConfig(
-            name="Agent",
-            provider="openai",
-            model="model",
-            mcp_access=[McpAccessConfig(connection_id="finances", enabled_tools=["search"])],
-        ),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    repository.save(session)
-
-    response = TestClient(service.app).post(
-        "/sessions/session/messages", json={"content": "search"}
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "mcp_turn_required"
+def test_legacy_message_turn_and_approval_routes_are_removed() -> None:
+    client = TestClient(service.app)
+    assert client.post("/sessions/session/messages", json={"content": "search"}).status_code == 404
+    assert client.post("/sessions/session/turns", json={}).status_code == 404
+    assert client.get("/sessions/session/turns/turn/events").status_code == 404
+    assert client.post("/sessions/session/mcp-approvals/a", json={}).status_code == 404
 
 
-def test_approval_endpoint_resumes_pending_turn() -> None:
-    turn = McpTurnRuntime(id="turn", session_id="session")
-    turn.approval = McpApproval(
-        id="approval",
-        connection_id="finances",
-        connection_name="Finances",
-        tool_name="search",
-        arguments={"category": "food"},
-    )
-    turn.status = "waiting_for_approval"
-    with service.mcp_turns_lock:
-        service.mcp_turns[turn.id] = turn
-    try:
-        response = TestClient(service.app).post(
-            "/sessions/session/mcp-approvals/approval", json={"decision": "approve"}
+def test_approval_command_resumes_pending_conversation(monkeypatch) -> None:
+    store = ConversationStore()
+    monkeypatch.setattr(service, "conversation_store", store)
+    turn, _ = store.create("mcp-request", {"command": "message"})
+    turn.session_id = "session"
+    turn.prepare_approval(
+        McpApproval(
+            id="approval",
+            connection_id="finances",
+            connection_name="Finances",
+            tool_name="search",
+            arguments={"category": "food"},
         )
-    finally:
-        with service.mcp_turns_lock:
-            service.mcp_turns.pop(turn.id, None)
+    )
+    asyncio.run(service.conversation_composition._decide_approval("session", "approval", "approve"))
 
-    assert response.status_code == 200
     assert turn.decision is True
     assert turn.decision_event.is_set()
 
 
-def test_sse_replays_turn_events() -> None:
-    turn = McpTurnRuntime(id="turn", session_id="session", status="completed")
-    service._emit_turn(turn, "turn_started", {"turn_id": "turn"})
-    service._emit_turn(turn, "final", {"response": {"content": "done"}})
-    with service.mcp_turns_lock:
-        service.mcp_turns[turn.id] = turn
-    try:
-        response = TestClient(service.app).get("/sessions/session/turns/turn/events")
-    finally:
-        with service.mcp_turns_lock:
-            service.mcp_turns.pop(turn.id, None)
-
-    assert response.status_code == 200
-    assert "event: turn_started" in response.text
-    assert "event: final" in response.text
+def test_removed_turn_event_route_does_not_replay() -> None:
+    response = TestClient(service.app).get("/sessions/session/turns/turn/events")
+    assert response.status_code == 404
 
 
-def test_background_turn_waits_for_approval_executes_and_finishes(monkeypatch, tmp_path) -> None:
+def test_mcp_conversation_waits_for_approval_executes_and_finishes(monkeypatch, tmp_path) -> None:
     repository = SessionsRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", repository)
     monkeypatch.setattr(service, "working_memory", WorkingMemoryRepository(tmp_path / "sessions"))
@@ -156,29 +120,42 @@ def test_background_turn_waits_for_approval_executes_and_finishes(monkeypatch, t
 
     monkeypatch.setattr(service.router, "complete", complete)
 
-    async def exercise() -> McpTurnRuntime:
-        turn = McpTurnRuntime(id="turn", session_id="session")
-        worker = asyncio.create_task(service._run_mcp_turn(turn, MessageRequest(content="search")))
+    def stream(messages, config, tools=None):
+        yield LLMStreamEvent(kind="completed", response=complete(messages, config, tools))
+
+    monkeypatch.setattr(service.router, "stream", stream)
+
+    store = ConversationStore()
+    monkeypatch.setattr(service, "conversation_store", store)
+    conversation, _ = store.create("mcp-session-request", {"command": "message"})
+    command = SendMessageCommand(
+        command="message",
+        request_id="mcp-session-request",
+        target={"kind": "session", "id": "session"},
+        content="search",
+    )
+
+    async def exercise():
+        worker = asyncio.create_task(service.conversation_service.execute(conversation, command))
         for _ in range(100):
-            if turn.approval is not None:
+            if conversation.approval is not None:
                 break
             await asyncio.sleep(0.01)
-        assert turn.approval is not None
-        turn.decision = True
-        turn.decision_event.set()
+        assert conversation.approval is not None
+        conversation.decide_approval(conversation.approval.id, True)
         await worker
-        return turn
+        return conversation
 
-    turn = asyncio.run(exercise())
+    conversation = asyncio.run(exercise())
 
-    assert turn.status == "completed"
-    assert turn.result is not None
-    assert turn.result.response.content == "Done"
-    assert [event["type"] for event in turn.events] == [
-        "tool_approval_required",
-        "tool_running",
-        "tool_completed",
-        "final",
+    assert conversation.status == "completed"
+    assert [event["event"] for event in conversation.events] == [
+        "conversation.started",
+        "message.started",
+        "tool.approval_required",
+        "tool.running",
+        "tool.completed",
+        "conversation.completed",
     ]
 
 
@@ -236,21 +213,15 @@ def test_task_mode_persists_pending_approval_and_resumes(monkeypatch, tmp_path) 
     assert updated.task.mcp_approval is None
 
 
-def test_interrupted_chat_turn_is_marked_failed_on_load(monkeypatch, tmp_path) -> None:
-    repository = SessionsRepository(tmp_path / "sessions")
-    monkeypatch.setattr(service, "sessions", repository)
-    repository.save(
-        ChatSession(
-            id="session",
-            config=AgentConfig(name="Agent", provider="openai", model="model"),
-            mcp_turn_id="lost-turn",
-            mcp_turn_status="waiting_for_approval",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-    )
+def test_interrupted_conversation_is_persisted_as_terminal_failure(tmp_path) -> None:
+    path = tmp_path / "conversations.sqlite3"
+    first_store = ConversationStore(path)
+    run, _ = first_store.create("lost-request", {"command": "message"})
+    run.emit("message.delta", {"text": "partial"})
 
-    loaded = service._get_session_locked("session")
+    recovered = ConversationStore(path).get(run.id)
 
-    assert loaded.mcp_turn_status == "failed"
-    assert loaded.mcp_turn_error == "interrupted_by_restart"
+    assert recovered is not None
+    assert recovered.status == "failed"
+    assert recovered.events[-1]["event"] == "conversation.failed"
+    assert recovered.events[-1]["data"]["code"] == "interrupted_by_restart"

@@ -1,5 +1,6 @@
 from collections.abc import Callable, MutableMapping
 from contextlib import AbstractContextManager
+from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,6 +11,7 @@ from copia.sessions.data.sessions_repository import SessionsRepository
 class SessionLockState(Protocol):
     lock: Any
     retired: bool
+    on_idle: list[Callable[[], None]]
 
 
 class SessionDeletionRoutes:
@@ -34,25 +36,40 @@ class SessionDeletionRoutes:
         self._get_lifecycle_lock = get_lifecycle_lock
 
     def delete_session(self, session_id: str) -> None:
-        # Сначала блокируем сообщения, затем операции с жизненным циклом сессии.
         message_lock = self._acquire_message_lock(session_id)
-        message_lock.lock.acquire()
         try:
             with self._get_lifecycle_lock():
                 message_lock.retired = True
-                if not self._get_repository().delete(session_id):
+                repository = self._get_repository()
+                detached = repository.detach(session_id)
+                if detached is None:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session"
                     )
-                self._delete_working_memory(session_id)
-                self._delete_pending_memory(session_id)
-                self._get_pending_cache().pop(session_id, None)
-                approved = self._get_approved_cache()
-                for key in [key for key in approved if key[0] == session_id]:
-                    approved.pop(key, None)
+                if message_lock.lock.locked():
+                    message_lock.on_idle.append(
+                        lambda: self._finalize_delete(repository, detached, session_id)
+                    )
+                else:
+                    self._cleanup_session_data(session_id)
+                    repository.finalize_delete(detached)
         finally:
-            message_lock.lock.release()
             self._release_message_lock(message_lock)
+
+    def _finalize_delete(
+        self, repository: SessionsRepository, detached: Path, session_id: str
+    ) -> None:
+        self._cleanup_session_data(session_id)
+        repository.delete(session_id)
+        repository.finalize_delete(detached)
+
+    def _cleanup_session_data(self, session_id: str) -> None:
+        self._delete_working_memory(session_id)
+        self._delete_pending_memory(session_id)
+        self._get_pending_cache().pop(session_id, None)
+        approved = self._get_approved_cache()
+        for key in [key for key in approved if key[0] == session_id]:
+            approved.pop(key, None)
 
     def router(self) -> APIRouter:
         router = APIRouter()

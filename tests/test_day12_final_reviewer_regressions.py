@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi.testclient import TestClient
+from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
 from copia.service import app

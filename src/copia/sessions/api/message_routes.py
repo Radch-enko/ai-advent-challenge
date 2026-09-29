@@ -1,13 +1,14 @@
 import time
 from collections.abc import Callable
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import BackgroundTasks, HTTPException, status
 
 from copia.agents.domain.models.agent import (
     FactsUpdateFailed,
     SummarizationFailed,
     SummarizationRetryRequired,
 )
+from copia.providers.application.collect_streamed_response import collect_streamed_response
 from copia.providers.data.llm import ProviderError
 from copia.sessions.api.message_dependencies import SessionMessageDependencies
 from copia.sessions.api.models.message_request import MessageRequest
@@ -20,35 +21,45 @@ class SessionMessageRoutes:
     def __init__(self, get_dependencies: Callable[[], SessionMessageDependencies]) -> None:
         self._get_dependencies = get_dependencies
 
-    def send_router(self) -> APIRouter:
-        router = APIRouter()
-        router.add_api_route(
-            "/sessions/{session_id}/messages",
-            self.send_session_message,
-            methods=["POST"],
-            response_model=SessionMessageResponse,
-        )
-        return router
-
-    def retry_router(self) -> APIRouter:
-        router = APIRouter()
-        router.add_api_route(
-            "/sessions/{session_id}/summarization/retry",
-            self.retry_session_summarization,
-            methods=["POST"],
-            response_model=SessionMessageResponse,
-        )
-        return router
-
-    async def send_session_message(
-        self, session_id: str, request: MessageRequest, background_tasks: BackgroundTasks
-    ) -> SessionMessageResponse:
+    async def validate_streaming_message(self, session_id: str) -> None:
         runtime = self._get_dependencies()
-        # Ждём блокировку вне event loop: другой запрос может обращаться к провайдеру.
         message_lock = runtime.get_lock(session_id)
         await runtime.threadpool(message_lock.lock.acquire)
         try:
-            return await self._send_session_message_locked(session_id, request, background_tasks)
+            session = await runtime.get_session(session_id)
+            if runtime.has_active_task(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "task_active",
+                        "message": "A task is active for this session; resume or wait for it to finish",
+                    },
+                )
+            await runtime.load_profile(session)
+        finally:
+            message_lock.lock.release()
+            runtime.release_lock(message_lock)
+
+    async def execute_streaming_message(
+        self,
+        session_id: str,
+        request: MessageRequest,
+        emit: Callable[[str, dict], None],
+    ) -> SessionMessageResponse:
+        runtime = self._get_dependencies()
+        message_lock = runtime.get_lock(session_id)
+        await runtime.threadpool(message_lock.lock.acquire)
+        try:
+
+            def completion(messages, config):
+                return collect_streamed_response(runtime.llm_router, messages, config, emit)
+
+            background = BackgroundTasks()
+            response = await self._send_session_message_locked(
+                session_id, request, background, completion=completion
+            )
+            await background()
+            return response
         finally:
             message_lock.lock.release()
             runtime.release_lock(message_lock)
@@ -77,7 +88,7 @@ class SessionMessageRoutes:
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "code": "mcp_turn_required",
+                    "code": "conversation_required",
                     "message": "MCP-enabled agents must use the asynchronous turn API",
                 },
             )
@@ -205,7 +216,9 @@ class SessionMessageRoutes:
             working_memory=agent.working_memory,
         )
 
-    async def retry_session_summarization(self, session_id: str) -> SessionMessageResponse:
+    async def retry_session_summarization(
+        self, session_id: str, completion=None
+    ) -> SessionMessageResponse:
         runtime = self._get_dependencies()
         # Выполняем чтение, retry и сохранение под той же блокировкой, что и отправку.
         message_lock = runtime.get_lock(session_id)
@@ -258,7 +271,9 @@ class SessionMessageRoutes:
                     "Agent initialization failed", "agent_initialization_failed"
                 ) from error
             try:
-                response = await runtime.threadpool(runtime.retry_agent, session.id, agent, True)
+                response = await runtime.threadpool(
+                    runtime.retry_agent, session.id, agent, True, completion
+                )
             except SummarizationFailed as error:
                 runtime.save_agent(session, agent)
                 raise HTTPException(

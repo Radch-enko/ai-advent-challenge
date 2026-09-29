@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
+from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
 from copia.agents.domain.models.agent_config import AgentConfig

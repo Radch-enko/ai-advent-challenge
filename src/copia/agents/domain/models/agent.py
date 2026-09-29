@@ -211,7 +211,11 @@ class Agent:
         self._strategy.commit_turn()
         return self._redact_long_term_trace(response)
 
-    def retry_summarization(self) -> LLMResponse:
+    def retry_summarization(
+        self,
+        *,
+        completion: Callable[[list[ChatMessage], LLMConfig], LLMResponse] | None = None,
+    ) -> LLMResponse:
         self._refresh_long_term_memory()
         event = self._pending_event()
         if event is None:
@@ -225,7 +229,9 @@ class Agent:
         self._compact_eligible_messages()
         try:
             started_at = time.perf_counter()
-            response = self._router.complete(self._messages_for_request(), self.config)
+            response = (completion or self._router.complete)(
+                self._messages_for_request(), self.config
+            )
         except Exception:
             self._context = context_before_retry
             self._operation_events = []

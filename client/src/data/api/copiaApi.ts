@@ -1,4 +1,4 @@
-import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
+import { AgentConfig } from '../../domain/models/agent'
 import {
   FactsUpdateEvent,
   ProviderTrace,
@@ -10,20 +10,22 @@ import { TaskState } from '../../domain/models/task'
 import { ScheduledJobStatus, ScheduledSummary } from '../../domain/models/scheduled'
 import { UserProfile, UserProfileInput, UserProfileUpdate } from '../../domain/models/userProfile'
 import { Invariant, InvariantInput } from '../../domain/models/invariant'
-import {
-  McpApproval,
-  McpConnection,
-  McpConnectionInput,
-  McpDiscoveryResult,
-} from '../../domain/models/mcp'
+import { McpConnection, McpConnectionInput, McpDiscoveryResult } from '../../domain/models/mcp'
 import {
   LongTermMemoryItem,
   MemoryEvent,
   PendingMemorySuggestion,
   WorkingMemoryItem,
 } from '../../domain/models/memory'
+import {
+  ConversationCommand,
+  ConversationEvent,
+  streamConversationResilient,
+} from './conversationStream'
 
-export type { AgentConfig, CompletionConfig, Provider, ProviderModel }
+export type { AgentConfig, Provider, ProviderModel }
+export type ApiResult<T> = { data: T; status: number }
+export type MemoryMutationResponse = LongTermMemoryItem & { memory_events: MemoryEvent[] }
 
 type ChatResponseData = {
   content: string
@@ -50,20 +52,6 @@ export type SessionChatResponse = Omit<ChatResponse, 'response'> & {
   response: SessionChatResponseData
   duration_seconds: number
 }
-
-export type McpTurn = {
-  id: string
-  session_id: string
-  status: 'running' | 'waiting_for_approval' | 'completed' | 'failed'
-  approval: McpApproval | null
-  result: SessionChatResponse | null
-  error: string | null
-}
-
-export type McpTurnEvent = { type: string; data: unknown }
-
-export type ApiResult<T> = { data: T; status: number }
-export type MemoryMutationResponse = LongTermMemoryItem & { memory_events: MemoryEvent[] }
 
 export type StoredMessage = {
   role: 'user' | 'assistant'
@@ -98,9 +86,6 @@ export type ChatSession = {
   }
   created_at: string
   updated_at: string
-  mcp_turn_id?: string | null
-  mcp_turn_status?: 'running' | 'waiting_for_approval' | 'completed' | 'failed' | null
-  mcp_turn_error?: string | null
 }
 export type ChatSessionSummary = Pick<ChatSession, 'id' | 'title' | 'profile_name' | 'updated_at'>
 
@@ -225,106 +210,11 @@ export function testMcpConnection(connectionId: string): Promise<McpConnection> 
   return request(`/mcp/connections/${encodeURIComponent(connectionId)}/test`, { method: 'POST' })
 }
 
-export function startMcpTurn(
-  sessionId: string,
-  content: string,
-  config?: AgentConfig,
-): Promise<McpTurn> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/turns`, {
-    method: 'POST',
-    body: JSON.stringify({ content, config }),
-  })
-}
-
-export function getMcpTurn(sessionId: string, turnId: string): Promise<McpTurn> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`)
-}
-
-export function decideMcpApproval(
-  sessionId: string,
-  approvalId: string,
-  decision: 'approve' | 'reject',
-): Promise<unknown> {
-  return request(
-    `/sessions/${encodeURIComponent(sessionId)}/mcp-approvals/${encodeURIComponent(approvalId)}`,
-    { method: 'POST', body: JSON.stringify({ decision }) },
-  )
-}
-
-export async function streamMcpTurnEvents(
-  sessionId: string,
-  turnId: string,
-  onEvent: (event: McpTurnEvent) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`,
-    { signal, headers: { Accept: 'text/event-stream' } },
-  )
-  if (!response.ok || !response.body) {
-    const body = await response.json().catch(() => null)
-    throw new ApiRequestError(response.status, body)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    buffer += decoder.decode(value, { stream: !done })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() ?? ''
-    for (const block of blocks) {
-      let type = 'message'
-      let data = ''
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event: ')) type = line.slice(7)
-        if (line.startsWith('data: ')) data += line.slice(6)
-      }
-      if (data) onEvent({ type, data: JSON.parse(data) })
-    }
-    if (done) return
-  }
-}
-
 export function deleteAgent(agentId: string): Promise<unknown> {
   return fetch(`/api/agents/${agentId}`, { method: 'DELETE' }).then((response) => {
     if (!response.ok && response.status !== 404) {
       throw new Error(`Could not delete agent: ${response.status}`)
     }
-  })
-}
-
-export function sendMessage(agentId: string, content: string): Promise<ChatResponse> {
-  return request(`/agents/${agentId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ content }),
-  })
-}
-
-export function sendMessageWithMeta(
-  agentId: string,
-  content: string,
-): Promise<ApiResult<ChatResponse>> {
-  return requestWithMeta(`/agents/${agentId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ content }),
-  })
-}
-
-export function complete(
-  config: CompletionConfig,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-): Promise<ChatResponse> {
-  return request('/completions', { method: 'POST', body: JSON.stringify({ config, messages }) })
-}
-
-export function completeWithMeta(
-  config: CompletionConfig,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-): Promise<ApiResult<ChatResponse>> {
-  return requestWithMeta('/completions', {
-    method: 'POST',
-    body: JSON.stringify({ config, messages }),
   })
 }
 
@@ -589,18 +479,67 @@ export function deleteSession(sessionId: string): Promise<void> {
     if (!response.ok) throw new Error(`Could not delete session: ${response.status}`)
   })
 }
-export function sendSessionMessageWithMeta(
-  sessionId: string,
+export async function sendConversationMessage(
+  target: { kind: 'session' | 'agent'; id: string },
   content: string,
-  config?: AgentConfig,
-): Promise<ApiResult<SessionChatResponse>> {
-  return requestWithMeta(`/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ content, config }),
+  config: AgentConfig | undefined,
+  onEvent: (event: ConversationEvent) => void,
+): Promise<SessionChatResponse> {
+  let result: SessionChatResponse | undefined
+  let failure: string | undefined
+  const command: ConversationCommand = {
+    command: 'message',
+    request_id: crypto.randomUUID(),
+    target,
+    content,
+    config,
+  }
+  await streamConversationResilient(command, (event) => {
+    onEvent(event)
+    if (event.event === 'conversation.completed') result = event.data.result as SessionChatResponse
+    if (event.event === 'conversation.failed')
+      failure = String(event.data.message ?? 'Conversation failed')
   })
+  if (failure) throw new Error(failure)
+  if (!result) throw new Error('Conversation ended without a result')
+  return result
 }
-export function retrySessionSummarizationWithMeta(
+
+export async function retryConversationSummarization(
   sessionId: string,
-): Promise<ApiResult<SessionChatResponse>> {
-  return requestWithMeta(`/sessions/${sessionId}/summarization/retry`, { method: 'POST' })
+  onEvent: (event: ConversationEvent) => void,
+): Promise<SessionChatResponse> {
+  let result: SessionChatResponse | undefined
+  let failure: string | undefined
+  await streamConversationResilient(
+    { command: 'retry_summarization', request_id: crypto.randomUUID(), session_id: sessionId },
+    (event) => {
+      onEvent(event)
+      if (event.event === 'conversation.completed')
+        result = event.data.result as SessionChatResponse
+      if (event.event === 'conversation.failed')
+        failure = String(event.data.message ?? 'Conversation failed')
+    },
+  )
+  if (failure) throw new Error(failure)
+  if (!result) throw new Error('Conversation ended without a result')
+  return result
+}
+
+export function decideConversationApproval(
+  sessionId: string,
+  approvalId: string,
+  decision: 'approve' | 'reject',
+  onEvent: (event: ConversationEvent) => void,
+): Promise<void> {
+  return streamConversationResilient(
+    {
+      command: 'approval_decision',
+      request_id: crypto.randomUUID(),
+      session_id: sessionId,
+      approval_id: approvalId,
+      decision,
+    },
+    onEvent,
+  )
 }

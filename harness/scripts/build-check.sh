@@ -13,5 +13,8 @@ echo "==> TypeScript typecheck"
 cd "$CLIENT_DIR"
 npm run typecheck
 
+echo "==> Client tests"
+npm test
+
 echo "==> Vite production build"
 ./node_modules/.bin/vite build --outDir "$BUILD_DIR" --emptyOutDir

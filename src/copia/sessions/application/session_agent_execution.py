@@ -77,6 +77,7 @@ class SessionAgentExecution:
         session_id: str,
         agent: Agent,
         session_lock_held: bool = False,
+        completion: Callable[..., LLMResponse] | None = None,
     ) -> LLMResponse:
         with self._session_operation(session_id, session_lock_held):
-            return agent.retry_summarization()
+            return agent.retry_summarization(completion=completion)

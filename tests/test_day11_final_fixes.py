@@ -16,7 +16,7 @@ from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_session import ChatSession
 
 
-def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp_path):
+def test_delete_detaches_session_immediately_and_cleans_after_classification(monkeypatch, tmp_path):
     sessions = SessionsRepository(tmp_path / "sessions")
     working = WorkingMemoryRepository(tmp_path / "sessions")
     monkeypatch.setattr(service, "sessions", sessions)
@@ -44,7 +44,7 @@ def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp
         delete_thread = Thread(target=delete)
         delete_thread.start()
         assert delete_attempted.wait(timeout=1)
-        assert delete_thread.is_alive()
+        assert delete_finished.wait(timeout=1)
         original_save(*args)
 
     monkeypatch.setattr(working, "save_automatic", save_automatic)
@@ -63,10 +63,9 @@ def test_automatic_classification_cannot_interleave_with_delete(monkeypatch, tmp
             return LLMResponse(content="ok", provider="openai", model="model")
 
     assert service._ask_agent(session.id, Agent(), "classified")
-    # The delete started while the lifecycle lock was held and completes after ask returns.
-    assert delete_finished.wait(timeout=1)
     assert sessions.load(session.id) is None
     assert not (tmp_path / "sessions" / session.id).exists()
+    assert working.load(session.id) == []
 
 
 def test_rejecting_same_candidate_is_idempotent(monkeypatch, tmp_path):

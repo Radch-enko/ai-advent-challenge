@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from dotenv import load_dotenv
 
 from copia.providers.data.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
 from copia.providers.data.model_catalog import context_window_for
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.providers.domain.models.provider_capabilities import ProviderCapabilities
 from copia.providers.domain.models.provider_model import ProviderModel
 from copia.providers.domain.models.provider_name import ProviderName
@@ -44,6 +47,21 @@ class LLMRouter:
         )
         response.context_window = context_window_for(config.provider, config.model)
         return response
+
+    def stream(
+        self,
+        messages: list[ChatMessage | ToolLoopMessage],
+        config: LLMConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> Iterator[LLMStreamEvent]:
+        try:
+            provider = self._providers[config.provider]
+        except KeyError as error:
+            raise ProviderError(f"Unsupported provider: {config.provider.value}") from error
+        for event in provider.stream(messages, config, tools):
+            if event.kind == "completed" and event.response is not None:
+                event.response.context_window = context_window_for(config.provider, config.model)
+            yield event
 
     def capabilities(self, provider_name: ProviderName) -> ProviderCapabilities:
         try:

@@ -138,7 +138,16 @@ class LLMMemoryClassifier:
             data = response.structured_data
             if not isinstance(data, dict) or not isinstance(data.get("candidates"), list):
                 raise ValueError("invalid structured data")
-            return [MemoryCandidate.model_validate(item) for item in data["candidates"]]
+            candidates = []
+            for item in data["candidates"]:
+                if (
+                    isinstance(item, dict)
+                    and item.get("scope") == "none"
+                    and item.get("action") == "skip"
+                ):
+                    continue
+                candidates.append(MemoryCandidate.model_validate(item))
+            return candidates
         except Exception as error:
             self.last_duration_seconds = time.perf_counter() - started_at
             request_body = getattr(error, "request_body", None) or request_body

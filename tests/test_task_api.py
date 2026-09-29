@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import httpx
 from copia import service
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
 from copia.sessions.data.sessions_repository import SessionsRepository
@@ -227,19 +229,17 @@ def test_task_mode_off_preserves_regular_message_route(monkeypatch, tmp_path: Pa
         "pending_memory_repository",
         PendingMemoryRepository(tmp_path / "sessions"),
     )
-    monkeypatch.setattr(
-        service,
-        "router",
-        type(
-            "Router",
-            (),
-            {
-                "complete": lambda self, messages, config: LLMResponse(
-                    content="reply", provider=config.provider, model=config.model
-                )
-            },
-        )(),
-    )
+
+    class Router:
+        def complete(self, messages, config):
+            return LLMResponse(content="reply", provider=config.provider, model=config.model)
+
+        def stream(self, messages, config, tools=None):
+            response = self.complete(messages, config)
+            yield LLMStreamEvent(kind="text_delta", text=response.content)
+            yield LLMStreamEvent(kind="completed", response=response)
+
+    monkeypatch.setattr(service, "router", Router())
 
     async def run() -> None:
         async with httpx.AsyncClient(
@@ -252,9 +252,16 @@ def test_task_mode_off_preserves_regular_message_route(monkeypatch, tmp_path: Pa
                 )
             ).json()
             response = await client.post(
-                f"/sessions/{session['id']}/messages", json={"content": "hello"}
+                "/conversation",
+                json={
+                    "command": "message",
+                    "request_id": str(uuid.uuid4()),
+                    "target": {"kind": "session", "id": session["id"]},
+                    "content": "hello",
+                },
             )
             assert response.status_code == 200
+            assert "event: conversation.completed" in response.text
             assert (
                 await client.post(f"/sessions/{session['id']}/tasks", json={"instruction": "x"})
             ).status_code == 409
@@ -295,7 +302,13 @@ def test_active_task_rejects_regular_message(monkeypatch, tmp_path: Path) -> Non
             )
             repository.save(stored)
             response = await client.post(
-                f"/sessions/{session['id']}/messages", json={"content": "hello"}
+                "/conversation",
+                json={
+                    "command": "message",
+                    "request_id": str(uuid.uuid4()),
+                    "target": {"kind": "session", "id": session["id"]},
+                    "content": "hello",
+                },
             )
             assert response.status_code == 409
 

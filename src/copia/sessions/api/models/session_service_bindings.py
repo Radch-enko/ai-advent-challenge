@@ -26,8 +26,6 @@ class SessionServiceBindings:
     factory: Callable[[], Any]
     generate_session_title: Callable[[], Any]
     invariants_repository: Callable[[], Any]
-    mcp_turns: Callable[[], Any]
-    mcp_turns_lock: Callable[[], Any]
     pending_memory: Callable[[], Any]
     pending_memory_repository: Callable[[], Any]
     profile_memory: Callable[[], Any]

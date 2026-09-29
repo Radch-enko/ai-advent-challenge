@@ -20,6 +20,9 @@ from copia.agents.data.profiles_repository import ProfilesRepository
 from copia.agents.domain.models.agent import Agent, AgentFactory
 from copia.common.observability import instrument_app
 from copia.common.observability import shutdown as shutdown_observability
+from copia.conversations.api.router import create_conversation_router
+from copia.conversations.api.service_composition import ConversationServiceComposition
+from copia.conversations.application.conversation_store import ConversationStore
 from copia.expenses.api.router import create_expenses_router
 from copia.expenses.api.validation import expense_validation_error_response
 from copia.expenses.data.expenses_repository import ExpensesRepository
@@ -28,7 +31,6 @@ from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.mcp.api.discovery import mcp_header
 from copia.mcp.api.router import create_mcp_router
 from copia.mcp.api.service_composition import McpServiceComposition
-from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
 from copia.mcp.data.mcp_artifact_store import McpArtifactStore
 from copia.mcp.data.mcp_client import call_mcp_tool as call_mcp_tool
 from copia.mcp.data.mcp_client import discover_mcp_tools
@@ -138,11 +140,7 @@ scheduled_runner = ScheduledRunner(
 )
 
 
-mcp_turns: dict[str, McpTurnRuntime] = {}
-mcp_turns_lock = threading.RLock()
-mcp_turn_workers: dict[str, asyncio.Task[None]] = {}
 mcp_composition = McpServiceComposition.from_service(sys.modules[__name__])
-mcp_turn_state = mcp_composition.turn_state
 
 
 task_mcp_approvals: dict[str, _TaskMcpApprovalRuntime] = {}
@@ -159,11 +157,14 @@ approved_memory_mutations = approved_memory_cache.entries
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global conversation_store
+    conversation_store = ConversationStore(data_root / "conversations.sqlite3")
     scheduled_runner.start()
     try:
         yield
     finally:
         scheduled_runner.shutdown()
+        conversation_store.close()
         shutdown_observability()
 
 
@@ -299,12 +300,10 @@ provider_routes = ProviderRoutes(_provider_route_runtime)
 app.include_router(provider_routes.router())
 capabilities = provider_routes.capabilities
 models = provider_routes.models
-completion = provider_routes.completion
 
 
 app.include_router(agent_routes.create_message_router())
 create_agent = agent_routes.create_agent
-send_message = agent_routes.send_message
 
 
 task_recovery = task_composition.recovery
@@ -336,7 +335,6 @@ retry_task = task_routes.retry_task
 session_access = session_composition.access()
 _get_session_locked = session_access.get_session_locked
 _get_session = session_access.get_session
-_recover_interrupted_mcp_turn = session_access.recover_interrupted_mcp_turn
 _session_message_lock = session_access.session_message_lock
 _release_session_message_lock = session_access.release_session_message_lock
 _session_mutation_lock = session_access.session_mutation_lock
@@ -359,17 +357,11 @@ fork_session = session_settings_routes.fork_session
 
 
 session_message_routes = session_composition.message_routes()
-app.include_router(session_message_routes.send_router())
-send_session_message = session_message_routes.send_session_message
 _send_session_message_locked = session_message_routes._send_session_message_locked
 
 
-_turn_response = mcp_composition.turn_response
-_emit_turn = mcp_composition.emit_turn
-_persist_mcp_turn_state = mcp_composition.persist_turn_state
 mcp_tool_resolver = mcp_composition.tool_resolver
 _resolved_mcp_tools = mcp_composition.resolved_tools
-_turn_approval = mcp_composition.turn_approval
 mcp_tool_executor = mcp_composition.tool_executor
 _execute_resolved_tool = mcp_composition.execute_resolved_tool
 
@@ -380,22 +372,13 @@ expense_summary_job = scheduled_summary_composition.job
 _expense_summary_job = expense_summary_job.run
 
 
-mcp_turn_worker = mcp_composition.turn_worker
-_run_mcp_turn = mcp_turn_worker.run
-mcp_turn_routes = mcp_composition.turn_routes
-app.include_router(mcp_turn_routes.router())
+mcp_conversation_worker = mcp_composition.conversation_worker
 app.include_router(mcp_composition.artifact_routes.router())
-start_mcp_turn = mcp_turn_routes.start_mcp_turn
-_require_mcp_turn = mcp_turn_routes.require_turn
-get_mcp_turn = mcp_turn_routes.get_mcp_turn
-stream_mcp_turn_events = mcp_turn_routes.stream_mcp_turn_events
-decide_mcp_approval = mcp_turn_routes.decide_mcp_approval
 
 
 app.include_router(create_scheduled_jobs_router(lambda: scheduled_runner, lambda: scheduled_runs))
 
 
-app.include_router(session_message_routes.retry_router())
 retry_session_summarization = session_message_routes.retry_session_summarization
 
 
@@ -437,6 +420,12 @@ session_agent_execution = session_composition.agent_execution()
 _save_agent_state = session_agent_execution.save_agent_state
 _ask_agent = session_agent_execution.ask_agent
 _retry_agent = session_agent_execution.retry_agent
+
+
+conversation_store = ConversationStore()
+conversation_composition = ConversationServiceComposition.from_service(sys.modules[__name__])
+conversation_service = conversation_composition.conversation_service
+app.include_router(create_conversation_router(conversation_composition.route_runtime))
 
 
 session_long_term_memory_access = session_composition.long_term_memory_access()

@@ -9,3 +9,4 @@ class ProviderCapabilities(BaseModel):
     provider: ProviderName
     supported_parameters: list[str]
     supports_structured_output: bool
+    supports_streaming: bool = False

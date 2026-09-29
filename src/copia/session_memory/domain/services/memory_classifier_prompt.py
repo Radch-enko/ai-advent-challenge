@@ -24,6 +24,8 @@ Scope rules:
   of classification.
 - If persistence is ambiguous and there is no clear session boundary or durable intent, return none
   instead of guessing.
+- When the scope is none, return no candidate. Return candidates only for information that should
+  be remembered, and use a non-empty key for each candidate.
 - Extract only what the user explicitly provided. Never infer a personal fact, preference, goal,
   or decision from context.
 - Use profile for identity, profession, and preferences; decision for durable agreements or

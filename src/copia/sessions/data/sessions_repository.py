@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
 from copia.sessions.domain.models.branch_transcript import BranchTranscript
@@ -79,11 +80,26 @@ class SessionsRepository:
         self.save(session)
 
     def delete(self, session_id: str) -> bool:
+        detached = self.detach(session_id)
+        if detached is None:
+            return False
+        self.finalize_delete(detached)
+        return True
+
+    def detach(self, session_id: str) -> Path | None:
         directory = self._path(session_id).parent
         if not directory.is_dir():
-            return False
-        shutil.rmtree(directory)
-        return True
+            return None
+        tombstone_root = self._root.parent / f".{self._root.name}-deleted"
+        tombstone_root.mkdir(parents=True, exist_ok=True)
+        tombstone = tombstone_root / str(uuid.uuid4())
+        directory.rename(tombstone)
+        return tombstone
+
+    @staticmethod
+    def finalize_delete(detached: Path) -> None:
+        if detached.exists():
+            shutil.rmtree(detached)
 
     def load_facts(self, session_id: str) -> dict[str, str]:
         path = self._facts_path(session_id)
