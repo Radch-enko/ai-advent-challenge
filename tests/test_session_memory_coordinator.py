@@ -1,4 +1,4 @@
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
 from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
@@ -29,7 +29,7 @@ def test_context_refresh_failure_keeps_applied_memory_and_records_error(monkeypa
         raise ValueError("context refresh failed")
 
     monkeypatch.setattr(
-        "copia.agents.domain.models.agent.context_strategy_for", fail_context_refresh
+        "copia.agents.application.agent_runtime.context_strategy_for", fail_context_refresh
     )
 
     agent._classify_memory("Remember this for this session")

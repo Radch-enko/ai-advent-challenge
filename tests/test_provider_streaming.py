@@ -4,7 +4,9 @@ import json
 
 import httpx
 
-from copia.providers.data.llm import GigaChatProvider, LLMProvider, OpenAIProvider, _stream_data
+from copia.providers.data.gigachat_provider import GigaChatProvider
+from copia.providers.data.llm import LLMProvider, _stream_data
+from copia.providers.data.openai_provider import OpenAIProvider
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.provider_capabilities import ProviderCapabilities

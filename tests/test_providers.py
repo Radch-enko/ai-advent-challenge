@@ -1,7 +1,8 @@
 import httpx
 
 from copia.agents.domain.models.agent_config import AgentConfig
-from copia.providers.data.llm import GigaChatProvider, OpenAIProvider
+from copia.providers.data.gigachat_provider import GigaChatProvider
+from copia.providers.data.openai_provider import OpenAIProvider
 from copia.providers.domain.models.generation_config import GenerationConfig
 from copia.providers.domain.models.structured_output_config import StructuredOutputConfig
 from copia.sessions.domain.models.chat_message import ChatMessage

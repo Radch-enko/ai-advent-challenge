@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from copia import service
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository

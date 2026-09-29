@@ -6,7 +6,7 @@ import pytest
 from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.profile_memory.data.profile_memory_limit_exceeded import ProfileMemoryLimitExceeded
 from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository

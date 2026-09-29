@@ -13,7 +13,7 @@ from copia.providers.domain.models.provider_capabilities import ProviderCapabili
 from copia.providers.domain.models.provider_model import ProviderModel
 from copia.providers.domain.models.provider_name import ProviderName
 from copia.sessions.api.models.message_response import MessageResponse
-from copia.sessions.domain.services.context_strategy import render_invariants_context
+from copia.sessions.domain.services.context_rendering import render_invariants_context
 
 
 class ProviderRoutes:

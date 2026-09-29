@@ -6,7 +6,7 @@ import pytest
 from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
 from copia.providers.domain.models.llm_response import LLMResponse
@@ -16,10 +16,8 @@ from copia.session_memory.data.working_memory_repository import WorkingMemoryRep
 from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.models.conversation_context import ConversationContext
-from copia.sessions.domain.services.context_strategy import (
-    _estimated_message_tokens,
-    context_strategy_for,
-)
+from copia.sessions.domain.services.context_rendering import _estimated_message_tokens
+from copia.sessions.domain.services.context_strategy import context_strategy_for
 from copia.user_profiles.data.user_profile_name_conflict_error import UserProfileNameConflictError
 from copia.user_profiles.data.user_profile_storage_error import UserProfileStorageError
 from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository

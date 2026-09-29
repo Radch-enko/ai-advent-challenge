@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 from fastapi import BackgroundTasks, HTTPException, status
 
-from copia.agents.domain.models.agent import (
+from copia.agents.application.agent_runtime import (
     FactsUpdateFailed,
     SummarizationFailed,
     SummarizationRetryRequired,

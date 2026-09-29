@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
+from copia.common.configuration import get_settings
 from copia.mcp.data.mcp_connection_conflict_error import McpConnectionConflictError
 from copia.mcp.data.mcp_connections_storage_error import McpConnectionsStorageError
 from copia.mcp.domain.models.mcp_connection import McpConnection
@@ -14,8 +14,8 @@ from copia.mcp.domain.models.mcp_connection import McpConnection
 
 class McpConnectionsRepository:
     def __init__(self, path: Path | None = None) -> None:
-        data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
-        self._path = (path or data_root / "mcp_connections.json").expanduser()
+        settings = get_settings()
+        self._path = (path or settings.mcp_connections_path).expanduser()
         self._lock = threading.RLock()
 
     def list(self) -> list[McpConnection]:

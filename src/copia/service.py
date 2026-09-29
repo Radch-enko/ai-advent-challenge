@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import threading
-from contextlib import asynccontextmanager
-from pathlib import Path
+from contextlib import ExitStack, asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -16,8 +13,9 @@ from fastapi.responses import JSONResponse
 
 from copia.agents.api.agent_route_runtime import AgentRouteRuntime
 from copia.agents.api.routes import AgentRoutes
+from copia.agents.application.agent_runtime import Agent, AgentFactory
 from copia.agents.data.profiles_repository import ProfilesRepository
-from copia.agents.domain.models.agent import Agent, AgentFactory
+from copia.common.configuration import get_settings
 from copia.common.observability import instrument_app
 from copia.common.observability import shutdown as shutdown_observability
 from copia.conversations.api.router import create_conversation_router
@@ -85,7 +83,7 @@ from copia.tasks.domain.services.task_state_machine import TaskStateMachine
 from copia.user_profiles.api.router import create_user_profiles_router
 from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
 
-load_dotenv()
+settings = get_settings()
 
 _mcp_header = mcp_header
 session_composition = SessionServiceComposition.from_service(sys.modules[__name__])
@@ -94,16 +92,16 @@ scheduled_summary_composition = ScheduledSummaryServiceComposition.from_service(
     sys.modules[__name__]
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
-profiles_path = Path(os.getenv("COPIA_PROFILES_PATH", PROJECT_ROOT / "profiles.json"))
-sessions_path = Path(os.getenv("COPIA_SESSIONS_PATH", data_root / "sessions"))
-invariants_path = Path(os.getenv("COPIA_INVARIANTS_PATH", sessions_path.parent / "invariants.json"))
+PROJECT_ROOT = settings.project_root
+data_root = settings.data_root
+profiles_path = settings.profiles_path
+sessions_path = settings.sessions_path
+invariants_path = settings.invariants_path
 router = LLMRouter()
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}
 sessions = SessionsRepository(sessions_path)
-profile_memory = ProfileMemoryRepository(Path(os.getenv("COPIA_MEMORY_PATH", data_root / "memory")))
+profile_memory = ProfileMemoryRepository(settings.memory_path)
 working_memory = WorkingMemoryRepository(sessions_path)
 pending_memory: dict[str, list[PendingMemorySuggestion]] = {}
 pending_memory_repository = PendingMemoryRepository(sessions_path)
@@ -115,26 +113,18 @@ invariants_repository = InvariantsRepository(
     invariants_path,
     legacy_sessions_root=sessions_path,
 )
-user_profiles = JsonUserProfilesRepository(data_root / "user_profiles.json")
-expenses = ExpensesRepository(
-    Path(os.getenv("COPIA_EXPENSES_PATH", data_root / "files/finances.xlsx"))
-)
-mcp_connections = McpConnectionsRepository(
-    Path(os.getenv("COPIA_MCP_CONNECTIONS_PATH", data_root / "mcp_connections.json"))
-)
-mcp_artifact_store = McpArtifactStore(
-    Path(os.getenv("COPIA_MCP_ARTIFACTS_PATH", data_root / "artifacts"))
-)
+user_profiles = JsonUserProfilesRepository(settings.user_profiles_path)
+expenses = ExpensesRepository(settings.expenses_path)
+mcp_connections = McpConnectionsRepository(settings.mcp_connections_path)
+mcp_artifact_store = McpArtifactStore(settings.mcp_artifacts_path)
 session_lifecycle_lock = threading.RLock()
 task_state_machine = TaskStateMachine()
 task_workers: dict[str, asyncio.Task[None]] = {}
 task_workers_lock = threading.RLock()
-scheduled_runs = ScheduledRunsRepository(
-    Path(os.getenv("COPIA_SCHEDULED_RUNS_PATH", data_root / "scheduled-runs"))
-)
+scheduled_runs = ScheduledRunsRepository(settings.scheduled_runs_path)
 scheduled_runner = ScheduledRunner(
-    Path(os.getenv("COPIA_SCHEDULES_PATH", data_root / "schedules.json")),
-    Path(os.getenv("COPIA_SCHEDULER_STATE_PATH", data_root / "scheduler-state.json")),
+    settings.schedules_path,
+    settings.scheduler_state_path,
     scheduled_runs,
     {"expense_summary": lambda job, start, end: _expense_summary_job(job, start, end)},
 )
@@ -159,13 +149,15 @@ approved_memory_mutations = approved_memory_cache.entries
 async def lifespan(_app: FastAPI):
     global conversation_store
     conversation_store = ConversationStore(data_root / "conversations.sqlite3")
-    scheduled_runner.start()
     try:
+        scheduled_runner.start()
         yield
     finally:
-        scheduled_runner.shutdown()
-        conversation_store.close()
-        shutdown_observability()
+        with ExitStack() as cleanup:
+            cleanup.callback(shutdown_observability)
+            cleanup.callback(conversation_store.close)
+            cleanup.callback(router.close)
+            cleanup.callback(scheduled_runner.shutdown)
 
 
 app = FastAPI(title="Copia API", version="0.1.0", lifespan=lifespan)

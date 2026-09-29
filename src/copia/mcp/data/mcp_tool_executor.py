@@ -1,10 +1,10 @@
 import asyncio
 import base64
 import binascii
-import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from copia.common.configuration import get_settings
 from copia.mcp.data.mcp_client import McpDiscoveryError
 from copia.mcp.domain.models.mcp_artifact import McpArtifact
 from copia.mcp.domain.models.mcp_call_result import McpCallResult
@@ -42,7 +42,7 @@ class McpToolExecutor:
                     arguments,
                     header_name=header_name,
                     header_value=header_value,
-                    allow_local=os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false",
+                    allow_local=get_settings().allow_local_mcp,
                 )
             )
         except McpDiscoveryError as error:

@@ -29,6 +29,14 @@ Set at least one provider key in `.env`. The API runs on `http://127.0.0.1:8000`
 
 Persistent data uses `~/.copia` by default. Set `COPIA_DATA_ROOT` to use a different data directory; existing per-store path overrides still take precedence.
 
+## Configuration
+
+Backend environment variables are parsed by typed settings at the configuration boundary. Set optional provider credentials as `OPENAI_API_KEY` and `GIGACHAT_AUTH_KEY`; `GIGACHAT_SCOPE` defaults to `GIGACHAT_API_PERS`.
+
+Storage paths can be overridden with `COPIA_PROFILES_PATH`, `COPIA_SESSIONS_PATH`, `COPIA_INVARIANTS_PATH`, `COPIA_MEMORY_PATH`, `COPIA_USER_PROFILES_PATH`, `COPIA_EXPENSES_PATH`, `COPIA_MCP_CONNECTIONS_PATH`, `COPIA_MCP_ARTIFACTS_PATH`, `COPIA_SCHEDULED_RUNS_PATH`, `COPIA_SCHEDULES_PATH`, and `COPIA_SCHEDULER_STATE_PATH`. Without overrides, stores use `COPIA_DATA_ROOT` and profiles use the repository's `profiles.json`.
+
+`COPIA_ALLOW_LOCAL_MCP` enables local MCP endpoints unless set to `false`. `COPIA_MCP_TRUSTED_ENDPOINT` opts in to the configured private Docker endpoint. OpenTelemetry is opt-in through `COPIA_OTEL_ENABLED`; HTTP body capture is separately opt-in through `COPIA_OTEL_CAPTURE_HTTP_BODIES`. `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` configure the exporter and service identity.
+
 ## Scheduled expense summaries
 
 Copy [`schedules.example.json`](schedules.example.json) to `~/.copia/schedules.json` and restart the API. The example runs a current-day expense summary every minute and a completed-week summary every Monday at midnight in `Asia/Omsk`. Calendar schedules use an IANA timezone, a `HH:MM` local time, and an optional `day_of_week` (`mon` through `sun`). Interval schedules use `minutes`. `report_period: {"type": "current_day", "timezone": "Asia/Omsk"}` makes every run cover local midnight through the actual execution time; without `report_period`, the report covers consecutive planned runs. Only enabled jobs run. The optional `name` appears in the summary screen; otherwise the job ID is shown. The accountant profile must have an MCP connection offering `search_expenses`.

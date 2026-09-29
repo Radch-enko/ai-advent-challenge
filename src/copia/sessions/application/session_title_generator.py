@@ -14,7 +14,7 @@ from copia.providers.domain.models.structured_output_config import StructuredOut
 from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.models.chat_session import ChatSession
-from copia.sessions.domain.services.context_strategy import render_invariants_context
+from copia.sessions.domain.services.context_rendering import render_invariants_context
 
 
 class SessionTitleGenerator:

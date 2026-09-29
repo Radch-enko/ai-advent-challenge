@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from copia.sessions.domain.models.chat_session import ChatSession
-from copia.sessions.domain.services.context_strategy import _render_user_profile_block
+from copia.sessions.domain.services.context_rendering import _render_user_profile_block
 from copia.user_profiles.data.user_profile_storage_error import UserProfileStorageError
 from copia.user_profiles.data.user_profiles_repository import JsonUserProfilesRepository
 from copia.user_profiles.domain.models.user_profile import UserProfile

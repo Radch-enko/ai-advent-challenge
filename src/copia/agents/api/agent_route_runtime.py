@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from copia.agents.domain.models.agent import Agent, AgentFactory
+from copia.agents.application.agent_runtime import Agent, AgentFactory
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
 from copia.providers.application.llm_router import LLMRouter

@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 

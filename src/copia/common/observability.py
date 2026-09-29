@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import replace
 from typing import Any
 
 from fastapi import FastAPI
 from opentelemetry import trace
 
+from copia.common.configuration import get_settings
 from copia.security.domain.services.credential_sanitizer import (
     is_sensitive_key,
     sanitize_text,
@@ -101,7 +101,7 @@ def emit_http_log(
 
 
 def http_body_capture_enabled() -> bool:
-    return os.getenv("COPIA_OTEL_CAPTURE_HTTP_BODIES", "false").lower() == "true"
+    return get_settings().capture_http_bodies
 
 
 class HttpBodyCaptureMiddleware:
@@ -265,7 +265,8 @@ class HttpBodyCaptureMiddleware:
 
 def _configure(app: FastAPI) -> None:
     global _provider, _logger_provider, _otel_logger
-    if os.getenv("COPIA_OTEL_ENABLED", "false").lower() != "true":
+    settings = get_settings()
+    if not settings.otel_enabled:
         return
     from opentelemetry._logs import get_logger, set_logger_provider
     from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -278,8 +279,8 @@ def _configure(app: FastAPI) -> None:
     from opentelemetry.sdk.trace import SpanLimits, TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    resource = Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "copia-backend")})
+    endpoint = settings.otel_exporter_endpoint
+    resource = Resource.create({"service.name": settings.otel_service_name})
     _provider = TracerProvider(
         resource=resource, span_limits=SpanLimits(max_attribute_length=MAX_BODY_BYTES)
     )

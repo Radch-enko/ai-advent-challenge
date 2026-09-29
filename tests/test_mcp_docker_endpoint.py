@@ -3,7 +3,7 @@ import socket
 
 import pytest
 
-from copia.mcp.data import mcp_client
+from copia.mcp.data import mcp_client, mcp_endpoint
 
 
 @pytest.mark.parametrize("address", ["172.20.0.3", "10.0.0.4", "192.168.1.8"])
@@ -18,7 +18,7 @@ def test_exact_configured_docker_mcp_endpoint_allows_private_ipv4(
         lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 8001))],
     )
 
-    validated = asyncio.run(mcp_client._validate_endpoint(endpoint))
+    validated = asyncio.run(mcp_endpoint._validate_endpoint(endpoint))
 
     assert validated.address == address
 
@@ -30,7 +30,7 @@ def test_docker_exception_does_not_allow_other_private_hosts(
 
     with pytest.raises(mcp_client.McpDiscoveryError):
         asyncio.run(
-            mcp_client._validate_endpoint("http://other-service:8001/mcp", allow_local=True)
+            mcp_endpoint._validate_endpoint("http://other-service:8001/mcp", allow_local=True)
         )
 
 
@@ -46,4 +46,4 @@ def test_docker_exception_rejects_metadata_addresses(monkeypatch: pytest.MonkeyP
     )
 
     with pytest.raises(mcp_client.McpDiscoveryError):
-        asyncio.run(mcp_client._validate_endpoint(endpoint))
+        asyncio.run(mcp_endpoint._validate_endpoint(endpoint))

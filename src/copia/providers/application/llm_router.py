@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
-from dotenv import load_dotenv
-
-from copia.providers.data.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
+from copia.providers.data.gigachat_provider import GigaChatProvider
+from copia.providers.data.llm import LLMProvider
 from copia.providers.data.model_catalog import context_window_for
+from copia.providers.data.openai_provider import OpenAIProvider
+from copia.providers.domain.errors import ProviderError
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.llm_stream_event import LLMStreamEvent
@@ -24,7 +25,6 @@ class LLMRouter:
         self,
         providers: dict[ProviderName, LLMProvider] | None = None,
     ) -> None:
-        load_dotenv()
         self._providers = providers or {
             ProviderName.OPENAI: OpenAIProvider(),
             ProviderName.GIGACHAT: GigaChatProvider(),
@@ -32,7 +32,7 @@ class LLMRouter:
 
     def complete(
         self,
-        messages: list[ChatMessage | ToolLoopMessage],
+        messages: Sequence[ChatMessage | ToolLoopMessage],
         config: LLMConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> LLMResponse:
@@ -41,9 +41,9 @@ class LLMRouter:
         except KeyError as error:
             raise ProviderError(f"Unsupported provider: {config.provider.value}") from error
         response = (
-            provider.complete(messages, config, tools)
+            provider.complete(list(messages), config, tools)
             if tools is not None
-            else provider.complete(messages, config)
+            else provider.complete(list(messages), config)
         )
         response.context_window = context_window_for(config.provider, config.model)
         return response
@@ -77,3 +77,7 @@ class LLMRouter:
             return models
         except KeyError as error:
             raise ProviderError(f"Unsupported provider: {provider_name.value}") from error
+
+    def close(self) -> None:
+        for provider in self._providers.values():
+            provider.close()

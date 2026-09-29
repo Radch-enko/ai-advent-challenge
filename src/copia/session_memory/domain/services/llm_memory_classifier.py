@@ -16,7 +16,7 @@ from copia.session_memory.domain.services.memory_classifier_prompt import (
     MEMORY_CLASSIFIER_SYSTEM_PROMPT,
 )
 from copia.sessions.domain.models.chat_message import ChatMessage
-from copia.sessions.domain.services.context_strategy import render_invariants_context
+from copia.sessions.domain.services.context_rendering import render_invariants_context
 
 
 class LLMMemoryClassifier:

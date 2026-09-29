@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from conversation_test_client import ConversationTestClient as TestClient
 
 from copia import service
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.invariants.domain.models.invariant import Invariant

@@ -6,7 +6,7 @@ from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.structured_output_config import StructuredOutputConfig
 from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.models.chat_session import ChatSession
-from copia.sessions.domain.services.context_strategy import render_invariants_context
+from copia.sessions.domain.services.context_rendering import render_invariants_context
 from copia.tasks.domain.models._planner_response import _PlannerResponse
 from copia.tasks.domain.models.task_validation_result import TaskValidationResult
 

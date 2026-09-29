@@ -229,7 +229,7 @@ def test_mcp_stream_completion_logs_sse_body_and_redacts_secret_fields(
     import httpx2
 
     import copia.common.observability as observability
-    from copia.mcp.data.mcp_client import _LimitedResponseStream
+    from copia.mcp.data.mcp_transport import _LimitedResponseStream
 
     class RecordingLogger:
         emitted: list[dict[str, object]]

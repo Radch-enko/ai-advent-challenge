@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
 from copia.providers.application.llm_router import LLMRouter

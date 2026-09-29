@@ -39,7 +39,7 @@ def test_runtime_context_is_rfc3339_and_replaces_previous_value() -> None:
 
 
 def test_agent_request_gets_runtime_context_without_persisting_it() -> None:
-    from copia.agents.domain.models.agent import Agent
+    from copia.agents.application.agent_runtime import Agent
 
     captured = []
 

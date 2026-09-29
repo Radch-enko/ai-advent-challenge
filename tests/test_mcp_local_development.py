@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.mcp.data import mcp_client
+from copia.mcp.data import mcp_client, mcp_endpoint
 from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
 from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
 
@@ -24,10 +24,10 @@ def test_loopback_http_requires_explicit_opt_in(monkeypatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", _loopback_resolution)
 
     with pytest.raises(mcp_client.McpDiscoveryError):
-        run(mcp_client._validate_endpoint("http://127.0.0.1:8001/mcp"))
+        run(mcp_endpoint._validate_endpoint("http://127.0.0.1:8001/mcp"))
 
     endpoint = run(
-        mcp_client._validate_endpoint(
+        mcp_endpoint._validate_endpoint(
             "http://127.0.0.1:8001/mcp",
             allow_local=True,
         )
@@ -39,7 +39,7 @@ def test_loopback_http_requires_explicit_opt_in(monkeypatch) -> None:
 @pytest.mark.parametrize("endpoint", ["http://10.0.0.1/mcp", "http://0.0.0.0:8001/mcp"])
 def test_local_opt_in_does_not_allow_private_or_wildcard_hosts(endpoint) -> None:
     with pytest.raises(mcp_client.McpDiscoveryError):
-        run(mcp_client._validate_endpoint(endpoint, allow_local=True))
+        run(mcp_endpoint._validate_endpoint(endpoint, allow_local=True))
 
 
 def test_localhost_must_resolve_only_to_loopback(monkeypatch) -> None:
@@ -53,7 +53,7 @@ def test_localhost_must_resolve_only_to_loopback(monkeypatch) -> None:
     )
 
     with pytest.raises(mcp_client.McpDiscoveryError, match="loopback"):
-        run(mcp_client._validate_endpoint("http://localhost:8001/mcp", allow_local=True))
+        run(mcp_endpoint._validate_endpoint("http://localhost:8001/mcp", allow_local=True))
 
 
 def test_api_allows_local_by_default_and_disables_only_for_exact_false(monkeypatch) -> None:

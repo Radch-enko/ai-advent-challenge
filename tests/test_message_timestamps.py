@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.sessions.data.sessions_repository import SessionsRepository

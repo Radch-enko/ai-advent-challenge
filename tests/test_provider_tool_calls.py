@@ -1,6 +1,7 @@
 import httpx
 
-from copia.providers.data.llm import GigaChatProvider, OpenAIProvider
+from copia.providers.data.gigachat_provider import GigaChatProvider
+from copia.providers.data.openai_provider import OpenAIProvider
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.provider_name import ProviderName
 from copia.providers.domain.models.tool_definition import ToolDefinition

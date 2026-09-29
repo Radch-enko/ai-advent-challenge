@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from copia.agents.domain.models.agent import (
+from copia.agents.application.agent_runtime import (
     Agent,
     AgentFactory,
     FactsUpdateFailed,

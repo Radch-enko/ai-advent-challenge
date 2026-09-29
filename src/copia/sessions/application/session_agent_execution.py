@@ -3,7 +3,7 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.session_memory.application.session_memory_access import SessionMemoryAccess
 from copia.sessions.data.sessions_repository import SessionsRepository

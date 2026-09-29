@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from mcp.shared.exceptions import MCPError
 
-from copia.mcp.data import mcp_client
+from copia.mcp.data import mcp_client, mcp_endpoint
 
 
 @pytest.mark.parametrize(
@@ -11,17 +11,17 @@ from copia.mcp.data import mcp_client
     [
         (
             MCPError(code=-32000, message="Invalid country code: Россия"),
-            mcp_client.MCP_PROTOCOL_ERROR,
+            mcp_endpoint.MCP_PROTOCOL_ERROR,
             "Invalid country code: Россия",
         ),
         (
             TimeoutError("timed out"),
-            mcp_client.MCP_TIMEOUT,
+            mcp_endpoint.MCP_TIMEOUT,
             "MCP server did not respond within the allowed time",
         ),
         (
             ValueError("Invalid response format"),
-            mcp_client.MCP_PROTOCOL_ERROR,
+            mcp_endpoint.MCP_PROTOCOL_ERROR,
             "Invalid response format",
         ),
     ],

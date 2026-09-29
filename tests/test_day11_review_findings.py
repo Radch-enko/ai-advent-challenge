@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.agents.domain.models.agent import Agent
+from copia.agents.application.agent_runtime import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem

@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from threading import RLock
 
+from copia.common.configuration import get_settings
 from copia.user_profiles.data.user_profile_name_conflict_error import UserProfileNameConflictError
 from copia.user_profiles.data.user_profile_storage_error import UserProfileStorageError
 from copia.user_profiles.domain.models.user_profile import UserProfile
@@ -13,9 +14,8 @@ from copia.user_profiles.domain.models.user_profile import UserProfile
 
 class JsonUserProfilesRepository:
     def __init__(self, path: Path | None = None) -> None:
-        configured = os.getenv("COPIA_USER_PROFILES_PATH")
-        data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
-        self._path = Path(configured) if configured else (path or data_root / "user_profiles.json")
+        settings = get_settings()
+        self._path = settings.user_profiles_path_override or path or settings.user_profiles_path
         self._path = self._path.expanduser()
         self._lock = RLock()
 

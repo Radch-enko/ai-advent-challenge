@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import HTTPException, status
 
+from copia.common.configuration import get_settings
 from copia.mcp.api.errors import MCP_ERROR_STATUS_CODES
 from copia.mcp.api.models.mcp_discovery_request import McpDiscoveryRequest
 from copia.mcp.data.mcp_client import McpDiscoveryError
@@ -39,7 +40,7 @@ def make_discover_connection(get_discoverer: Callable[[], DiscoverMcpTools]) -> 
                 connection.endpoint,
                 header_name=header_name,
                 header_value=header_value,
-                allow_local=os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false",
+                allow_local=get_settings().allow_local_mcp,
             )
         except McpDiscoveryError as error:
             raise HTTPException(
@@ -55,7 +56,7 @@ def make_discover_mcp(
 ) -> Callable[[McpDiscoveryRequest], Awaitable[McpDiscoveryResult]]:
     async def discover_mcp(request: McpDiscoveryRequest) -> McpDiscoveryResult:
         try:
-            allow_local = os.getenv("COPIA_ALLOW_LOCAL_MCP", "true").lower() != "false"
+            allow_local = get_settings().allow_local_mcp
             discoverer = get_discoverer()
             if request.header_name is None and request.header_value is None:
                 if allow_local:

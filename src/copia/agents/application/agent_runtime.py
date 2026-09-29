@@ -11,7 +11,8 @@ from copia.agents.domain.models.agent_config import AgentConfig
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
-from copia.providers.application.llm_router import LLMRouter, ProviderError
+from copia.providers.application.llm_router import LLMRouter
+from copia.providers.domain.errors import ProviderError
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.provider_trace import ProviderTrace
@@ -27,11 +28,9 @@ from copia.sessions.domain.models.context_strategy_name import ContextStrategyNa
 from copia.sessions.domain.models.conversation_context import ConversationContext
 from copia.sessions.domain.models.facts_update_event import FactsUpdateEvent
 from copia.sessions.domain.models.summarization_event import SummarizationEvent
+from copia.sessions.domain.services.context_rendering import render_invariants_context
 from copia.sessions.domain.services.context_strategy import FactsUpdateFailed as FactsUpdateFailed
-from copia.sessions.domain.services.context_strategy import (
-    context_strategy_for,
-    render_invariants_context,
-)
+from copia.sessions.domain.services.context_strategy import context_strategy_for
 from copia.user_profiles.domain.models.user_profile import UserProfile
 
 
@@ -127,7 +126,7 @@ class Agent:
         return [event.model_copy(deep=True) for event in self._memory_events]
 
     @property
-    def pending_memory(self):
+    def pending_memory(self) -> list[PendingMemorySuggestion]:
         return [item.model_copy(deep=True) for item in self._pending_memory]
 
     def set_invariants(self, invariants: list[Invariant]) -> None:

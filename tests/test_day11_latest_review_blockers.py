@@ -8,6 +8,7 @@ from copia.agents.domain.models.agent_config import AgentConfig
 from copia.providers.data.llm import ProviderError
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.service import app
+from copia.session_memory.data import working_memory_repository
 from copia.session_memory.data.pending_memory_repository import PendingMemoryRepository
 from copia.session_memory.data.working_memory_repository import WorkingMemoryRepository
 from copia.session_memory.domain.models.memory_candidate import MemoryCandidate
@@ -36,7 +37,7 @@ def test_automatic_save_rolls_back_both_files_when_second_replace_fails(monkeypa
     undo_path = tmp_path / "session" / "working_memory.undo.json"
     old_main = main_path.read_bytes()
     old_undo = undo_path.read_bytes()
-    original_replace = service.os.replace
+    original_replace = working_memory_repository.os.replace
     calls = 0
 
     def fail_second_replace(source, target):
