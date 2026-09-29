@@ -1,3 +1,4 @@
+from copia.common.domain.services.prompt_resources import load_prompt, render_prompt
 from copia.invariants.domain.models.invariant import Invariant
 from copia.tasks.domain.models.task_plan_step import TaskPlanStep
 from copia.tasks.domain.models.task_plan_step_status import TaskPlanStepStatus
@@ -10,6 +11,18 @@ TASK_REPORT_SECTIONS = (
     "### Ограничения",
 )
 TASK_REPORT_MAX_ATTEMPTS = 2
+TASK_ROLE_PROMPTS = {
+    role: load_prompt("copia.tasks", f"{role}_role.md")
+    for role in ("planner", "executor", "validator", "report_writer")
+}
+
+
+def report_correction_prompt() -> str:
+    return render_prompt(
+        "copia.tasks",
+        "report_correction.md",
+        headings=", ".join(TASK_REPORT_SECTIONS),
+    )
 
 
 def _task_plan_payload(task: TaskState) -> str:
@@ -18,11 +31,11 @@ def _task_plan_payload(task: TaskState) -> str:
         if task.plan_feedback
         else ""
     )
-    return (
-        "Create an actionable plan for the task below. Return only the structured output. "
-        "Use a small number of independent, sequential steps.\n\n"
-        f"Task:\n{task.original_instruction}"
-        f"{feedback}"
+    return render_prompt(
+        "copia.tasks",
+        "plan_payload.md",
+        task=task.original_instruction,
+        feedback=feedback,
     )
 
 
@@ -36,20 +49,21 @@ def _task_execution_payload(task: TaskState, step: TaskPlanStep) -> str:
     validation_feedback = ""
     if task.validation_result is not None and not task.validation_result.passed:
         issues = "\n".join(f"- {issue}" for issue in task.validation_result.issues)
-        validation_feedback = (
-            "\n\nValidation feedback from the previous attempt:\n"
-            f"{issues or '- Rework the result against every success criterion.'}\n"
-            "Use this feedback to improve the current step."
+        validation_feedback = "\n\n" + render_prompt(
+            "copia.tasks",
+            "validation_feedback.md",
+            issues=issues or load_prompt("copia.tasks", "validation_feedback_empty.md"),
         )
-    return (
-        "Execute exactly the current task step. Do not execute another step and do not change "
-        "the task stage. Return a concise result that can be checked later.\n\n"
-        f"Original task:\n{task.original_instruction}\n\n"
-        f"Current step ({step.order}): {step.title}\n"
-        f"Instruction: {step.instruction}\n"
-        f"Success criteria: {step.success_criteria}\n\n"
-        f"Previous completed results:\n{previous or 'None'}"
-        f"{validation_feedback}"
+    return render_prompt(
+        "copia.tasks",
+        "execution_payload.md",
+        task=task.original_instruction,
+        order=str(step.order),
+        title=step.title,
+        instruction=step.instruction,
+        success_criteria=step.success_criteria,
+        previous=previous or "None",
+        validation_feedback=validation_feedback,
     )
 
 
@@ -63,13 +77,12 @@ def _task_validation_payload(task: TaskState, invariants: list[Invariant]) -> st
     invariant_items = "\n".join(
         f"{item.id}: {item.name}\nConstraint: {item.text}" for item in invariants
     )
-    return (
-        "Validate the completed task against every success criterion and every invariant. "
-        "Return only structured output with passed, issues, checked_step_ids, "
-        "checked_invariant_ids, and invariant_issues. Add a concise explanation to "
-        "invariant_issues for each violated invariant.\n\n"
-        f"Original task:\n{task.original_instruction}\n\n{steps}"
-        f"\n\nInvariants to check:\n{invariant_items or 'None'}"
+    return render_prompt(
+        "copia.tasks",
+        "validation_payload.md",
+        task=task.original_instruction,
+        steps=steps,
+        invariants=invariant_items or "None",
     )
 
 
@@ -131,23 +144,13 @@ def _task_report_payload(task: TaskState) -> str:
     validation = task.validation_result
     checked = ", ".join(validation.checked_step_ids) if validation else "—"
     issues = "; ".join(validation.issues) if validation and validation.issues else "Нет"
-    return (
-        "Prepare the user-facing final answer using exactly the required Russian headings. "
-        "The answer must focus on the result for the original user request, not on the "
-        "internal task workflow. Do not describe planning, execution stages, validation "
-        "statuses, API logs, or subtask progress. Return plain text only; do not use JSON, "
-        "code fences, or add headings outside the template.\n\n"
-        "Required template:\n"
-        "## Итоговый ответ\n\n"
-        "[Direct answer to the user's request. Start with the result.]\n\n"
-        "### Детали\n\n"
-        "[Only important details needed to understand or use the answer.]\n\n"
-        "### Ограничения\n\n"
-        "[Only limitations that affect the answer, or Нет.]\n\n"
-        f"Original user request:\n{task.original_instruction}\n\n"
-        f"Internal execution results (use as context, do not reproduce the workflow):\n{steps}\n\n"
-        f"Internal validation context (do not expose statuses):\nChecked steps: {checked}\n"
-        f"Validation issues: {issues}"
+    return render_prompt(
+        "copia.tasks",
+        "report_payload.md",
+        task=task.original_instruction,
+        steps=steps,
+        checked=checked,
+        issues=issues,
     )
 
 

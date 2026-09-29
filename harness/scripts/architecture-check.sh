@@ -50,6 +50,10 @@ fail_matches "feature API must not import application composition" \
   '^[[:space:]]*(from[[:space:]]+copia[.]service[[:space:]]+import|from[[:space:]]+copia[[:space:]]+import[[:space:]]+service|import[[:space:]]+copia[.]service)' src/copia \
   -g '**/api/**/*.py'
 
+fail_matches "LLM instructions must be stored in Markdown prompt resources" \
+  "Classify whether the user's explicit information|Update persistent key-value facts from the latest user message|Update the compact summary of the conversation|Create an actionable plan for the task below|Execute exactly the current task step|Use this feedback to improve the current step|Validate the completed task against every success criterion|Prepare the user-facing final answer using exactly|You are the Copia task (planner|executor|validator)|You are the accountant producing a scheduled, one-way expense report" \
+  src/copia -g '*.py'
+
 fail_matches "tasks domain and application must use canonical task models" \
   'from[[:space:]]+[.]+domain[.]models[.]task[[:space:]]+import' src/copia/tasks \
   -g '**/domain/**/*.py' -g '**/application/**/*.py'

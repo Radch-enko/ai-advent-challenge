@@ -4,6 +4,7 @@ import json
 import time
 
 from copia.agents.domain.models.agent_config import AgentConfig
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.domain.models.llm_config import LLMConfig
@@ -54,20 +55,11 @@ class LLMMemoryClassifier:
                 "working_memory": [item.model_dump(mode="json") for item in working_memory],
                 "previous_assistant": previous_assistant,
             }
-            messages = [
-                ChatMessage(
-                    role="system",
-                    content="\n\n".join(
-                        part
-                        for part in (
-                            MEMORY_CLASSIFIER_SYSTEM_PROMPT,
-                            render_invariants_context(self._invariants),
-                        )
-                        if part
-                    ),
-                ),
-                ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-            ]
+            messages = LLMContextBuilder.build(
+                system_prompt=MEMORY_CLASSIFIER_SYSTEM_PROMPT,
+                invariants=render_invariants_context(self._invariants),
+                history=[ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
+            )
             config = LLMConfig(
                 provider=self._config.provider,
                 model=self._config.model,

@@ -52,3 +52,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "copia.providers.data" = ["model_context_windows.json"]
+"copia.common" = ["prompts/*.md"]
+"copia.sessions" = ["prompts/*.md"]
+"copia.session_memory" = ["prompts/*.md"]
+"copia.tasks" = ["prompts/*.md"]
+"copia.scheduled_jobs" = ["prompts/*.md"]

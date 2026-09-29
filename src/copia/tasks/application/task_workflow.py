@@ -141,7 +141,7 @@ class TaskWorkflow:
             stage=TaskStage.PLANNING,
             kind="task_planning",
             step_id=None,
-            messages=runtime.system_messages(session, "You are the Copia task planner.")
+            messages=runtime.system_messages(session, task_text.TASK_ROLE_PROMPTS["planner"])
             + [runtime.prompt_message(task_text._task_plan_payload(task))],
             config=config,
         )
@@ -202,7 +202,7 @@ class TaskWorkflow:
             stage=TaskStage.EXECUTION,
             kind="task_execution_step",
             step_id=step.id,
-            messages=runtime.system_messages(session, "You are the Copia task executor.")
+            messages=runtime.system_messages(session, task_text.TASK_ROLE_PROMPTS["executor"])
             + [runtime.prompt_message(task_text._task_execution_payload(task, step))],
             config=config,
         )
@@ -253,7 +253,7 @@ class TaskWorkflow:
             step_id=None,
             messages=runtime.system_messages(
                 session,
-                "You are the Copia task validator.",
+                task_text.TASK_ROLE_PROMPTS["validator"],
                 invariants=invariants,
             )
             + [runtime.prompt_message(task_text._task_validation_payload(task, invariants))],
@@ -283,14 +283,7 @@ class TaskWorkflow:
         for attempt in range(task_text.TASK_REPORT_MAX_ATTEMPTS):
             report_payload = task_text._task_report_payload(task)
             if attempt > 0:
-                report_payload += (
-                    "\n\nThis is a format correction attempt. The previous report was rejected "
-                    "because its headings did not exactly match the required template. "
-                    "Return exactly these three headings and no other Markdown headings: "
-                    + ", ".join(task_text.TASK_REPORT_SECTIONS)
-                    + ". Preserve the useful answer content, but do not add any heading "
-                    "starting with # outside those three headings."
-                )
+                report_payload += "\n\n" + task_text.report_correction_prompt()
             response = await self.complete_call(
                 session_id,
                 task_id,
@@ -298,7 +291,7 @@ class TaskWorkflow:
                 kind="task_report",
                 step_id=None,
                 messages=runtime.system_messages(
-                    session, "You are the Copia completion report writer."
+                    session, task_text.TASK_ROLE_PROMPTS["report_writer"]
                 )
                 + [runtime.prompt_message(report_payload)],
                 config=config,

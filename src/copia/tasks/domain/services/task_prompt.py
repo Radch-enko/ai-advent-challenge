@@ -1,5 +1,6 @@
 from collections.abc import Callable
 
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.structured_output_config import StructuredOutputConfig
@@ -20,16 +21,14 @@ def system_messages(
     invariants: list[Invariant] | None,
     load_invariants: Callable[[], list[Invariant]],
 ) -> list[ChatMessage]:
-    messages: list[ChatMessage] = []
-    if session.config.system_prompt:
-        messages.append(ChatMessage(role="system", content=session.config.system_prompt))
     invariant_context = render_invariants_context(
         invariants if invariants is not None else load_invariants()
     )
-    if invariant_context:
-        messages.append(ChatMessage(role="system", content=invariant_context))
-    messages.append(ChatMessage(role="system", content=role_prompt))
-    return messages
+    return LLMContextBuilder.build(
+        system_prompt=session.config.system_prompt,
+        invariants=invariant_context,
+        role_prompt=role_prompt,
+    )
 
 
 def task_llm_config(

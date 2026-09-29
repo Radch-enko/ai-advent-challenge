@@ -3,14 +3,12 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from copia.common.domain.services.prompt_resources import render_prompt
 from copia.providers.domain.models.tool_loop_message import ToolLoopMessage
 from copia.sessions.domain.models.chat_message import ChatMessage
 
-_CONTEXT_START = "<current_datetime_context>"
-_CONTEXT_END = "</current_datetime_context>"
 _CONTEXT_PATTERN = re.compile(
-    rf"\n*{re.escape(_CONTEXT_START)}.*?{re.escape(_CONTEXT_END)}",
-    re.DOTALL,
+    r"\n*<current_datetime_context>.*?</current_datetime_context>", re.DOTALL
 )
 
 
@@ -20,12 +18,12 @@ def render_current_datetime_context(value: datetime | None = None) -> str:
         raise ValueError("Current datetime must include timezone information")
     offset = current.strftime("%z")
     formatted_offset = f"{offset[:3]}:{offset[3:]}"
-    return (
-        f"{_CONTEXT_START}\n"
-        f"Local datetime: {current.isoformat(timespec='seconds')}\n"
-        f"Timezone: {current.tzname() or formatted_offset}\n"
-        f"UTC offset: {formatted_offset}\n"
-        f"{_CONTEXT_END}"
+    return render_prompt(
+        "copia.common",
+        "current_datetime_context.md",
+        local_datetime=current.isoformat(timespec="seconds"),
+        timezone=current.tzname() or formatted_offset,
+        utc_offset=formatted_offset,
     )
 
 

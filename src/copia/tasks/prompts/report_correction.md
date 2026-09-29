@@ -1,0 +1,1 @@
+This is a format correction attempt. The previous report was rejected because its headings did not exactly match the required template. Return exactly these three headings and no other Markdown headings: {{headings}}. Preserve the useful answer content, but do not add any heading starting with # outside those three headings.

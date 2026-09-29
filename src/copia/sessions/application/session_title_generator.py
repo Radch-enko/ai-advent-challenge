@@ -3,6 +3,8 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import Any
 
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
+from copia.common.domain.services.prompt_resources import render_prompt
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.data.llm import ProviderError
@@ -62,17 +64,14 @@ class SessionTitleGenerator:
         source = session.messages[:2]
         title_request = ChatMessage(
             role="user",
-            content=(
-                "Create a concise Russian title for this chat, between 2 and 6 words. "
-                "Describe the topic only.\n\n"
-                f"User: {source[0].content}\nAssistant: {source[1].content}"
+            content=render_prompt(
+                "copia.sessions",
+                "title_request.md",
+                user=source[0].content,
+                assistant=source[1].content,
             ),
         )
-        messages = (
-            [ChatMessage(role="system", content=invariant_context)] if invariant_context else []
-        )
-        messages.append(title_request)
-        return messages
+        return LLMContextBuilder.build(invariants=invariant_context, history=[title_request])
 
     @staticmethod
     def _title_config(session: ChatSession) -> LLMConfig:

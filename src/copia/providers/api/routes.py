@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, status
 
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.providers.api.models.completion_request import CompletionRequest
 from copia.providers.api.provider_route_runtime import ProviderRouteRuntime
 from copia.providers.application.collect_streamed_response import collect_streamed_response
@@ -12,7 +13,6 @@ from copia.providers.domain.models.provider_capabilities import ProviderCapabili
 from copia.providers.domain.models.provider_model import ProviderModel
 from copia.providers.domain.models.provider_name import ProviderName
 from copia.sessions.api.models.message_response import MessageResponse
-from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.services.context_strategy import render_invariants_context
 
 
@@ -41,16 +41,15 @@ class ProviderRoutes:
         emit: Callable[[str, dict], None],
     ) -> MessageResponse:
         runtime = self._get_runtime()
-        messages = list(request.messages)
         try:
             invariant_context = render_invariants_context(runtime.invariants.load())
         except (OSError, ValueError) as error:
             raise runtime.memory_storage_error() from error
-        system_content = "\n\n".join(
-            part for part in (request.config.system_prompt, invariant_context) if part
+        messages = LLMContextBuilder.build(
+            history=request.messages,
+            system_prompt=request.config.system_prompt,
+            invariants=invariant_context,
         )
-        if system_content:
-            messages.insert(0, ChatMessage(role="system", content=system_content))
         try:
             response = await runtime.threadpool(
                 collect_streamed_response,

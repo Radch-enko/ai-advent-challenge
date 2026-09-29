@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from copia.agents.domain.models.agent_config import AgentConfig
-from copia.common.domain.services.runtime_context import with_current_datetime_context
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
 from copia.providers.application.llm_router import LLMRouter, ProviderError
@@ -285,20 +285,13 @@ class Agent:
         started_at = time.perf_counter()
         try:
             response = self._router.complete(
-                [
-                    ChatMessage(
-                        role="system",
-                        content="\n\n".join(
-                            part
-                            for part in (
-                                config.system_prompt,
-                                render_invariants_context(self._invariants),
-                            )
-                            if part
-                        ),
-                    ),
-                    ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-                ],
+                LLMContextBuilder.build(
+                    system_prompt=config.system_prompt,
+                    invariants=render_invariants_context(self._invariants),
+                    history=[
+                        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False))
+                    ],
+                ),
                 config,
             )
             summary = response.content.strip()
@@ -347,18 +340,24 @@ class Agent:
     def _messages_for_request(self) -> list[ChatMessage]:
         messages = self._strategy.messages_for_request(self._history, self._context)
         invariant_context = render_invariants_context(self._invariants)
-        if not invariant_context or any(
-            message.role == "system" and invariant_context in message.content
-            for message in messages
-        ):
-            return list(with_current_datetime_context(messages))
-        if messages and messages[0].role == "system":
-            messages[0] = messages[0].model_copy(
-                update={"content": f"{messages[0].content}\n\n{invariant_context}"}
-            )
-        else:
-            messages.insert(0, ChatMessage(role="system", content=invariant_context))
-        return list(with_current_datetime_context(messages))
+        system_index = next(
+            (index for index, message in enumerate(messages) if message.role == "system"), None
+        )
+        existing_system = messages[system_index].content if system_index is not None else None
+        history = list(messages)
+        if system_index is not None:
+            history.pop(system_index)
+        return LLMContextBuilder.build(
+            system_prompt=existing_system,
+            invariants=(
+                invariant_context
+                if invariant_context
+                and (existing_system is None or invariant_context not in existing_system)
+                else None
+            ),
+            current_time=datetime.now().astimezone(),
+            history=history,
+        )
 
     def _append_response(self, response: LLMResponse, duration_seconds: float) -> None:
         self._history.append(
