@@ -1,4 +1,4 @@
-import { TaskLlmCall, TaskPlanStep, TaskState } from '../../domain/models/task'
+import { TaskLlmCall, TaskPlanStep, TaskState } from '../../../domain/models/task'
 
 const stages = [
   ['planning', 'Планирование'],

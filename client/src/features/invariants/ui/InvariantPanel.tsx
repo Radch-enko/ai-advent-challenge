@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { Invariant, InvariantInput } from '../../domain/models/invariant'
+import { Invariant, InvariantInput } from '../../../domain/models/invariant'
 
 type Props = {
   items: Invariant[]

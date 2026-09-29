@@ -1,8 +1,6 @@
-import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { getLatestScheduledSummary, getScheduledJobStatuses } from '../../data/api/copiaApi'
-import { ScheduledJobStatus, ScheduledSummary } from '../../domain/models/scheduled'
+import { useScheduledSummaries } from '../application/useScheduledSummaries'
 
 function timeRemaining(nextRunAt: string | null, now: number): string {
   if (!nextRunAt || now === 0) return '—'
@@ -17,45 +15,7 @@ function timeRemaining(nextRunAt: string | null, now: number): string {
 }
 
 export function SummariesScreen() {
-  const [summary, setSummary] = useState<ScheduledSummary | null>(null)
-  const [jobs, setJobs] = useState<ScheduledJobStatus[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [now, setNow] = useState(0)
-  useEffect(() => {
-    let active = true
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined
-    const clockTimer = setInterval(() => setNow(Date.now()), 1000)
-    async function refresh() {
-      try {
-        const [latest, statuses] = await Promise.all([
-          getLatestScheduledSummary(),
-          getScheduledJobStatuses(),
-        ])
-        if (active) {
-          setSummary(latest)
-          setJobs(statuses)
-          setError(null)
-        }
-      } catch (reason) {
-        if (active) {
-          setError(reason instanceof Error ? reason.message : 'Не удалось загрузить сводку')
-        }
-      } finally {
-        if (active) {
-          setLoading(false)
-          refreshTimer = setTimeout(() => void refresh(), 2000)
-        }
-      }
-    }
-    void refresh()
-    return () => {
-      active = false
-      clearInterval(clockTimer)
-      clearTimeout(refreshTimer)
-    }
-  }, [])
-
+  const { summary, jobs, loading, error, now } = useScheduledSummaries()
   const publishedRun = summary?.published_run
 
   return (

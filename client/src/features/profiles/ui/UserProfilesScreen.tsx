@@ -1,10 +1,9 @@
 import { FormEvent, ReactNode, useState } from 'react'
 import {
-  ApiRequestError,
-  createUserProfile,
-  deleteUserProfile,
-  updateUserProfile,
-} from '../../data/api/copiaApi'
+  removeUserProfile,
+  saveUserProfile,
+  UserProfileMutationError,
+} from '../application/profileMutations'
 import {
   UserProfile,
   UserProfileInput,
@@ -12,7 +11,7 @@ import {
   UserProfileResponseFormat,
   UserProfileTone,
   UserProfileVerbosity,
-} from '../../domain/models/userProfile'
+} from '../../../domain/models/userProfile'
 
 const empty: UserProfileInput = {
   name: '',
@@ -155,8 +154,7 @@ export function UserProfilesScreen({
     setSaving(true)
     setFormError(null)
     try {
-      if (editing) await updateUserProfile(editing.id, form)
-      else await createUserProfile(form)
+      await saveUserProfile(editing?.id ?? null, form)
     } catch (caught) {
       setFormError(caught instanceof Error ? caught.message : 'Could not save profile')
       setSaving(false)
@@ -193,7 +191,7 @@ export function UserProfilesScreen({
     setDeletingId(profile.id)
     setDeleteNotice(null)
     try {
-      await deleteUserProfile(profile.id)
+      await removeUserProfile(profile.id)
       setDeleteNotice({ kind: 'deleted', message: `Профиль «${profile.name}» удален.` })
       setDeleteConfirmationId(null)
       setRefreshError(null)
@@ -204,7 +202,7 @@ export function UserProfilesScreen({
         setRefreshError('Профиль удален, но список не удалось обновить.')
       }
     } catch (caught) {
-      const code = caught instanceof ApiRequestError ? caught.errorCode : undefined
+      const code = caught instanceof UserProfileMutationError ? caught.code : undefined
       setDeleteNotice(
         code === 'user_profile_in_use'
           ? {

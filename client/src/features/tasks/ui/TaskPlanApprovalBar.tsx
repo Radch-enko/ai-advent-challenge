@@ -1,4 +1,4 @@
-import { TaskState } from '../../domain/models/task'
+import { TaskState } from '../../../domain/models/task'
 
 type Props = {
   task: TaskState

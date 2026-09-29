@@ -1,0 +1,37 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  font-family: 'Source Sans 3', ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+
+  --color-canvas: #101014;
+  --color-surface: #16161c;
+  --color-surface-raised: #1c1c24;
+  --color-surface-inset: #181820;
+  --color-surface-accent: #28243d;
+  --color-text-primary: #f3f3f6;
+  --color-text-secondary: #afafb9;
+  --color-text-muted: #858592;
+  --color-text-on-accent: #fff;
+  --color-button-label: #101014;
+  --color-border: #2a2a36;
+  --color-border-strong: #343440;
+  --color-accent: #7b6ef6;
+  --color-accent-hover: #8b80ff;
+  --color-accent-soft: #28243d;
+  --color-accent-text: #c8c2ff;
+  --color-success: #10b981;
+  --color-danger: #fb7185;
+  --color-warning: #f5b942;
+  --color-focus-ring: #b4aaff;
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-dialog: 14px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+}

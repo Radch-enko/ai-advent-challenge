@@ -4,7 +4,7 @@ import {
   MemoryEvent,
   PendingMemorySuggestion,
   WorkingMemoryItem,
-} from '../../domain/models/memory'
+} from '../../../domain/models/memory'
 
 type MemoryValue = Pick<LongTermMemoryItem, 'category' | 'key' | 'value'>
 

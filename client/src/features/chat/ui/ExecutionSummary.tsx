@@ -1,5 +1,5 @@
-import { ChatMessage } from '../../domain/models/chat'
-import type { MemoryEvent } from '../../domain/models/memory'
+import { ChatMessage } from '../../../domain/models/chat'
+import type { MemoryEvent } from '../../../domain/models/memory'
 
 type Props = Pick<
   ChatMessage,

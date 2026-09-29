@@ -32,6 +32,8 @@ export type MemoryEvent = {
   duration_seconds?: number | null
   trace?: ProviderTrace | null
 }
+
+export type MemoryMutationResponse = LongTermMemoryItem & { memory_events: MemoryEvent[] }
 export type PendingMemorySuggestion = {
   id: string
   candidate: {
