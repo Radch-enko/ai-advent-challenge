@@ -130,7 +130,7 @@ class SessionSettingsRoutes:
                 id=str(uuid.uuid4()),
                 config=source.config.model_copy(deep=True),
                 messages=[
-                    message.model_copy(update={"agent_log_id": None})
+                    message.model_copy(deep=True)
                     for message in source.messages[: request.message_index + 1]
                 ],
                 title=f"{source.title or 'Новый чат'} · ветка",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import time
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_operation
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.invariants.domain.models.invariant import Invariant
 from copia.providers.application.llm_router import LLMRouter
@@ -125,12 +124,7 @@ class LLMMemoryClassifier:
             }
             self.last_request_body = request_body
             stage = "provider request"
-            with agent_log_operation(
-                "memory_classification",
-                provider=config.provider,
-                model=config.model,
-            ):
-                response = self._router.complete(messages, config)
+            response = self._router.complete(messages, config)
             self.last_trace = response.trace or ProviderTrace(
                 status_code=200,
                 request_body=request_body,

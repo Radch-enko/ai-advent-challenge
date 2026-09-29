@@ -15,7 +15,7 @@ from copia.sessions.domain.models.summarization_event import SummarizationEvent
 
 def make_session_message_response(
     response: LLMResponse,
-    agent_log_id: str,
+    duration_seconds: float,
     *,
     summarization_events: list[SummarizationEvent] | None = None,
     facts_events: list[FactsUpdateEvent] | None = None,
@@ -26,7 +26,7 @@ def make_session_message_response(
 ) -> SessionMessageResponse:
     return SessionMessageResponse(
         response=SessionLLMResponse.from_response(response),
-        agent_log_id=agent_log_id,
+        duration_seconds=duration_seconds,
         summarization_events=safe_summarization_events(summarization_events or []),
         facts_events=safe_facts_events(facts_events or []),
         facts=facts or {},

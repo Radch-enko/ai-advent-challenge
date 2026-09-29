@@ -22,7 +22,9 @@ from copia.scheduled_jobs.domain.models.scheduled_run import ScheduledRun
 from copia.security.domain.services.credential_sanitizer import sanitize_error
 
 logger = logging.getLogger("copia.scheduled_jobs.application.scheduled_runner")
-JobHandler = Callable[[ScheduledJob, datetime, datetime], tuple[str, str]]
+JobHandler = Callable[
+    [ScheduledJob, datetime, datetime], tuple[str, object, str, dict[str, int] | None]
+]
 
 
 class ScheduledRunner:
@@ -184,9 +186,15 @@ class ScheduledRunner:
             )
             self.runs.save(run)
         try:
-            answer, agent_log_id = self.handlers[job.kind](job, period_from, period_to)
+            answer, provider, model, usage = self.handlers[job.kind](job, period_from, period_to)
             run = run.model_copy(
-                update={"status": "completed", "answer": answer, "agent_log_id": agent_log_id}
+                update={
+                    "status": "completed",
+                    "answer": answer,
+                    "provider": provider,
+                    "model": model,
+                    "usage": usage,
+                }
             )
         except Exception as error:
             logger.exception("Scheduled job %s failed", job.id)
@@ -194,7 +202,6 @@ class ScheduledRunner:
                 update={
                     "status": "failed",
                     "error": sanitize_error(str(error))[:1000],
-                    "agent_log_id": getattr(error, "agent_log_id", None),
                 }
             )
         run = run.model_copy(update={"finished_at": self.now()})

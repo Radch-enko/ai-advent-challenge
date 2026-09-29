@@ -20,7 +20,6 @@ def test_service_storage_uses_temporary_data_root() -> None:
         service.scheduled_runs.root,
         service.scheduled_runner.config_path,
         service.scheduled_runner.state_path,
-        service.agent_log_store._repository._root,
     )
 
     assert root.is_dir()

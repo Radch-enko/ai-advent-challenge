@@ -9,12 +9,7 @@ from typing import Any
 
 import httpx
 
-from copia.agent_logs.domain.contracts.agent_log_sink import AgentLogSink
-from copia.providers.data.http_logging import (
-    install_http_logging,
-    record_response,
-    record_transport_error,
-)
+from copia.providers.data.http_logging import record_response
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.provider_capabilities import ProviderCapabilities
@@ -169,13 +164,9 @@ class OpenAIProvider(LLMProvider):
         self,
         api_key: str | None = None,
         client: httpx.Client | None = None,
-        log_store: AgentLogSink | None = None,
     ) -> None:
         self._api_key = api_key or os.getenv("OPENAI_API_KEY")
         self._client = client or httpx.Client(timeout=60.0)
-        self._log_store = log_store
-        if log_store is not None:
-            install_http_logging(self._client, log_store)
 
     @staticmethod
     def _supports_sampling(model: str) -> bool:
@@ -257,8 +248,6 @@ class OpenAIProvider(LLMProvider):
             content = message.get("content") or ""
             tool_calls = _openai_tool_calls(message.get("tool_calls"))
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
-            if response is None and self._log_store is not None:
-                record_transport_error(self._log_store, http_request, error)
             body: Any = None
             if response is not None:
                 try:
@@ -272,8 +261,8 @@ class OpenAIProvider(LLMProvider):
                 response_body=body,
             ) from error
         finally:
-            if response is not None and self._log_store is not None:
-                record_response(self._log_store, response)
+            if response is not None:
+                record_response(response)
 
         usage = None
         raw_usage = data.get("usage")
@@ -315,12 +304,10 @@ class OpenAIProvider(LLMProvider):
             response.raise_for_status()
             return [ProviderModel(id=model["id"]) for model in response.json()["data"]]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-            if response is None and self._log_store is not None:
-                record_transport_error(self._log_store, request, error)
             raise ProviderError(f"OpenAI models request failed: {error}") from error
         finally:
-            if response is not None and self._log_store is not None:
-                record_response(self._log_store, response)
+            if response is not None:
+                record_response(response)
 
 
 class GigaChatProvider(LLMProvider):
@@ -338,14 +325,10 @@ class GigaChatProvider(LLMProvider):
         auth_key: str | None = None,
         scope: str | None = None,
         client: httpx.Client | None = None,
-        log_store: AgentLogSink | None = None,
     ) -> None:
         self._auth_key = auth_key or os.getenv("GIGACHAT_AUTH_KEY")
         self._scope = scope or os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
         self._client = client or httpx.Client(timeout=60.0)
-        self._log_store = log_store
-        if log_store is not None:
-            install_http_logging(self._client, log_store)
         self._access_token: str | None = None
         self._token_expires_at = 0.0
 
@@ -372,12 +355,10 @@ class GigaChatProvider(LLMProvider):
             data = response.json()
             token = data["access_token"]
         except (httpx.HTTPError, KeyError, ValueError) as error:
-            if response is None and self._log_store is not None:
-                record_transport_error(self._log_store, request, error)
             raise ProviderError(f"GigaChat authentication failed: {error}") from error
         finally:
-            if response is not None and self._log_store is not None:
-                record_response(self._log_store, response)
+            if response is not None:
+                record_response(response)
 
         expires_at = data.get("expires_at")
         if isinstance(expires_at, (int, float)):
@@ -438,8 +419,6 @@ class GigaChatProvider(LLMProvider):
             content = message.get("content") or ""
             tool_calls = _gigachat_tool_calls(message.get("function_call"))
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
-            if response is None and self._log_store is not None:
-                record_transport_error(self._log_store, http_request, error)
             body: Any = None
             if response is not None:
                 try:
@@ -453,8 +432,8 @@ class GigaChatProvider(LLMProvider):
                 response_body=body,
             ) from error
         finally:
-            if response is not None and self._log_store is not None:
-                record_response(self._log_store, response)
+            if response is not None:
+                record_response(response)
 
         raw_usage = data.get("usage")
         usage = None
@@ -490,9 +469,7 @@ class GigaChatProvider(LLMProvider):
             data = response.json().get("data", [])
             return [ProviderModel(id=item["id"]) for item in data if item.get("type") == "chat"]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-            if response is None and self._log_store is not None:
-                record_transport_error(self._log_store, request, error)
             raise ProviderError(f"GigaChat models request failed: {error}") from error
         finally:
-            if response is not None and self._log_store is not None:
-                record_response(self._log_store, response)
+            if response is not None:
+                record_response(response)

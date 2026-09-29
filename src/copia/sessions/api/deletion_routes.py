@@ -16,7 +16,6 @@ class SessionDeletionRoutes:
     def __init__(
         self,
         get_repository: Callable[[], SessionsRepository],
-        delete_agent_logs: Callable[[str], None],
         delete_working_memory: Callable[[str], None],
         delete_pending_memory: Callable[[str], None],
         get_pending_cache: Callable[[], MutableMapping[str, Any]],
@@ -26,7 +25,6 @@ class SessionDeletionRoutes:
         get_lifecycle_lock: Callable[[], AbstractContextManager[Any]],
     ) -> None:
         self._get_repository = get_repository
-        self._delete_agent_logs = delete_agent_logs
         self._delete_working_memory = delete_working_memory
         self._delete_pending_memory = delete_pending_memory
         self._get_pending_cache = get_pending_cache
@@ -46,7 +44,6 @@ class SessionDeletionRoutes:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session"
                     )
-                self._delete_agent_logs(session_id)
                 self._delete_working_memory(session_id)
                 self._delete_pending_memory(session_id)
                 self._get_pending_cache().pop(session_id, None)

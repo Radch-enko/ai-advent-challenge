@@ -28,7 +28,6 @@ class SessionServiceComposition:
                 Agent=lambda: service.Agent,
                 LLMMemoryClassifier=lambda: service.LLMMemoryClassifier,
                 _ask_agent=lambda: service._ask_agent,
-                _finish_agent_log=lambda: service._finish_agent_log,
                 _get_session=lambda: service._get_session,
                 _get_session_locked=lambda: service._get_session_locked,
                 _load_user_profile_for_turn=lambda: service._load_user_profile_for_turn,
@@ -39,12 +38,10 @@ class SessionServiceComposition:
                 _safe_facts_events=lambda: service._safe_facts_events,
                 _safe_summarization_events=lambda: service._safe_summarization_events,
                 _save_agent_state=lambda: service._save_agent_state,
-                _session_failure_trace=lambda: service._session_failure_trace,
                 _session_initialization_error=lambda: service._session_initialization_error,
                 _session_message_lock=lambda: service._session_message_lock,
                 _session_message_response=lambda: service._session_message_response,
                 _session_mutation_lock=lambda: service._session_mutation_lock,
-                agent_log_store=lambda: service.agent_log_store,
                 approved_memory_mutations=lambda: service.approved_memory_mutations,
                 factory=lambda: service.factory,
                 generate_session_title=lambda: service.generate_session_title,
@@ -70,13 +67,12 @@ class SessionServiceComposition:
         self._bindings = bindings
 
     def message_errors(self) -> SessionMessageErrors:
-        return SessionMessageErrors(lambda: self._bindings._finish_agent_log())
+        return SessionMessageErrors()
 
     def turn_profile_loader(self) -> TurnProfileLoader:
         service = self._bindings
         return TurnProfileLoader(
             lambda: service.user_profiles(),
-            lambda: service.agent_log_store(),
             lambda: service.run_in_threadpool(),
             lambda: service._session_initialization_error(),
         )
@@ -124,7 +120,6 @@ class SessionServiceComposition:
             release_lock=service._release_session_message_lock(),
             threadpool=service.run_in_threadpool(),
             sessions=service.sessions(),
-            agent_logs=service.agent_log_store(),
             memory_access=service.session_memory_access(),
             invariants=service.invariants_repository(),
             llm_router=service.router(),
@@ -138,10 +133,8 @@ class SessionServiceComposition:
             ask_agent=service._ask_agent(),
             retry_agent=service._retry_agent(),
             save_agent=service._save_agent_state(),
-            finish_log=service._finish_agent_log(),
             safe_facts=service._safe_facts_events(),
             safe_summary=service._safe_summarization_events(),
-            failure_trace=service._session_failure_trace(),
             make_response=service._session_message_response(),
             generate_title=service.generate_session_title(),
         )
@@ -153,7 +146,6 @@ class SessionServiceComposition:
         service = self._bindings
         return SessionDeletionRoutes(
             lambda: service.sessions(),
-            lambda session_id: service.agent_log_store().delete_session(session_id),
             lambda session_id: service.working_memory().delete(session_id),
             lambda session_id: service.pending_memory_repository().delete(session_id),
             lambda: service.pending_memory(),

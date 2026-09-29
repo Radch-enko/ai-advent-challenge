@@ -19,9 +19,7 @@ class ScheduledSummaryServiceComposition:
             ScheduledSummaryServiceBindings(
                 Agent=lambda: service.Agent,
                 _execute_resolved_tool=lambda: service._execute_resolved_tool,
-                _finish_agent_log=lambda: service._finish_agent_log,
                 _resolved_mcp_tools=lambda: service._resolved_mcp_tools,
-                agent_log_store=lambda: service.agent_log_store,
                 profiles_path=lambda: service.profiles_path,
                 router=lambda: service.router,
             )
@@ -38,8 +36,6 @@ class ScheduledSummaryServiceComposition:
             resolve_tools=service._resolved_mcp_tools(),
             execute_tool=service._execute_resolved_tool(),
             router=service.router(),
-            agent_logs=service.agent_log_store(),
             make_agent=service.Agent(),
-            finish_log=service._finish_agent_log(),
             sanitize_error=sanitize_error,
         )

@@ -27,7 +27,6 @@ class TaskServiceComposition:
         return cls(
             TaskServiceBindings(
                 _execute_resolved_tool=lambda: service._execute_resolved_tool,
-                _finish_agent_log=lambda: service._finish_agent_log,
                 _get_session=lambda: service._get_session,
                 _get_session_locked=lambda: service._get_session_locked,
                 _recover_orphaned_task=lambda: service._recover_orphaned_task,
@@ -42,7 +41,6 @@ class TaskServiceComposition:
                 _task_plan_schema=lambda: service._task_plan_schema,
                 _task_system_messages=lambda: service._task_system_messages,
                 _task_validation_schema=lambda: service._task_validation_schema,
-                agent_log_store=lambda: service.agent_log_store,
                 invariants_repository=lambda: service.invariants_repository,
                 router=lambda: service.router,
                 run_in_threadpool=lambda: service.run_in_threadpool,
@@ -62,7 +60,6 @@ class TaskServiceComposition:
         self.state_access = TaskStateAccess(
             lambda: service.sessions(),
             lambda: service.session_lifecycle_lock(),
-            lambda: service.agent_log_store(),
             lambda session, task_id: service._session_task()(session, task_id),
             lambda: service._task_checkpoint(),
             lambda: HTTPException(status_code=404, detail="Unknown task"),
@@ -118,14 +115,20 @@ class TaskServiceComposition:
     def call_finish(
         self,
         session_id: str,
-        agent_log_id: str,
+        call_id: str,
         *,
         task_id: str,
         status_value: TaskLlmCallStatus,
         error: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> ChatSession:
         return self.state_access.call_finish(
-            session_id, agent_log_id, task_id=task_id, status_value=status_value, error=error
+            session_id,
+            call_id,
+            task_id=task_id,
+            status_value=status_value,
+            error=error,
+            usage=usage,
         )
 
     def recover_orphaned_task(self, task: TaskState) -> None:
@@ -141,10 +144,8 @@ class TaskServiceComposition:
             request_mcp_approval=service._request_task_mcp_approval(),
             execute_tool=service._execute_resolved_tool(),
             emit_mcp_event=self.mcp_lifecycle.emit_event,
-            agent_logs=service.agent_log_store(),
             router=service.router(),
             threadpool=service.run_in_threadpool(),
-            finish_log=service._finish_agent_log(),
             task_state=self.state_access.task_state,
             pause_if_requested=self.mcp_lifecycle.pause_if_requested,
             checkpoint=service._task_checkpoint(),

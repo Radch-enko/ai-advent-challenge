@@ -7,8 +7,6 @@ import httpx
 import pytest
 
 from copia import service
-from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.sessions.data.sessions_repository import SessionsRepository
@@ -80,11 +78,6 @@ def test_retry_validation_restarts_execution_with_feedback(monkeypatch, tmp_path
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     monkeypatch.setattr(
         service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
-    )
-    monkeypatch.setattr(
-        service,
-        "agent_log_store",
-        AgentLogStore(repository=JsonAgentLogRepository(tmp_path / "logs")),
     )
     router = RetryTaskRouter()
     monkeypatch.setattr(service, "router", router)

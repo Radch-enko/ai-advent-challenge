@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
@@ -64,9 +65,8 @@ class SessionMessageRoutes:
             session = await runtime.get_session(session_id)
         except (OSError, ValueError) as error:
             validate_path_identifier(session_id, "session ID")
-            agent_log_id = runtime.agent_logs.start_turn(session_id)
             raise runtime.initialization_error(
-                agent_log_id, "Session is unavailable", "session_unavailable"
+                "Session is unavailable", "session_unavailable"
             ) from error
         effective_config = (
             request.config
@@ -86,21 +86,21 @@ class SessionMessageRoutes:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A task is active for this session; resume or wait for it to finish",
             )
-        agent_log_id = runtime.agent_logs.start_turn(session.id)
+        started_at = time.perf_counter()
         if request.config is not None and session.profile_name is None:
             session.config = request.config
-        user_profile = await runtime.load_profile(session, agent_log_id)
+        user_profile = await runtime.load_profile(session)
         try:
             facts = await runtime.threadpool(runtime.sessions.load_facts, session.id)
         except (OSError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Session facts are unavailable", "session_facts_unavailable"
+                "Session facts are unavailable", "session_facts_unavailable"
             ) from error
         try:
             long_term_memory = await runtime.threadpool(runtime.load_longterm, session, facts)
         except (OSError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Long-term memory is unavailable", "long_term_memory_unavailable"
+                "Long-term memory is unavailable", "long_term_memory_unavailable"
             ) from error
         try:
             loaded_working_memory = await runtime.threadpool(
@@ -108,7 +108,7 @@ class SessionMessageRoutes:
             )
         except (OSError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Working memory is unavailable", "working_memory_unavailable"
+                "Working memory is unavailable", "working_memory_unavailable"
             ) from error
         try:
             loaded_pending_memory = await runtime.threadpool(
@@ -116,13 +116,13 @@ class SessionMessageRoutes:
             )
         except (OSError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Pending memory is unavailable", "pending_memory_unavailable"
+                "Pending memory is unavailable", "pending_memory_unavailable"
             ) from error
         try:
             loaded_invariants = await runtime.threadpool(runtime.invariants.load)
         except (OSError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Invariants are unavailable", "invariants_unavailable"
+                "Invariants are unavailable", "invariants_unavailable"
             ) from error
         try:
             agent = build_session_agent(
@@ -140,7 +140,7 @@ class SessionMessageRoutes:
             )
         except (OSError, TypeError, ValueError) as error:
             raise runtime.initialization_error(
-                agent_log_id, "Agent initialization failed", "agent_initialization_failed"
+                "Agent initialization failed", "agent_initialization_failed"
             ) from error
         try:
             response = await runtime.threadpool(
@@ -148,90 +148,55 @@ class SessionMessageRoutes:
                 session.id,
                 agent,
                 request.content,
-                agent_log_id,
                 True,
                 completion,
             )
         except FactsUpdateFailed as error:
             runtime.save_agent(session, agent)
-            runtime.finish_log(
-                agent_log_id,
-                provider=error.event.provider,
-                model=error.event.model,
-                status="failed",
-                error="Facts update failed",
-            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
                     "message": "Facts update failed",
                     "code": "facts_update_failed",
-                    "agent_log_id": agent_log_id,
                     "facts_event": runtime.safe_facts([error.event])[0].model_dump(mode="json"),
                 },
             ) from error
         except SummarizationFailed as error:
             runtime.save_agent(session, agent)
-            runtime.finish_log(
-                agent_log_id,
-                provider=error.event.provider,
-                model=error.event.model,
-                status="failed",
-                error="Conversation summarization failed",
-            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
                     "message": "Conversation summarization failed",
                     "code": "summarization_failed",
-                    "agent_log_id": agent_log_id,
                     "summarization_event": runtime.safe_summary([error.event])[0].model_dump(
                         mode="json"
                     ),
                 },
             ) from error
         except SummarizationRetryRequired as error:
-            runtime.finish_log(agent_log_id, status="failed", error="Summarization retry required")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
                     "message": "Summarization retry required",
                     "code": "summarization_retry_required",
-                    "agent_log_id": agent_log_id,
                 },
             ) from error
         except ProviderError as error:
             runtime.save_agent(session, agent)
-            runtime.finish_log(
-                agent_log_id,
-                provider=session.config.provider,
-                model=session.config.model,
-                status="failed",
-                error="Provider request failed",
-            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
                     "message": "Provider request failed",
                     "code": "provider_request_failed",
-                    "agent_log_id": agent_log_id,
-                    "provider_trace": runtime.failure_trace(error).model_dump(mode="json"),
                 },
             ) from error
 
         runtime.save_agent(session, agent)
-        runtime.finish_log(
-            agent_log_id,
-            provider=response.provider,
-            model=response.model,
-            usage=response.usage,
-            status="completed",
-        )
         if session.title is None:
-            background_tasks.add_task(runtime.generate_title, session.id, agent_log_id)
+            background_tasks.add_task(runtime.generate_title, session.id)
         return runtime.make_response(
             response,
-            agent_log_id,
+            time.perf_counter() - started_at,
             summarization_events=agent.operation_events,
             facts_events=agent.facts_operation_events,
             facts=agent.facts,
@@ -250,18 +215,17 @@ class SessionMessageRoutes:
                 session = await runtime.get_session(session_id)
             except (OSError, ValueError) as error:
                 validate_path_identifier(session_id, "session ID")
-                agent_log_id = runtime.agent_logs.start_turn(session_id)
                 raise runtime.initialization_error(
-                    agent_log_id, "Session is unavailable", "session_unavailable"
+                    "Session is unavailable", "session_unavailable"
                 ) from error
-            agent_log_id = runtime.agent_logs.start_turn(session.id)
-            user_profile = await runtime.load_profile(session, agent_log_id)
+            started_at = time.perf_counter()
+            user_profile = await runtime.load_profile(session)
             try:
                 facts = await runtime.threadpool(runtime.sessions.load_facts, session.id)
                 long_term_memory = await runtime.threadpool(runtime.load_longterm, session, facts)
             except (OSError, ValueError) as error:
                 raise runtime.initialization_error(
-                    agent_log_id, "Session memory is unavailable", "session_memory_unavailable"
+                    "Session memory is unavailable", "session_memory_unavailable"
                 ) from error
             try:
                 loaded_working_memory = await runtime.threadpool(
@@ -273,7 +237,7 @@ class SessionMessageRoutes:
                 loaded_invariants = await runtime.threadpool(runtime.invariants.load)
             except (OSError, ValueError) as error:
                 raise runtime.initialization_error(
-                    agent_log_id, "Session context is unavailable", "session_context_unavailable"
+                    "Session context is unavailable", "session_context_unavailable"
                 ) from error
             try:
                 agent = build_session_agent(
@@ -291,74 +255,44 @@ class SessionMessageRoutes:
                 )
             except (OSError, TypeError, ValueError) as error:
                 raise runtime.initialization_error(
-                    agent_log_id, "Agent initialization failed", "agent_initialization_failed"
+                    "Agent initialization failed", "agent_initialization_failed"
                 ) from error
             try:
-                response = await runtime.threadpool(
-                    runtime.retry_agent, session.id, agent, agent_log_id, True
-                )
+                response = await runtime.threadpool(runtime.retry_agent, session.id, agent, True)
             except SummarizationFailed as error:
                 runtime.save_agent(session, agent)
-                runtime.finish_log(
-                    agent_log_id,
-                    provider=error.event.provider,
-                    model=error.event.model,
-                    status="failed",
-                    error="Conversation summarization failed",
-                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail={
                         "message": "Conversation summarization failed",
                         "code": "summarization_failed",
-                        "agent_log_id": agent_log_id,
                         "summarization_event": runtime.safe_summary([error.event])[0].model_dump(
                             mode="json"
                         ),
                     },
                 ) from error
             except SummarizationRetryRequired as error:
-                runtime.finish_log(
-                    agent_log_id, status="failed", error="Summarization retry required"
-                )
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={
                         "message": "Summarization retry required",
                         "code": "summarization_retry_required",
-                        "agent_log_id": agent_log_id,
                     },
                 ) from error
             except ProviderError as error:
                 runtime.save_agent(session, agent)
-                runtime.finish_log(
-                    agent_log_id,
-                    provider=session.config.provider,
-                    model=session.config.model,
-                    status="failed",
-                    error="Provider request failed",
-                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail={
                         "message": "Provider request failed",
                         "code": "provider_request_failed",
-                        "agent_log_id": agent_log_id,
-                        "provider_trace": runtime.failure_trace(error).model_dump(mode="json"),
                     },
                 ) from error
 
             runtime.save_agent(session, agent)
-            runtime.finish_log(
-                agent_log_id,
-                provider=response.provider,
-                model=response.model,
-                usage=response.usage,
-                status="completed",
-            )
             return runtime.make_response(
                 response,
-                agent_log_id,
+                time.perf_counter() - started_at,
                 summarization_events=agent.operation_events,
                 facts_events=agent.facts_operation_events,
                 facts=agent.facts,

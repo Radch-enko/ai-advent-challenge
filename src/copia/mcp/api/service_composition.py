@@ -44,7 +44,6 @@ class McpServiceComposition:
                 _session_message_lock=lambda: service._session_message_lock,
                 _turn_approval=lambda: service._turn_approval,
                 artifact_store=lambda: service.mcp_artifact_store,
-                agent_log_store=lambda: service.agent_log_store,
                 agents=lambda: service.agents,
                 call_mcp_tool=lambda: service.call_mcp_tool,
                 discover_mcp_tools=lambda: service.discover_mcp_tools,
@@ -147,7 +146,6 @@ class McpServiceComposition:
             finalize_response=self.finalize_response,
             emit_turn=service._emit_turn(),
             send_locked=service._send_session_message_locked(),
-            agent_logs=service.agent_log_store(),
             persist_turn=service._persist_mcp_turn_state(),
             turns_lock=service.mcp_turns_lock(),
             workers=service.mcp_turn_workers(),
@@ -165,9 +163,7 @@ class McpServiceComposition:
         references = []
         for artifact in artifacts:
             stored = self._bindings.artifact_store().save(session_id, artifact)
-            references.append(
-                f"/api/sessions/{session_id}/artifacts/{stored.artifact_id}"
-            )
+            references.append(f"/api/sessions/{session_id}/artifacts/{stored.artifact_id}")
         return tuple(references)
 
     def route_runtime(self) -> McpTurnRouteRuntime:

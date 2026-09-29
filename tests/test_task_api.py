@@ -133,7 +133,7 @@ def test_task_pipeline_persists_calls_and_report(monkeypatch, tmp_path: Path) ->
             assert task["status"] == "completed"
             assert task["stage"] == "done"
             assert len(task["llm_calls"]) == 5
-            assert len({call["agent_log_id"] for call in task["llm_calls"]}) == 5
+            assert len({call["id"] for call in task["llm_calls"]}) == 5
             stored = (await client.get(f"/sessions/{session['id']}")).json()
             assert len(stored["messages"]) == 4
             assert [message["role"] for message in stored["messages"]] == [
@@ -143,11 +143,12 @@ def test_task_pipeline_persists_calls_and_report(monkeypatch, tmp_path: Path) ->
                 "assistant",
             ]
             assert all(message["task_id"] == task["id"] for message in stored["messages"])
-            assert stored["messages"][-1]["agent_log_id"] == task["llm_calls"][-1]["agent_log_id"]
-            for call in task["llm_calls"]:
-                assert (
-                    await client.get(f"/sessions/{session['id']}/agent-logs/{call['agent_log_id']}")
-                ).status_code == 200
+            assert all(call["status"] == "completed" for call in task["llm_calls"])
+            assert all(call["provider"] == "openai" for call in task["llm_calls"])
+            assert all(call["duration_seconds"] >= 0 for call in task["llm_calls"])
+            assert (
+                await client.get(f"/sessions/{session['id']}/agent-logs/unavailable")
+            ).status_code == 404
 
     asyncio.run(run())
 

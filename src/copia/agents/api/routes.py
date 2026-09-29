@@ -113,7 +113,10 @@ class AgentRoutes:
             ) from error
         except (OSError, ValueError) as error:
             raise runtime.memory_storage_error() from error
-        return MessageResponse(response=response, memory_events=agent.memory_events)
+        return MessageResponse(
+            response=response.model_copy(update={"trace": None}),
+            memory_events=agent.memory_events,
+        )
 
     def delete_agent(self, agent_id: str) -> None:
         if self._get_runtime().agents.pop(agent_id, None) is None:

@@ -26,7 +26,7 @@ export type TaskValidationResult = {
 }
 
 export type TaskLlmCall = {
-  agent_log_id: string
+  id: string
   stage: TaskStage
   kind: string
   step_id?: string | null
@@ -37,6 +37,7 @@ export type TaskLlmCall = {
   started_at: string
   completed_at?: string | null
   error?: string | null
+  usage?: import('./chat').TokenUsage | null
 }
 
 export type TaskState = {

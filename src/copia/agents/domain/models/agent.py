@@ -7,7 +7,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_operation
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.common.domain.services.runtime_context import with_current_datetime_context
 from copia.invariants.domain.models.invariant import Invariant
@@ -153,7 +152,6 @@ class Agent:
         self,
         content: str,
         *,
-        agent_log_id: str | None = None,
         completion: Callable[[list[ChatMessage], LLMConfig], LLMResponse] | None = None,
     ) -> LLMResponse:
         self._refresh_long_term_memory()
@@ -198,14 +196,10 @@ class Agent:
             raise
 
         try:
-            with agent_log_operation(
-                "primary",
-                provider=self.config.provider,
-                model=self.config.model,
-            ):
-                response = (completion or self._router.complete)(
-                    self._messages_for_request(), self.config
-                )
+            started_at = time.perf_counter()
+            response = (completion or self._router.complete)(
+                self._messages_for_request(), self.config
+            )
         except Exception:
             self._history.pop()
             self._context = context_before_turn
@@ -213,11 +207,11 @@ class Agent:
             self._facts_operation_events = []
             self._strategy.rollback_turn()
             raise
-        self._append_response(response, agent_log_id)
+        self._append_response(response, time.perf_counter() - started_at)
         self._strategy.commit_turn()
         return self._redact_long_term_trace(response)
 
-    def retry_summarization(self, *, agent_log_id: str | None = None) -> LLMResponse:
+    def retry_summarization(self) -> LLMResponse:
         self._refresh_long_term_memory()
         event = self._pending_event()
         if event is None:
@@ -230,17 +224,13 @@ class Agent:
         self._summarize(event)
         self._compact_eligible_messages()
         try:
-            with agent_log_operation(
-                "retry",
-                provider=self.config.provider,
-                model=self.config.model,
-            ):
-                response = self._router.complete(self._messages_for_request(), self.config)
+            started_at = time.perf_counter()
+            response = self._router.complete(self._messages_for_request(), self.config)
         except Exception:
             self._context = context_before_retry
             self._operation_events = []
             raise
-        self._append_response(response, agent_log_id)
+        self._append_response(response, time.perf_counter() - started_at)
         return self._redact_long_term_trace(response)
 
     def _compact_eligible_messages(self) -> None:
@@ -288,28 +278,23 @@ class Agent:
         }
         started_at = time.perf_counter()
         try:
-            with agent_log_operation(
-                "summarization",
-                provider=config.provider,
-                model=config.model,
-            ):
-                response = self._router.complete(
-                    [
-                        ChatMessage(
-                            role="system",
-                            content="\n\n".join(
-                                part
-                                for part in (
-                                    config.system_prompt,
-                                    render_invariants_context(self._invariants),
-                                )
-                                if part
-                            ),
+            response = self._router.complete(
+                [
+                    ChatMessage(
+                        role="system",
+                        content="\n\n".join(
+                            part
+                            for part in (
+                                config.system_prompt,
+                                render_invariants_context(self._invariants),
+                            )
+                            if part
                         ),
-                        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-                    ],
-                    config,
-                )
+                    ),
+                    ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+                ],
+                config,
+            )
             summary = response.content.strip()
             if not summary:
                 raise ValueError("Summarizer returned an empty summary")
@@ -369,7 +354,7 @@ class Agent:
             messages.insert(0, ChatMessage(role="system", content=invariant_context))
         return list(with_current_datetime_context(messages))
 
-    def _append_response(self, response: LLMResponse, agent_log_id: str | None = None) -> None:
+    def _append_response(self, response: LLMResponse, duration_seconds: float) -> None:
         self._history.append(
             ChatMessage(
                 role="assistant",
@@ -377,7 +362,10 @@ class Agent:
                 created_at=datetime.now(UTC),
                 usage=response.usage,
                 context_window=response.context_window,
-                agent_log_id=agent_log_id,
+                provider=response.provider.value,
+                model=response.model,
+                duration_seconds=duration_seconds,
+                execution_status="completed",
             )
         )
 

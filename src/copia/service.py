@@ -14,20 +14,12 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from copia.agent_logs.api.mappers.agent_log_response import (
-    agent_log_body,
-    agent_log_exchange_response,
-)
-from copia.agent_logs.api.mappers.agent_log_response import (
-    agent_log_response as _agent_log_response,
-)
-from copia.agent_logs.api.routes import AgentLogRoutes
-from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.agents.api.agent_route_runtime import AgentRouteRuntime
 from copia.agents.api.routes import AgentRoutes
 from copia.agents.data.profiles_repository import ProfilesRepository
 from copia.agents.domain.models.agent import Agent, AgentFactory
+from copia.common.observability import instrument_app
+from copia.common.observability import shutdown as shutdown_observability
 from copia.expenses.api.router import create_expenses_router
 from copia.expenses.api.validation import expense_validation_error_response
 from copia.expenses.data.expenses_repository import ExpensesRepository
@@ -49,13 +41,11 @@ from copia.providers.api.routes import ProviderRoutes
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.data.llm import ProviderError
 from copia.providers.data.model_catalog import context_window_for
-from copia.providers.domain.models.provider_name import ProviderName
 from copia.scheduled_jobs.api.router import create_scheduled_jobs_router
 from copia.scheduled_jobs.api.service_composition import ScheduledSummaryServiceComposition
 from copia.scheduled_jobs.application.scheduled_runner import ScheduledRunner
 from copia.scheduled_jobs.data.scheduled_runs_repository import ScheduledRunsRepository
 from copia.scheduled_jobs.domain.services import expense_summary_prompt
-from copia.security.domain.services.credential_sanitizer import sanitize_value
 from copia.session_memory.api.models.long_term_memory_mutation_response import (
     LongTermMemoryMutationResponse,
 )
@@ -76,7 +66,6 @@ from copia.sessions.api.message_sanitizer import (
     safe_memory_events,
     safe_summarization_events,
     safe_trace,
-    session_failure_trace,
 )
 from copia.sessions.api.service_composition import SessionServiceComposition
 from copia.sessions.application.models.session_lock_state import (
@@ -108,8 +97,7 @@ data_root = Path(os.getenv("COPIA_DATA_ROOT", "~/.copia"))
 profiles_path = Path(os.getenv("COPIA_PROFILES_PATH", PROJECT_ROOT / "profiles.json"))
 sessions_path = Path(os.getenv("COPIA_SESSIONS_PATH", data_root / "sessions"))
 invariants_path = Path(os.getenv("COPIA_INVARIANTS_PATH", sessions_path.parent / "invariants.json"))
-agent_log_store = AgentLogStore(repository=JsonAgentLogRepository(sessions_path))
-router = LLMRouter(agent_log_store=agent_log_store)
+router = LLMRouter()
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}
 sessions = SessionsRepository(sessions_path)
@@ -176,9 +164,11 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         scheduled_runner.shutdown()
+        shutdown_observability()
 
 
 app = FastAPI(title="Copia API", version="0.1.0", lifespan=lifespan)
+instrument_app(app)
 
 
 @app.exception_handler(RequestValidationError)
@@ -193,26 +183,19 @@ async def request_validation_error_handler(
 def provider_error_detail(
     error: ProviderError, *, redact_request: bool = False
 ) -> dict[str, object]:
-    return {
-        "message": "Provider request failed",
-        "provider_trace": {
-            "status_code": error.status_code,
-            "request_body": sanitize_value(error.request_body),
-            "response_body": sanitize_value(error.response_body),
-        },
-    }
+    detail: dict[str, object] = {"message": "Provider request failed"}
+    if error.status_code:
+        detail["status_code"] = error.status_code
+    return detail
 
 
 _session_message_response = make_session_message_response
-_agent_log_body = agent_log_body
-_agent_log_exchange_response = agent_log_exchange_response
 
 
 _safe_trace = safe_trace
 _safe_summarization_events = safe_summarization_events
 _safe_facts_events = safe_facts_events
 _safe_memory_events = safe_memory_events
-_session_failure_trace = session_failure_trace
 
 
 TASK_REPORT_SECTIONS = task_text.TASK_REPORT_SECTIONS
@@ -409,23 +392,7 @@ stream_mcp_turn_events = mcp_turn_routes.stream_mcp_turn_events
 decide_mcp_approval = mcp_turn_routes.decide_mcp_approval
 
 
-agent_log_routes = AgentLogRoutes(
-    lambda: _get_session,
-    lambda: agent_log_store,
-    lambda: run_in_threadpool,
-)
-app.include_router(agent_log_routes.router())
-get_agent_log = agent_log_routes.get_agent_log
-
-
-app.include_router(
-    create_scheduled_jobs_router(
-        lambda: scheduled_runner,
-        lambda: scheduled_runs,
-        lambda: agent_log_store,
-        _agent_log_response,
-    )
-)
+app.include_router(create_scheduled_jobs_router(lambda: scheduled_runner, lambda: scheduled_runs))
 
 
 app.include_router(session_message_routes.retry_router())
@@ -470,25 +437,6 @@ session_agent_execution = session_composition.agent_execution()
 _save_agent_state = session_agent_execution.save_agent_state
 _ask_agent = session_agent_execution.ask_agent
 _retry_agent = session_agent_execution.retry_agent
-
-
-def _finish_agent_log(
-    agent_log_id: str,
-    *,
-    provider: ProviderName | None = None,
-    model: str | None = None,
-    usage: dict[str, int] | None = None,
-    status: str,
-    error: str | None = None,
-) -> None:
-    agent_log_store.finish_turn(
-        agent_log_id,
-        provider=provider,
-        model=model,
-        usage=usage,
-        status=status,
-        error=error,
-    )
 
 
 session_long_term_memory_access = session_composition.long_term_memory_access()

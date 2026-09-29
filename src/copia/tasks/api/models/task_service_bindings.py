@@ -6,7 +6,6 @@ from typing import Any
 @dataclass(frozen=True)
 class TaskServiceBindings:
     _execute_resolved_tool: Callable[[], Any]
-    _finish_agent_log: Callable[[], Any]
     _get_session: Callable[[], Any]
     _get_session_locked: Callable[[], Any]
     _recover_orphaned_task: Callable[[], Any]
@@ -21,7 +20,6 @@ class TaskServiceBindings:
     _task_plan_schema: Callable[[], Any]
     _task_system_messages: Callable[[], Any]
     _task_validation_schema: Callable[[], Any]
-    agent_log_store: Callable[[], Any]
     invariants_repository: Callable[[], Any]
     router: Callable[[], Any]
     run_in_threadpool: Callable[[], Any]

@@ -3,7 +3,6 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
 from copia.agents.domain.models.agent import Agent
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.session_memory.application.session_memory_access import SessionMemoryAccess
@@ -63,44 +62,21 @@ class SessionAgentExecution:
         session_id: str,
         agent: Agent,
         content: str,
-        agent_log_id: str | None = None,
         session_lock_held: bool = False,
         completion: Callable[..., LLMResponse] | None = None,
     ) -> LLMResponse:
         with self._session_operation(session_id, session_lock_held):
-            if agent_log_id is None:
-                return (
-                    agent.ask(content)
-                    if completion is None
-                    else agent.ask(content, completion=completion)
-                )
-            with agent_log_turn(
-                session_id,
-                agent_log_id,
-                provider=agent.config.provider,
-                model=agent.config.model,
-            ):
-                return (
-                    agent.ask(content, agent_log_id=agent_log_id)
-                    if completion is None
-                    else agent.ask(content, agent_log_id=agent_log_id, completion=completion)
-                )
+            return (
+                agent.ask(content)
+                if completion is None
+                else agent.ask(content, completion=completion)
+            )
 
     def retry_agent(
         self,
         session_id: str,
         agent: Agent,
-        agent_log_id: str | None = None,
         session_lock_held: bool = False,
     ) -> LLMResponse:
         with self._session_operation(session_id, session_lock_held):
-            if agent_log_id is None:
-                return agent.retry_summarization()
-            with agent_log_turn(
-                session_id,
-                agent_log_id,
-                provider=agent.config.provider,
-                model=agent.config.model,
-                operation="retry",
-            ):
-                return agent.retry_summarization(agent_log_id=agent_log_id)
+            return agent.retry_summarization()

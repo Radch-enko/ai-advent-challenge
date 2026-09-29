@@ -9,7 +9,6 @@ from copia import service
 from copia.agents.domain.models.agent import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
-from copia.providers.data.http_logging import _redacted_body
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.provider_trace import ProviderTrace
 from copia.service import app, router
@@ -266,9 +265,6 @@ def test_profile_load_is_skipped_without_id_and_precedes_provider(monkeypatch, t
     monkeypatch.setattr(router, "complete", complete)
     response = client.post(f"/sessions/{session.json()['id']}/messages", json={"content": "Hi"})
     assert response.status_code == 200
-    turn = service.agent_log_store.get_turn(session.json()["id"], response.json()["agent_log_id"])
-    assert turn is not None
-    assert turn.operations[0].status == "skipped"
     assert calls
 
 
@@ -322,10 +318,6 @@ def test_profile_values_are_preserved_while_credentials_are_redacted() -> None:
     assert sanitized.trace is not None
     assert sanitized.trace.request_body["prompt"] == "Alice prefers concise answers"
     assert sanitized.trace.request_body["api_key"] == "[REDACTED]"
-    body = _redacted_body(
-        f'{{"prompt":"Alice prefers concise answers","api_key":"{api_key}"}}'.encode()
-    )
-    assert body == b'{"prompt":"Alice prefers concise answers","api_key":"[REDACTED]"}'
 
 
 def test_two_profiles_produce_different_primary_requests() -> None:

@@ -9,6 +9,8 @@ import {
   useRef,
   useState,
 } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   ApiRequestError,
   approveMemory,
@@ -33,8 +35,6 @@ import {
   getWorkingMemory,
   getPendingMemory,
   getSessions,
-  getAgentLog,
-  getScheduledRunAgentLog,
   rejectMemory,
   undoWorkingMemory,
   updateWorkingMemory,
@@ -69,19 +69,12 @@ import {
   PendingMemorySuggestion,
   WorkingMemoryItem,
 } from './domain/models/memory'
-import {
-  AgentLogExchange,
-  ChatMessage,
-  FactsUpdateEvent,
-  SummarizationEvent,
-  TokenUsage,
-} from './domain/models/chat'
+import { ChatMessage, FactsUpdateEvent, SummarizationEvent, TokenUsage } from './domain/models/chat'
 import { TaskPlanStep, TaskState } from './domain/models/task'
 import { McpApproval, McpConnection } from './domain/models/mcp'
-import { AgentLogBlock } from './ui/components/AgentLogBlock'
+import { ExecutionSummary } from './ui/components/ExecutionSummary'
 import { InvariantPanel } from './ui/components/InvariantPanel'
 import { MemoryModal, MemoryPanel } from './ui/components/MemoryPanel'
-import { RequestLogs } from './ui/components/RequestLogs'
 import { UserProfilesScreen } from './ui/components/UserProfilesScreen'
 import { TaskProgressPanel } from './ui/components/TaskProgressPanel'
 import { TaskPlanApprovalBar } from './ui/components/TaskPlanApprovalBar'
@@ -198,12 +191,6 @@ export function App() {
   const [pendingMemory, setPendingMemory] = useState<PendingMemorySuggestion[]>([])
   const [workingMemory, setWorkingMemory] = useState<WorkingMemoryItem[]>([])
   const [invariants, setInvariants] = useState<Invariant[]>([])
-  const [memoryEventsByAgentLogId, setMemoryEventsByAgentLogId] = useState<
-    Record<string, MemoryEvent[]>
-  >({})
-  const [activeLog, setActiveLog] = useState<AgentLogExchange | null>(null)
-  const [activeLogGroup, setActiveLogGroup] = useState<AgentLogExchange[] | null>(null)
-  const [logTab, setLogTab] = useState<'request' | 'response'>('request')
   const [forkingMessageIndex, setForkingMessageIndex] = useState<number | null>(null)
   const [forkError, setForkError] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -344,7 +331,11 @@ export function App() {
         timestamp: formatMessageTimestamp(item.created_at),
         usage: item.usage ?? undefined,
         contextWindow: item.context_window ?? undefined,
-        agentLogId: item.agent_log_id ?? undefined,
+        provider: item.provider,
+        model: item.model,
+        durationSeconds: item.duration_seconds,
+        executionStatus: item.execution_status ?? undefined,
+        executionError: item.execution_error,
         taskId: item.task_id ?? undefined,
         taskStepId: item.task_step_id ?? undefined,
         transcriptIndex: index,
@@ -525,7 +516,11 @@ export function App() {
             timestamp: formatMessageTimestamp(item.created_at),
             usage: item.usage,
             contextWindow: item.context_window,
-            agentLogId: item.agent_log_id ?? undefined,
+            provider: item.provider,
+            model: item.model,
+            durationSeconds: item.duration_seconds,
+            executionStatus: item.execution_status ?? undefined,
+            executionError: item.execution_error,
             taskId: item.task_id ?? undefined,
             taskStepId: item.task_step_id ?? undefined,
             transcriptIndex: index,
@@ -589,7 +584,11 @@ export function App() {
             timestamp: formatMessageTimestamp(item.created_at),
             usage: item.usage,
             contextWindow: item.context_window,
-            agentLogId: item.agent_log_id ?? undefined,
+            provider: item.provider,
+            model: item.model,
+            durationSeconds: item.duration_seconds,
+            executionStatus: item.execution_status ?? undefined,
+            executionError: item.execution_error,
             taskId: item.task_id ?? undefined,
             taskStepId: item.task_step_id ?? undefined,
             transcriptIndex: index,
@@ -784,10 +783,6 @@ export function App() {
         setMemoryEvents(response.memory_events)
         setPendingMemory(response.pending_memory)
         setWorkingMemory(response.working_memory)
-        setMemoryEventsByAgentLogId((current) => ({
-          ...current,
-          [response.agent_log_id]: response.memory_events,
-        }))
         setMessages((current) => [
           ...current,
           {
@@ -795,8 +790,12 @@ export function App() {
             role: 'assistant',
             content: response.response.content,
             timestamp: now(),
-            agentLogId: response.agent_log_id,
             usage: response.response.usage,
+            provider: response.response.provider,
+            model: response.response.model,
+            durationSeconds: response.duration_seconds,
+            executionStatus: 'completed',
+            memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             transcriptIndex: userTranscriptIndex + 1,
           },
@@ -811,7 +810,6 @@ export function App() {
       const apiError = error instanceof ApiRequestError ? error : null
       const summaryEvent = apiError?.summarizationEvent
       const factsEvent = apiError?.factsEvent
-      const agentLogId = apiError?.agentLogId
       if (summaryEvent && activeSessionIdRef.current === session?.id) {
         setSummarizationEvents((current) => upsertSummarizationEvents(current, [summaryEvent]))
         setMessages((current) => [
@@ -821,7 +819,6 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            agentLogId,
           },
         ])
         void refreshSessions()
@@ -837,7 +834,6 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            agentLogId,
           },
         ])
       } else if (activeSessionIdRef.current === session?.id) {
@@ -848,7 +844,6 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            agentLogId,
           },
         ])
       }
@@ -901,10 +896,6 @@ export function App() {
           upsertSummarizationEvents(current, response.summarization_events),
         )
         setMemoryEvents(response.memory_events)
-        setMemoryEventsByAgentLogId((current) => ({
-          ...current,
-          [response.agent_log_id]: response.memory_events,
-        }))
         setMessages((current) => [
           ...current,
           {
@@ -912,8 +903,12 @@ export function App() {
             role: 'assistant',
             content: response.response.content,
             timestamp: now(),
-            agentLogId: response.agent_log_id,
             usage: response.response.usage,
+            provider: response.response.provider,
+            model: response.response.model,
+            durationSeconds: response.duration_seconds,
+            executionStatus: 'completed',
+            memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             transcriptIndex: transcriptLength(current),
           },
@@ -932,7 +927,6 @@ export function App() {
             role: 'error',
             content: summaryEvent.error ?? 'Conversation summarization failed',
             timestamp: now(),
-            agentLogId: apiError?.agentLogId,
           },
         ])
       } else if (activeSessionIdRef.current === session.id) {
@@ -944,7 +938,6 @@ export function App() {
             role: 'error',
             content,
             timestamp: now(),
-            agentLogId: apiError?.agentLogId,
           },
         ])
       }
@@ -978,7 +971,11 @@ export function App() {
       timestamp: formatMessageTimestamp(item.created_at),
       usage: item.usage,
       contextWindow: item.context_window,
-      agentLogId: item.agent_log_id ?? undefined,
+      provider: item.provider,
+      model: item.model,
+      durationSeconds: item.duration_seconds,
+      executionStatus: item.execution_status ?? undefined,
+      executionError: item.execution_error,
       taskId: item.task_id ?? undefined,
       taskStepId: item.task_step_id ?? undefined,
       transcriptIndex: index,
@@ -995,9 +992,6 @@ export function App() {
     setSummarizationEvents(session.context.events)
     setFactsEvents(session.context.facts_events ?? [])
     setMemoryEvents([])
-    setMemoryEventsByAgentLogId({})
-    setActiveLog(null)
-    setActiveLogGroup(null)
     setExpandedTaskIds({})
     setExpandedTaskMessageKeys({})
     setFacts({})
@@ -1095,9 +1089,6 @@ export function App() {
     setLongTermMemory([])
     setPendingMemory([])
     setWorkingMemory([])
-    setMemoryEventsByAgentLogId({})
-    setActiveLog(null)
-    setActiveLogGroup(null)
     setExpandedTaskIds({})
     setExpandedTaskMessageKeys({})
     setProfileSettingsError(null)
@@ -1309,49 +1300,6 @@ export function App() {
     localStorage.setItem('copia.sidebarCollapsed', String(collapsed))
   }
 
-  function openAgentLog(exchange: AgentLogExchange) {
-    setActiveLog(exchange)
-    setActiveLogGroup(null)
-    setLogTab('request')
-  }
-
-  async function openTaskLog(agentLogId: string) {
-    const sessionId = activeSession?.id
-    if (!sessionId) return
-    try {
-      const detail = await getAgentLog(sessionId, agentLogId)
-      const exchange = detail.exchanges[detail.exchanges.length - 1]
-      if (!exchange) return
-      setActiveLog(exchange)
-      setActiveLogGroup(null)
-      setLogTab('request')
-    } catch {
-      // The task panel keeps the call status when a running log has no exchange yet.
-    }
-  }
-
-  async function openScheduledSummaryLogs(jobId: string, scheduledAt: string) {
-    const detail = await getScheduledRunAgentLog(jobId, scheduledAt)
-    if (detail.exchanges.length === 0) throw new Error('Запросы к LLM провайдеру не найдены')
-    setActiveLogGroup(detail.exchanges)
-    setActiveLog(detail.exchanges[detail.exchanges.length - 1])
-    setLogTab('request')
-  }
-
-  async function openAllTaskLogs(taskId: string) {
-    const sessionId = activeSession?.id
-    const calls = tasksById.get(taskId)?.llm_calls ?? []
-    if (!sessionId || calls.length === 0) return
-    const details = await Promise.all(
-      calls.map((call) => getAgentLog(sessionId, call.agent_log_id).catch(() => null)),
-    )
-    const exchanges = details.flatMap((detail) => detail?.exchanges ?? [])
-    if (exchanges.length === 0) return
-    setActiveLogGroup(exchanges)
-    setActiveLog(exchanges[exchanges.length - 1])
-    setLogTab('request')
-  }
-
   const profileControl = (
     <ProfileIndicator
       profiles={userProfiles}
@@ -1555,9 +1503,7 @@ export function App() {
   )
 
   return (
-    <main
-      className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${activeLog ? 'has-logs' : ''}`}
-    >
+    <main className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       {!sidebarCollapsed && (
         <aside className="sidebar">
           <div className="brand">
@@ -1652,7 +1598,7 @@ export function App() {
         {mode === 'mcp' ? (
           <McpSettingsScreen />
         ) : mode === 'summaries' ? (
-          <SummariesScreen onOpenLogs={openScheduledSummaryLogs} />
+          <SummariesScreen />
         ) : mode === 'invariants' ? (
           <section className="invariants-screen">{invariantPanelContent}</section>
         ) : mode === 'profiles' ? (
@@ -1796,20 +1742,18 @@ export function App() {
                             </div>
                           )}
                           {entry.role !== 'user' && (
-                            <AgentLogBlock
-                              key={`${activeSession?.id ?? 'session'}-${entry.id}-${entry.agentLogId ?? 'no-log'}`}
-                              sessionId={activeSession?.id}
-                              agentLogId={entry.agentLogId}
-                              memoryEvents={
-                                entry.agentLogId
-                                  ? memoryEventsByAgentLogId[entry.agentLogId]
-                                  : undefined
-                              }
-                              onOpenLogs={openAgentLog}
+                            <ExecutionSummary
+                              key={`${activeSession?.id ?? 'session'}-${entry.id}`}
+                              provider={entry.provider}
+                              model={entry.model}
+                              durationSeconds={entry.durationSeconds}
+                              executionStatus={entry.executionStatus}
+                              executionError={entry.executionError}
+                              usage={entry.usage}
+                              memoryEvents={entry.memoryEvents}
                             />
                           )}
                           {(entry.timestamp ||
-                            entry.agentLogId ||
                             (effectiveContextManagement.strategy === 'branching' &&
                               activeSession &&
                               entry.transcriptIndex != null)) && (
@@ -1864,8 +1808,6 @@ export function App() {
                             retryError={
                               taskRetryError?.taskId === task.id ? taskRetryError.message : null
                             }
-                            onOpenLogs={(agentLogId) => void openTaskLog(agentLogId)}
-                            onOpenAllLogs={() => void openAllTaskLogs(task.id)}
                           />
                         </>
                       )}
@@ -2129,15 +2071,6 @@ export function App() {
           </>
         )}
       </section>
-      {activeLog && (
-        <RequestLogs
-          log={activeLog}
-          logs={activeLogGroup ?? undefined}
-          tab={logTab}
-          onTab={setLogTab}
-          onClose={() => setActiveLog(null)}
-        />
-      )}
     </main>
   )
 }
@@ -3352,77 +3285,32 @@ function TaskSubtaskLoadingMessage({
 }
 
 function Markdown({ content }: { content: string }) {
-  const blocks: ReactNode[] = []
-  const lines = content.split('\n')
-  let index = 0
-  while (index < lines.length) {
-    const blockKey = `block-${index}`
-    const line = lines[index]
-    if (line.startsWith('```')) {
-      const language = line.slice(3).trim()
-      const code: string[] = []
-      while (++index < lines.length && !lines[index].startsWith('```')) code.push(lines[index])
-      blocks.push(
-        <pre key={blockKey}>
-          <code className={language ? `language-${language}` : undefined}>{code.join('\n')}</code>
-        </pre>,
-      )
-    } else if (/^#{1,3}\s/.test(line)) {
-      const level = line.match(/^#+/)![0].length
-      const Tag = `h${level}` as 'h1' | 'h2' | 'h3'
-      blocks.push(<Tag key={blockKey}>{inlineMarkdown(line.slice(level + 1))}</Tag>)
-    } else if (/^[-*+]\s/.test(line)) {
-      const items: ReactNode[] = []
-      while (index < lines.length && /^[-*+]\s/.test(lines[index])) {
-        items.push(<li key={index}>{inlineMarkdown(lines[index].slice(2))}</li>)
-        index++
-      }
-      blocks.push(<ul key={blockKey}>{items}</ul>)
-      index--
-    } else if (/^\d+\.\s/.test(line)) {
-      const items: ReactNode[] = []
-      while (index < lines.length && /^\d+\.\s/.test(lines[index])) {
-        items.push(<li key={index}>{inlineMarkdown(lines[index].replace(/^\d+\.\s/, ''))}</li>)
-        index++
-      }
-      blocks.push(<ol key={blockKey}>{items}</ol>)
-      index--
-    } else if (line.startsWith('> ')) {
-      blocks.push(<blockquote key={blockKey}>{inlineMarkdown(line.slice(2))}</blockquote>)
-    } else if (line.trim()) {
-      blocks.push(<p key={blockKey}>{inlineMarkdown(line)}</p>)
-    }
-    index++
-  }
-  return <>{blocks}</>
-}
-
-function inlineMarkdown(value: string): ReactNode[] {
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|!\[[^\]]*\]\([^\s)]+\)|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*)/g
-  return value
-    .split(pattern)
-    .filter(Boolean)
-    .map((part, index) => {
-      const strong = part.match(/^\*\*([^*]+)\*\*$/)
-      if (strong) return <strong key={index}>{strong[1]}</strong>
-      const code = part.match(/^`([^`]+)`$/)
-      if (code) return <code key={index}>{code[1]}</code>
-      const image = part.match(/^!\[([^\]]*)\]\(([^\s)]+)\)$/)
-      if (image && isSafeMarkdownHref(image[2]))
-        return (
-          <img key={index} src={image[2]} alt={image[1]} loading="lazy" className="message-image" />
-        )
-      const link = part.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/)
-      if (link && isSafeMarkdownHref(link[2]))
-        return (
-          <a key={index} href={link[2]} target="_blank" rel="noreferrer">
-            {link[1]}
-          </a>
-        )
-      const emphasis = part.match(/^\*([^*]+)\*$/)
-      if (emphasis) return <em key={index}>{emphasis[1]}</em>
-      return part
-    })
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      urlTransform={(url) => (isSafeMarkdownHref(url) ? url : '')}
+      components={{
+        a: ({ node, ...props }) => {
+          void node
+          return <a {...props} target="_blank" rel="noreferrer" />
+        },
+        img: ({ node, ...props }) => {
+          void node
+          return <img {...props} loading="lazy" className="message-image" />
+        },
+        table: ({ node, ...props }) => {
+          void node
+          return (
+            <div className="markdown-table-wrapper">
+              <table {...props} />
+            </div>
+          )
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
 }
 
 function isSafeMarkdownHref(value: string): boolean {

@@ -4,7 +4,6 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.agent_logs.domain.models.agent_log_operation import AgentLogOperation
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.service import app, router
@@ -61,7 +60,7 @@ def test_profile_prompt_contains_only_preferences_and_is_escaped() -> None:
     assert "Keep answers practical" in message.content
 
 
-def test_profile_api_links_session_and_records_operation(monkeypatch, tmp_path) -> None:
+def test_profile_api_links_session_and_returns_execution_metadata(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         service, "user_profiles", JsonUserProfilesRepository(tmp_path / "profiles.json")
     )
@@ -96,9 +95,6 @@ def test_profile_api_links_session_and_records_operation(monkeypatch, tmp_path) 
     )
     response = client.post(f"/sessions/{session.json()['id']}/messages", json={"content": "Hi"})
     assert response.status_code == 200
-    operation = service.agent_log_store.get_turn(
-        session.json()["id"], response.json()["agent_log_id"]
-    ).operations[0]
-    assert isinstance(operation, AgentLogOperation)
-    assert operation.status == "completed"
-    assert operation.profile_name == "Personal"
+    assert response.json()["response"]["provider"] == "openai"
+    assert response.json()["response"]["model"] == "model"
+    assert response.json()["duration_seconds"] >= 0

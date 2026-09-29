@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.tool_call import ToolCall
@@ -33,7 +32,7 @@ def test_job_statuses_and_next_run_are_visible_in_api(monkeypatch, tmp_path) -> 
     def handle(_job, _start, _end):
         started.set()
         release.wait(timeout=3)
-        return "**Готово**", "log-id"
+        return "**Готово**", None, None, None
 
     runner = ScheduledRunner(
         config,
@@ -78,7 +77,6 @@ def test_summary_agent_uses_one_way_report_instruction(monkeypatch):
         return [tool]
 
     monkeypatch.setattr(service, "_resolved_mcp_tools", resolve)
-    monkeypatch.setattr(service, "agent_log_store", AgentLogStore())
     monkeypatch.setattr(
         service,
         "_execute_resolved_tool",
@@ -112,7 +110,9 @@ def test_summary_agent_uses_one_way_report_instruction(monkeypatch):
         id="summary", kind="expense_summary", schedule={"type": "interval", "minutes": 60}
     )
     start = datetime(2026, 9, 1, 8, tzinfo=UTC)
-    answer, _log_id = service._expense_summary_job(job, start, start + timedelta(hours=1))
+    answer, _provider, _model, _usage = service._expense_summary_job(
+        job, start, start + timedelta(hours=1)
+    )
     assert answer == "**Ваши расходы за последний час:** расходов нет."
 
 

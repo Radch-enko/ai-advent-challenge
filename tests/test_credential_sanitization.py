@@ -1,65 +1,10 @@
 from copia.agents.domain.models.agent import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
-from copia.providers.data.http_logging import _capture_body, _redact_headers
 from copia.providers.data.llm import ProviderError
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.provider_trace import ProviderTrace
 from copia.security.domain.services.credential_sanitizer import sanitize_value
 from copia.service import _safe_trace, provider_error_detail
-
-
-def test_http_body_preserves_personal_context_and_redacts_credentials_before_truncation() -> None:
-    class Store:
-        max_body_bytes = 180
-
-    personal = "profile=Alice facts=vegetarian working=finish the report"
-    openai_token = "s" + "k-test-token-12345"
-    github_token = "ghp" + "_github-secret-12345"
-    gitlab_token = "glpat" + "-gitlab-secret-12345"
-    jwt = "eyJ" + "hbGciOiJIUzI1NiJ9.payload.signature"
-    pem_begin = "-----BEGIN " + "PRIVATE KEY-----"
-    pem_end = "-----END " + "PRIVATE KEY-----"
-    payload = (
-        f'{{"prompt":"{personal}","api_key":"{openai_token}","access_token":"access-secret",'
-        '"authorization":"Bearer bearer-secret",'
-        f'"jwt":"{jwt}","pem":"{pem_begin}\nsecret\n{pem_end}",'
-        f'"github":"{github_token}","gitlab":"{gitlab_token}",'
-        '"url":"https://user:password@provider.test/chat?access_token=url-secret",'
-        '"tail":"' + "x" * 500 + '"}'
-    ).encode()
-
-    captured, truncated = _capture_body(Store(), payload)  # type: ignore[arg-type]
-
-    text = (captured or b"").decode()
-    assert truncated is True
-    assert personal in text
-    assert openai_token not in text
-    assert "access-secret" not in text
-    assert "bearer-secret" not in text
-    assert jwt not in text
-    assert github_token not in text
-    assert gitlab_token not in text
-    assert "PRIVATE KEY-----" not in text
-    assert "password@" not in text
-    assert "url-secret" not in text
-
-
-def test_sensitive_headers_include_authenticate_challenges() -> None:
-    import httpx
-
-    headers = _redact_headers(
-        httpx.Headers(
-            {
-                "WWW-Authenticate": "Bearer challenge-secret",
-                "Proxy-Authenticate": "Basic proxy-secret",
-                "X-Personal-Context": "Alice prefers concise answers",
-            }
-        )
-    )
-
-    assert headers["www-authenticate"] == "[REDACTED]"
-    assert headers["proxy-authenticate"] == "[REDACTED]"
-    assert headers["x-personal-context"] == "Alice prefers concise answers"
 
 
 def test_primary_summarization_and_error_traces_sanitize_only_credentials() -> None:
@@ -85,10 +30,7 @@ def test_primary_summarization_and_error_traces_sanitize_only_credentials() -> N
     assert sanitized.trace.response_body["working_memory"] == "finish report"
     assert sanitized.trace.response_body["authorization"] == "[REDACTED]"
 
-    safe = _safe_trace(trace)
-    assert safe is not None
-    assert safe.request_body["profile"] == "Alice"
-    assert safe.request_body["api_key"] == "[REDACTED]"
+    assert _safe_trace(trace) is None
     detail = provider_error_detail(
         ProviderError(
             "provider failed",
@@ -97,7 +39,7 @@ def test_primary_summarization_and_error_traces_sanitize_only_credentials() -> N
             response_body=trace.response_body,
         )
     )
-    assert detail["provider_trace"]["request_body"]["profile"] == "Alice"  # type: ignore[index]
+    assert detail == {"message": "Provider request failed", "status_code": 502}
 
 
 def test_sanitizer_keeps_personal_strings_in_recursive_trace_values() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -10,7 +11,7 @@ from copia.tasks.domain.models.task_stage import TaskStage
 
 
 class TaskLlmCall(BaseModel):
-    agent_log_id: str
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     stage: TaskStage
     kind: str
     step_id: str | None = None
@@ -21,3 +22,4 @@ class TaskLlmCall(BaseModel):
     started_at: datetime
     completed_at: datetime | None = None
     error: str | None = None
+    usage: dict[str, int] | None = None

@@ -4,7 +4,6 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.session_memory.application.session_memory_access import SessionMemoryAccess
@@ -21,7 +20,6 @@ class SessionMessageDependencies:
     release_lock: Callable[[Any], None]
     threadpool: Callable[..., Awaitable[Any]]
     sessions: SessionsRepository
-    agent_logs: AgentLogStore
     memory_access: SessionMemoryAccess
     invariants: InvariantsRepository
     llm_router: Any
@@ -35,9 +33,7 @@ class SessionMessageDependencies:
     ask_agent: Callable[..., LLMResponse]
     retry_agent: Callable[..., LLMResponse]
     save_agent: Callable[..., None]
-    finish_log: Callable[..., None]
     safe_facts: Callable[..., Any]
     safe_summary: Callable[..., Any]
-    failure_trace: Callable[..., Any]
     make_response: Callable[..., SessionMessageResponse]
     generate_title: Callable[..., None]

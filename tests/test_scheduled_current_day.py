@@ -48,7 +48,7 @@ def test_minute_schedule_reports_today_instead_of_last_minute(tmp_path) -> None:
 
     def handle(_job, start, end):
         windows.append((start, end))
-        return "Ваши расходы за сегодняшний день", "log-id"
+        return "Ваши расходы за сегодняшний день", None, None, None
 
     runner = ScheduledRunner(
         config,

@@ -1,59 +1,4 @@
-export type AgentLogBody = {
-  content: string
-  encoding: 'utf-8' | 'base64'
-  size_bytes: number
-  truncated: boolean
-}
-
-export type AgentLogExchange = {
-  id: string
-  agent_turn_id: string
-  operation: string
-  provider?: string | null
-  model?: string | null
-  method: string
-  url: string
-  request_headers: Record<string, string>
-  request_body?: AgentLogBody | null
-  status_code?: number | null
-  response_headers: Record<string, string>
-  response_body?: AgentLogBody | null
-  duration_seconds: number
-  error?: string | null
-  created_at: string
-}
-
-export type AgentLogDetail = {
-  agent_log_id: string
-  agent_turn_id: string
-  session_id: string
-  status: 'running' | 'completed' | 'failed'
-  provider?: string | null
-  model?: string | null
-  usage?: TokenUsage | null
-  started_at: string
-  completed_at?: string | null
-  duration_seconds: number
-  error?: string | null
-  operations: AgentLogOperation[]
-  exchanges: AgentLogExchange[]
-}
-
-export type AgentLogOperation = {
-  id: string
-  agent_turn_id: string
-  session_id: string
-  operation: 'user_profile_load'
-  status: 'completed' | 'failed' | 'skipped'
-  profile_id?: string | null
-  profile_name?: string | null
-  preference_count: number
-  applied: boolean
-  duration_seconds: number
-  error_code?: string | null
-  message?: string | null
-  created_at: string
-}
+import type { MemoryEvent } from './memory'
 
 export type TokenUsage = {
   prompt_tokens?: number
@@ -62,23 +7,28 @@ export type TokenUsage = {
   total_tokens?: number
 }
 
+export type ProviderTrace = {
+  status_code: number
+  request_body: Record<string, unknown>
+  response_body: Record<string, unknown>
+}
+
 export type ChatMessage = {
   id: number
   role: 'user' | 'assistant' | 'error'
   content: string
   timestamp: string
-  agentLogId?: string
   usage?: TokenUsage | null
+  provider?: string | null
+  model?: string | null
+  durationSeconds?: number | null
+  executionStatus?: 'completed' | 'failed'
+  executionError?: string | null
+  memoryEvents?: MemoryEvent[]
   contextWindow?: number | null
   transcriptIndex?: number
   taskId?: string
   taskStepId?: string
-}
-
-export type ProviderTrace = {
-  status_code: number
-  request_body: Record<string, unknown>
-  response_body: Record<string, unknown>
 }
 
 export type SummarizationEvent = {

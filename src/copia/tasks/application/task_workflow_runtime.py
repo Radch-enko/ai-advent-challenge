@@ -3,7 +3,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.mcp.domain.models.mcp_approval import McpApproval
@@ -25,10 +24,8 @@ class TaskWorkflowRuntime:
     request_mcp_approval: Callable[[str, str, McpApproval], bool]
     execute_tool: Callable[[ResolvedMcpTool, dict[str, Any]], ToolExecutionResult]
     emit_mcp_event: Callable[..., None]
-    agent_logs: AgentLogStore
     router: LLMRouter
     threadpool: Callable[..., Awaitable[Any]]
-    finish_log: Callable[..., None]
     task_state: Callable[..., TaskState]
     pause_if_requested: Callable[..., bool]
     checkpoint: Callable[..., ChatSession]

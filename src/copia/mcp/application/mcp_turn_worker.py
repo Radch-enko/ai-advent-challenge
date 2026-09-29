@@ -29,7 +29,6 @@ class McpTurnWorker:
                 request_approval=lambda approval: runtime.turn_approval(turn, approval),
                 execute=runtime.execute_tool,
                 emit=lambda event_type, data: runtime.emit_turn(turn, event_type, data),
-                audit=lambda entry: turn.audits.append(entry),
                 finalize=lambda response, artifacts: runtime.finalize_response(
                     turn.session_id, response, artifacts
                 ),
@@ -40,8 +39,6 @@ class McpTurnWorker:
             response = await runtime.send_locked(
                 turn.session_id, request, background, completion=loop.complete
             )
-            for audit in turn.audits:
-                runtime.agent_logs.append_tool_call(response.agent_log_id, audit)
             with turn.lock:
                 turn.result = response
                 turn.status = "completed"

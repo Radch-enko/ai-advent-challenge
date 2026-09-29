@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_session import ChatSession
 from copia.tasks.domain.models.task_llm_call import TaskLlmCall
@@ -20,7 +20,6 @@ class TaskStateAccess:
         self,
         get_sessions: Callable[[], SessionsRepository],
         get_lifecycle_lock: Callable[[], Any],
-        get_agent_logs: Callable[[], AgentLogStore],
         get_session_task: Callable[[ChatSession, str], TaskState],
         get_checkpoint: Callable[..., ChatSession],
         unknown_task_error: Callable[[], Exception],
@@ -30,7 +29,6 @@ class TaskStateAccess:
     ) -> None:
         self._get_sessions = get_sessions
         self._get_lifecycle_lock = get_lifecycle_lock
-        self._get_agent_logs = get_agent_logs
         self._get_session_task = get_session_task
         self._get_checkpoint = get_checkpoint
         self._unknown_task_error = unknown_task_error
@@ -88,14 +86,14 @@ class TaskStateAccess:
         kind: str,
         step_id: str | None,
     ) -> str:
-        agent_log_id = self._get_agent_logs().start_turn(session_id)
+        call_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
         def update(session: ChatSession) -> None:
             task = self._get_session_task(session, task_id)
             task.llm_calls.append(
                 TaskLlmCall(
-                    agent_log_id=agent_log_id,
+                    id=call_id,
                     stage=stage,
                     kind=kind,
                     step_id=step_id,
@@ -107,23 +105,24 @@ class TaskStateAccess:
             )
 
         self._get_checkpoint()(session_id, update)
-        return agent_log_id
+        return call_id
 
     def call_finish(
         self,
         session_id: str,
-        agent_log_id: str,
+        call_id: str,
         *,
         task_id: str,
         status_value: TaskLlmCallStatus,
         error: str | None = None,
+        usage: dict[str, int] | None = None,
     ) -> ChatSession:
         finished_at = datetime.now(UTC)
 
         def update(session: ChatSession) -> None:
             task = self._get_session_task(session, task_id)
             call = next(
-                (item for item in task.llm_calls if item.agent_log_id == agent_log_id),
+                (item for item in task.llm_calls if item.id == call_id),
                 None,
             )
             if call is None:
@@ -132,5 +131,6 @@ class TaskStateAccess:
             call.completed_at = finished_at
             call.duration_seconds = max(0, (finished_at - call.started_at).total_seconds())
             call.error = error
+            call.usage = usage
 
         return self._get_checkpoint()(session_id, update)

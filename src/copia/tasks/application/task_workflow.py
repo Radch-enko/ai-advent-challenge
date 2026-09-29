@@ -2,7 +2,6 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
 from copia.common.domain.services.runtime_context import with_current_datetime_context
 from copia.mcp.domain.services.mcp_tool_loop import McpToolLoop
 from copia.providers.domain.models.llm_config import LLMConfig
@@ -39,7 +38,7 @@ class TaskWorkflow:
         config: LLMConfig,
     ) -> LLMResponse:
         runtime = self._get_runtime()
-        agent_log_id = runtime.task_call_start(
+        call_id = runtime.task_call_start(
             session_id, task_id=task_id, stage=stage, kind=kind, step_id=step_id
         )
         try:
@@ -59,49 +58,28 @@ class TaskWorkflow:
                     emit=lambda event_type, data: runtime.emit_mcp_event(
                         session_id, task_id, event_type, data
                     ),
-                    audit=lambda entry: runtime.agent_logs.append_tool_call(agent_log_id, entry),
                 )
                 completion = tool_loop.complete
-            with agent_log_turn(
-                session_id,
-                agent_log_id,
-                provider=config.provider,
-                model=config.model,
-                operation=kind,
-            ):
-                response = await runtime.threadpool(
-                    completion or runtime.router.complete,
-                    with_current_datetime_context(messages),
-                    config,
-                )
+            response = await runtime.threadpool(
+                completion or runtime.router.complete,
+                with_current_datetime_context(messages),
+                config,
+            )
         except Exception as error:
             runtime.task_call_finish(
                 session_id,
-                agent_log_id,
+                call_id,
                 task_id=task_id,
                 status_value=TaskLlmCallStatus.FAILED,
                 error=str(error),
             )
-            runtime.finish_log(
-                agent_log_id,
-                provider=config.provider,
-                model=config.model,
-                status="failed",
-                error=kind,
-            )
             raise
         runtime.task_call_finish(
             session_id,
-            agent_log_id,
+            call_id,
             task_id=task_id,
             status_value=TaskLlmCallStatus.COMPLETED,
-        )
-        runtime.finish_log(
-            agent_log_id,
-            provider=response.provider,
-            model=response.model,
             usage=response.usage,
-            status="completed",
         )
         return response
 
@@ -230,7 +208,7 @@ class TaskWorkflow:
         )
         latest_task = await runtime.threadpool(runtime.task_state, session_id, task_id)
         execution_log_id = next(
-            call.agent_log_id
+            call.id
             for call in reversed(latest_task.llm_calls)
             if call.kind == "task_execution_step" and call.step_id == step.id
         )
@@ -254,7 +232,7 @@ class TaskWorkflow:
                     created_at=datetime.now(UTC),
                     usage=response.usage,
                     context_window=response.context_window,
-                    agent_log_id=execution_log_id,
+                    id=execution_log_id,
                     task_id=task_id,
                     task_step_id=current.id,
                 )
@@ -333,9 +311,7 @@ class TaskWorkflow:
         assert response is not None
         latest_task = await runtime.threadpool(runtime.task_state, session_id, task_id)
         report_log_id = next(
-            call.agent_log_id
-            for call in reversed(latest_task.llm_calls)
-            if call.kind == "task_report"
+            call.id for call in reversed(latest_task.llm_calls) if call.kind == "task_report"
         )
 
         def save_report(latest: ChatSession) -> None:
@@ -348,7 +324,7 @@ class TaskWorkflow:
                     created_at=datetime.now(UTC),
                     usage=response.usage,
                     context_window=response.context_window,
-                    agent_log_id=report_log_id,
+                    id=report_log_id,
                     task_id=task_id,
                 )
             )

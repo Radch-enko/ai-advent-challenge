@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import re
 import socket
 from collections.abc import AsyncIterator, Iterable
@@ -15,12 +16,23 @@ import httpx2
 from mcp import Client, types
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
+from opentelemetry import trace
 
+from copia.common.observability import (
+    MAX_BODY_BYTES,
+    _body_value,
+    _safe_headers,
+    emit_http_log,
+    http_body_capture_enabled,
+)
 from copia.mcp.domain.models.mcp_call_result import McpCallResult
 from copia.mcp.domain.models.mcp_discovery_result import McpDiscoveryResult
 from copia.mcp.domain.models.mcp_server_summary import McpServerSummary
 from copia.mcp.domain.models.mcp_tool_summary import McpToolSummary
-from copia.security.domain.services.credential_sanitizer import sanitize_text
+from copia.security.domain.services.credential_sanitizer import (
+    sanitize_text,
+    sanitize_url,
+)
 
 MAX_ENDPOINT_LENGTH = 2048
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -31,6 +43,7 @@ MAX_ERROR_MESSAGE_LENGTH = 1000
 MAX_HEADER_NAME_LENGTH = 256
 MAX_HEADER_VALUE_LENGTH = 4096
 MAX_ERROR_BODY_BYTES = 8 * 1024
+TRUSTED_DOCKER_MCP_ENDPOINT = "http://mcp-server:8001/mcp"
 CONNECT_TIMEOUT_SECONDS = 15.0
 READ_TIMEOUT_SECONDS = 40.0
 WRITE_TIMEOUT_SECONDS = 5.0
@@ -143,7 +156,9 @@ def _is_loopback_hostname(hostname: str) -> bool:
     return (mapped or address).is_loopback
 
 
-def _parse_endpoint(endpoint: str, *, allow_local: bool = False) -> SplitResult:
+def _parse_endpoint(
+    endpoint: str, *, allow_local: bool = False, allow_trusted_docker: bool = False
+) -> SplitResult:
     if len(endpoint) > MAX_ENDPOINT_LENGTH:
         raise _reject("MCP endpoint exceeds the allowed length")
     try:
@@ -154,8 +169,9 @@ def _parse_endpoint(endpoint: str, *, allow_local: bool = False) -> SplitResult:
         raise _reject() from error
     scheme = parsed.scheme.lower()
     local_endpoint = bool(hostname) and allow_local and _is_loopback_hostname(hostname)
+    docker_endpoint = allow_trusted_docker and hostname == "mcp-server" and port == 8001
     if (
-        (scheme != "https" and not (local_endpoint and scheme == "http"))
+        (scheme != "https" and not ((local_endpoint or docker_endpoint) and scheme == "http"))
         or not hostname
         or parsed.username is not None
         or parsed.password is not None
@@ -197,7 +213,15 @@ def _request_headers(header_name: str | None, header_value: str | None) -> dict[
 
 
 async def _validate_endpoint(endpoint: str, *, allow_local: bool = False) -> _ValidatedEndpoint:
-    parsed = _parse_endpoint(endpoint, allow_local=allow_local)
+    trusted_docker_endpoint = (
+        endpoint == TRUSTED_DOCKER_MCP_ENDPOINT
+        and os.getenv("COPIA_MCP_TRUSTED_ENDPOINT") == TRUSTED_DOCKER_MCP_ENDPOINT
+    )
+    parsed = _parse_endpoint(
+        endpoint,
+        allow_local=allow_local,
+        allow_trusted_docker=trusted_docker_endpoint,
+    )
     hostname = parsed.hostname
     assert hostname is not None
     port = parsed.port or (80 if parsed.scheme.lower() == "http" else 443)
@@ -223,9 +247,18 @@ async def _validate_endpoint(endpoint: str, *, allow_local: bool = False) -> _Va
         local_endpoint = allow_local and _is_loopback_hostname(hostname)
         mapped = getattr(address, "ipv4_mapped", None)
         effective_address = mapped or address
+        docker_private_endpoint = trusted_docker_endpoint and hostname == "mcp-server"
         if local_endpoint and not effective_address.is_loopback:
             raise _reject("Local MCP endpoint must resolve only to loopback addresses")
-        if not local_endpoint and _is_blocked_address(address):
+        if docker_private_endpoint and (
+            effective_address.version != 4
+            or not effective_address.is_private
+            or effective_address.is_link_local
+            or effective_address.is_loopback
+            or any(effective_address in network for network in _METADATA_NETWORKS)
+        ):
+            raise _reject("Trusted Docker MCP endpoint must resolve to a private address")
+        if not local_endpoint and not docker_private_endpoint and _is_blocked_address(address):
             raise _reject("MCP endpoint resolves to a blocked network address")
         if family in (socket.AF_INET, socket.AF_INET6) and raw_address not in addresses:
             addresses.append(raw_address)
@@ -272,9 +305,22 @@ class _PinnedNetworkBackend(httpcore2.AsyncNetworkBackend):
 
 
 class _LimitedResponseStream(httpx2.AsyncByteStream):
-    def __init__(self, stream: httpx2.AsyncByteStream) -> None:
+    def __init__(
+        self,
+        stream: httpx2.AsyncByteStream,
+        *,
+        request: httpx2.Request,
+        response: httpx2.Response,
+        span_context: object,
+    ) -> None:
         self._stream = stream
         self._total = 0
+        self._captured = bytearray()
+        self._capture_overflow = False
+        self._capture_disabled = not http_body_capture_enabled()
+        self._request = request
+        self._response = response
+        self._span_context = span_context
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._stream:
@@ -284,7 +330,43 @@ class _LimitedResponseStream(httpx2.AsyncByteStream):
                     MCP_RESPONSE_TOO_LARGE,
                     "MCP response exceeds the allowed size",
                 )
+            if self._capture_disabled:
+                pass
+            elif len(self._captured) + len(chunk) > MAX_BODY_BYTES:
+                self._capture_overflow = True
+                self._captured.clear()
+            elif not self._capture_overflow:
+                self._captured.extend(chunk)
             yield chunk
+        self._emit_response_log()
+
+    def _emit_response_log(self) -> None:
+        body, body_truncated = (
+            (None, self._capture_overflow)
+            if self._capture_overflow
+            else (None, False)
+            if self._capture_disabled
+            else _body_value(self._response.headers.get("content-type", ""), bytes(self._captured))
+        )
+        attributes: dict[str, object] = {
+            "http.request.method": self._request.method,
+            "url.full": sanitize_url(str(self._request.url)),
+            "http.request.headers.safe": _safe_headers(self._request.headers),
+            "http.response.status_code": self._response.status_code,
+            "http.response.headers.safe": _safe_headers(self._response.headers),
+            "http.response.body_captured": body is not None,
+            "http.body.truncated": body_truncated,
+        }
+        if body is not None:
+            attributes["http.response.body"] = body
+        if not self._capture_disabled:
+            request_body, request_truncated = _body_value(
+                self._request.headers.get("content-type", ""), self._request.content
+            )
+            attributes["http.body.truncated"] = body_truncated or request_truncated
+            if request_body is not None:
+                attributes["http.request.body"] = request_body
+        emit_http_log("http.mcp.response.complete", attributes, context=self._span_context)
 
     async def aclose(self) -> None:
         await self._stream.aclose()
@@ -300,7 +382,55 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
         self._delegate = delegate
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        response = await self._delegate.handle_async_request(request)
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span("mcp.http") as span:
+            span_context = trace.set_span_in_context(span)
+            if hasattr(request, "method"):
+                span.set_attribute("http.request.method", request.method)
+            if hasattr(request, "url"):
+                span.set_attribute("url.full", sanitize_url(str(request.url)))
+            if hasattr(request, "headers"):
+                safe_headers = _safe_headers(dict(request.headers.items()))
+                span.set_attribute("http.request.headers.safe", safe_headers)
+            request_attributes: dict[str, object] = {
+                "http.request.method": getattr(request, "method", ""),
+                "url.full": sanitize_url(str(getattr(request, "url", ""))),
+                "http.request.headers.safe": (
+                    _safe_headers(dict(request.headers.items()))
+                    if hasattr(request, "headers")
+                    else "{}"
+                ),
+            }
+            try:
+                try:
+                    body_value, truncated = (
+                        _body_value(request.headers.get("content-type", ""), request.content)
+                        if http_body_capture_enabled()
+                        else (None, False)
+                    )
+                    if body_value is not None:
+                        request_attributes["http.request.body"] = body_value
+                    request_attributes["http.body.truncated"] = truncated
+                except (AttributeError, RuntimeError):
+                    pass
+                if hasattr(request, "method") and hasattr(request, "url"):
+                    emit_http_log("http.mcp.request", request_attributes, context=span_context)
+                response = await self._delegate.handle_async_request(request)
+                span.set_attribute("http.response.status_code", response.status_code)
+                emit_http_log(
+                    "http.mcp.response",
+                    {
+                        "http.request.method": getattr(request, "method", ""),
+                        "url.full": sanitize_url(str(getattr(request, "url", ""))),
+                        "http.response.status_code": response.status_code,
+                        "http.response.headers.safe": _safe_headers(response.headers),
+                        "http.response.body_captured": False,
+                    },
+                    context=span_context,
+                )
+            except Exception as error:
+                span.set_attribute("error.type", type(error).__name__)
+                raise
         if 300 <= response.status_code < 400:
             await response.aclose()
             raise McpDiscoveryError(
@@ -309,6 +439,24 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
             )
         if response.status_code in (401, 403):
             body = await _read_limited_response_body(response)
+            captured_body, truncated = (
+                _body_value(response.headers.get("content-type", ""), body)
+                if http_body_capture_enabled()
+                else (None, False)
+            )
+            attributes: dict[str, object] = {
+                "http.request.method": getattr(request, "method", ""),
+                "url.full": sanitize_url(str(getattr(request, "url", ""))),
+                "http.request.headers.safe": (
+                    _safe_headers(request.headers) if hasattr(request, "headers") else "{}"
+                ),
+                "http.response.status_code": response.status_code,
+                "http.response.headers.safe": _safe_headers(response.headers),
+                "http.body.truncated": truncated,
+            }
+            if captured_body is not None:
+                attributes["http.response.body"] = captured_body
+            emit_http_log("http.mcp.response.complete", attributes, context=span_context)
             await response.aclose()
             if response.status_code == 401:
                 raise McpDiscoveryError(
@@ -336,7 +484,12 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
         return httpx2.Response(
             status_code=response.status_code,
             headers=response.headers,
-            stream=_LimitedResponseStream(response.stream),
+            stream=_LimitedResponseStream(
+                response.stream,
+                request=request,
+                response=response,
+                span_context=span_context,
+            ),
             extensions=response.extensions,
         )
 

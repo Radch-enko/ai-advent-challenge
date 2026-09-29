@@ -7,8 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.tool_call import ToolCall
@@ -64,7 +62,9 @@ def test_runner_catches_up_once_and_recovers_interrupted_run(tmp_path) -> None:
         {
             "expense_summary": lambda job, start, end: (
                 calls.append((start, end)) or "Сводка",
-                "log-id",
+                None,
+                None,
+                None,
             )
         },
         now=lambda: clock[0],
@@ -111,11 +111,6 @@ def test_agent_mcp_summary_bounds_and_pagination(monkeypatch, tmp_path, pages, e
         return [tool]
 
     monkeypatch.setattr(service, "_resolved_mcp_tools", resolve)
-    monkeypatch.setattr(
-        service,
-        "agent_log_store",
-        AgentLogStore(repository=JsonAgentLogRepository(tmp_path / "sessions")),
-    )
     seen = []
 
     def execute(_tool, arguments):
@@ -157,10 +152,10 @@ def test_agent_mcp_summary_bounds_and_pagination(monkeypatch, tmp_path, pages, e
     start = datetime(2026, 9, 1, 8, tzinfo=UTC)
     end = start + timedelta(hours=1)
     if expected_success:
-        answer, log_id = service._expense_summary_job(hourly_job(), start, end)
+        answer, provider, model, _usage = service._expense_summary_job(hourly_job(), start, end)
         assert answer == "Ваши расходы за последний час: 0 ₽"
-        log = service.agent_log_store.get_turn("scheduled-summary", log_id)
-        assert [entry["arguments"] for entry in log.tool_calls] == seen
+        assert provider == "openai"
+        assert model == "fake"
     else:
         with pytest.raises(ScheduledJobFailure, match="did not read"):
             service._expense_summary_job(hourly_job(), start, end)
@@ -188,11 +183,6 @@ def test_agent_rejects_mcp_error_or_unread_page(monkeypatch, tmp_path, failure):
     monkeypatch.setattr(service, "_resolved_mcp_tools", resolve)
     monkeypatch.setattr(
         service,
-        "agent_log_store",
-        AgentLogStore(repository=JsonAgentLogRepository(tmp_path / "sessions")),
-    )
-    monkeypatch.setattr(
-        service,
         "_execute_resolved_tool",
         lambda _tool, _args: ToolExecutionResult(
             json.dumps(
@@ -215,12 +205,8 @@ def test_agent_rejects_mcp_error_or_unread_page(monkeypatch, tmp_path, failure):
 
     monkeypatch.setattr(service, "router", Router())
     start = datetime(2026, 9, 1, 8, tzinfo=UTC)
-    with pytest.raises(ScheduledJobFailure) as raised:
+    with pytest.raises(ScheduledJobFailure):
         service._expense_summary_job(hourly_job(), start, start + timedelta(hours=1))
-    assert raised.value.agent_log_id is not None
-    log = service.agent_log_store.get_turn("scheduled-summary", raised.value.agent_log_id)
-    assert log.status == "failed"
-    assert log.tool_calls[0]["arguments"]["occurred_from"] == start.isoformat()
 
 
 def test_scheduled_json_redacts_tokens_and_keeps_latest_completed(tmp_path):
@@ -284,13 +270,13 @@ def test_latest_summary_api_keeps_published_answer_after_failed_run(monkeypatch,
     assert payload["latest_run"]["status"] == "failed"
 
 
-def test_runner_persists_handler_failure_with_log_id(tmp_path):
+def test_runner_persists_handler_failure_without_log_metadata(tmp_path):
     config = tmp_path / "schedules.json"
     config.write_text(json.dumps({"jobs": [hourly_job().model_dump(mode="json")]}))
     clock = [datetime(2026, 9, 1, 8, tzinfo=UTC)]
 
     def fail(_job, _start, _end):
-        raise ScheduledJobFailure("Bearer secret-value", "log-id")
+        raise ScheduledJobFailure("Bearer secret-value")
 
     runs = ScheduledRunsRepository(tmp_path / "runs")
     runner = ScheduledRunner(
@@ -306,6 +292,6 @@ def test_runner_persists_handler_failure_with_log_id(tmp_path):
     runner.shutdown()
     assert result is not None and result.status == "failed"
     stored = runs.latest("summary")
-    assert stored.agent_log_id == "log-id"
+    assert stored.provider is None
     assert stored.error == "Bearer [REDACTED]"
     assert stored.answer is None

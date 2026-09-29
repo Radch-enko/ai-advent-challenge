@@ -4,10 +4,6 @@ import remarkGfm from 'remark-gfm'
 import { getLatestScheduledSummary, getScheduledJobStatuses } from '../../data/api/copiaApi'
 import { ScheduledJobStatus, ScheduledSummary } from '../../domain/models/scheduled'
 
-type Props = {
-  onOpenLogs: (jobId: string, scheduledAt: string) => Promise<void>
-}
-
 function timeRemaining(nextRunAt: string | null, now: number): string {
   if (!nextRunAt || now === 0) return '—'
   const seconds = Math.max(0, Math.ceil((Date.parse(nextRunAt) - now) / 1000))
@@ -20,27 +16,12 @@ function timeRemaining(nextRunAt: string | null, now: number): string {
     : `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
-export function SummariesScreen({ onOpenLogs }: Props) {
+export function SummariesScreen() {
   const [summary, setSummary] = useState<ScheduledSummary | null>(null)
   const [jobs, setJobs] = useState<ScheduledJobStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(0)
-  const [logsLoading, setLogsLoading] = useState(false)
-  const [logsError, setLogsError] = useState<string | null>(null)
-
-  async function openLogs(jobId: string, scheduledAt: string) {
-    setLogsLoading(true)
-    setLogsError(null)
-    try {
-      await onOpenLogs(jobId, scheduledAt)
-    } catch (reason) {
-      setLogsError(reason instanceof Error ? reason.message : 'Не удалось загрузить логи')
-    } finally {
-      setLogsLoading(false)
-    }
-  }
-
   useEffect(() => {
     let active = true
     let refreshTimer: ReturnType<typeof setTimeout> | undefined
@@ -76,7 +57,6 @@ export function SummariesScreen({ onOpenLogs }: Props) {
   }, [])
 
   const publishedRun = summary?.published_run
-  const publishedLogId = publishedRun?.agent_log_id
 
   return (
     <section className="summaries-screen">
@@ -96,20 +76,14 @@ export function SummariesScreen({ onOpenLogs }: Props) {
       {!loading && !error && !summary?.published_run ? <p>Сводок пока нет.</p> : null}
       {publishedRun?.answer ? (
         <>
+          <p className="execution-summary" aria-label="Сводка выполнения">
+            {publishedRun.provider ?? '—'} · {publishedRun.model ?? '—'}
+            {publishedRun.usage?.total_tokens != null &&
+              ` · Токены: ${publishedRun.usage.total_tokens}`}
+          </p>
           <article className="summary-answer markdown">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{publishedRun.answer}</ReactMarkdown>
           </article>
-          {publishedLogId ? (
-            <button
-              type="button"
-              className="summary-logs-button"
-              disabled={logsLoading}
-              onClick={() => void openLogs(publishedRun.job_id, publishedRun.scheduled_at)}
-            >
-              {logsLoading ? 'Загрузка логов…' : 'Logs'}
-            </button>
-          ) : null}
-          {logsError ? <p role="alert">{logsError}</p> : null}
         </>
       ) : null}
       {summary?.latest_run?.status === 'failed' ? (

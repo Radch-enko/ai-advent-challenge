@@ -74,7 +74,7 @@ def test_facts_only_success_preserves_personal_context_and_redacts_credentials(
     assert response.status_code == 200
     body = response.json()
     assert body["response"]["trace"] is None
-    assert body["facts_events"][0]["trace"]["request_body"] == {"secret": "[REDACTED]"}
+    assert body["facts_events"][0]["trace"] is None
 
 
 def test_facts_only_provider_failure_redacts_error_credentials(monkeypatch, tmp_path):
@@ -104,9 +104,9 @@ def test_facts_only_provider_failure_redacts_error_credentials(monkeypatch, tmp_
     response = TestClient(app).post(f"/sessions/{session.id}/messages", json={"content": "hello"})
 
     assert response.status_code == 502
-    trace = response.json()["detail"]["provider_trace"]
-    assert trace["request_body"]["secret"] == "[REDACTED]"
-    assert trace["response_body"]["secret"] == "[REDACTED]"
+    serialized = response.text
+    assert "provider_trace" not in serialized
+    assert "provider payload" not in serialized
 
 
 def test_context_management_update_waits_for_in_flight_send(monkeypatch, tmp_path):

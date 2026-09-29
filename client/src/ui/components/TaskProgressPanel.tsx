@@ -17,8 +17,6 @@ type Props = {
   onRetry: () => void
   retrying: boolean
   retryError?: string | null
-  onOpenLogs: (agentLogId: string) => void
-  onOpenAllLogs: () => void
 }
 
 export function TaskProgressPanel({
@@ -30,8 +28,6 @@ export function TaskProgressPanel({
   onRetry,
   retrying,
   retryError,
-  onOpenLogs,
-  onOpenAllLogs,
 }: Props) {
   const completed = task.plan?.steps.filter((step) => step.status === 'completed').length ?? 0
   const total = task.plan?.steps.length ?? 0
@@ -140,7 +136,6 @@ export function TaskProgressPanel({
                 .slice()
                 .reverse()
                 .find((item) => item.step_id === step.id)}
-              onOpenLogs={onOpenLogs}
             />
           ))}
         </div>
@@ -172,7 +167,7 @@ export function TaskProgressPanel({
         {task.llm_calls
           .filter((call) => call.step_id == null)
           .map((call) => (
-            <div className="task-llm-call" key={call.agent_log_id}>
+            <div className="task-llm-call" key={`${call.kind}-${call.started_at}`}>
               <span>{callLabel(call.kind)}</span>
               <small>
                 {call.provider} · {call.model} · {callStatusLabel(call.status)}
@@ -180,13 +175,8 @@ export function TaskProgressPanel({
               <b>
                 {call.status === 'running' ? 'Выполняется…' : formatDuration(call.duration_seconds)}
               </b>
-              <button
-                type="button"
-                className="task-api-link"
-                onClick={() => onOpenLogs(call.agent_log_id)}
-              >
-                API logs
-              </button>
+              {call.usage && <small>Токены: {call.usage.total_tokens ?? '—'}</small>}
+              {call.error && <small role="alert">{call.error}</small>}
             </div>
           ))}
       </div>
@@ -211,9 +201,6 @@ export function TaskProgressPanel({
             ▶ Продолжить
           </button>
         )}
-        <button type="button" className="task-api-logs-button" onClick={onOpenAllLogs}>
-          API logs ({task.llm_calls.length})
-        </button>
       </footer>
     </section>
   )
@@ -223,12 +210,10 @@ function TaskSubtask({
   step,
   active,
   call,
-  onOpenLogs,
 }: {
   step: TaskPlanStep
   active: boolean
   call?: TaskLlmCall
-  onOpenLogs: (agentLogId: string) => void
 }) {
   return (
     <article className={`task-subtask ${step.status} ${active ? 'active' : ''}`}>
@@ -245,13 +230,10 @@ function TaskSubtask({
             {call.provider} · {call.model} · {callStatusLabel(call.status)} ·{' '}
             {call.status === 'running' ? '—' : formatDuration(call.duration_seconds)}
           </span>
-          <button
-            type="button"
-            className="task-api-link"
-            onClick={() => onOpenLogs(call.agent_log_id)}
-          >
-            API logs
-          </button>
+          {call.usage && (
+            <span className="task-call-tokens">Токены: {call.usage.total_tokens ?? '—'}</span>
+          )}
+          {call.error && <p className="task-error-text">{call.error}</p>}
         </>
       )}
     </article>

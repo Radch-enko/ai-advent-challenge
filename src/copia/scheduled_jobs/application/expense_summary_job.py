@@ -2,7 +2,6 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_turn
 from copia.mcp.domain.services.mcp_tool_loop import McpToolLoop
 from copia.scheduled_jobs.application.expense_summary_pager import ExpenseSummaryPager
 from copia.scheduled_jobs.application.expense_summary_runtime import ExpenseSummaryRuntime
@@ -20,7 +19,9 @@ class ExpenseSummaryJob:
     def __init__(self, get_runtime: Callable[[], ExpenseSummaryRuntime]) -> None:
         self._get_runtime = get_runtime
 
-    def run(self, job: ScheduledJob, period_from: datetime, period_to: datetime) -> tuple[str, str]:
+    def run(
+        self, job: ScheduledJob, period_from: datetime, period_to: datetime
+    ) -> tuple[str, object, str, dict[str, int] | None]:
         runtime = self._get_runtime()
         report_timezone = expense_report_timezone(job)
         if job.profile != "accountant":
@@ -39,40 +40,29 @@ class ExpenseSummaryJob:
             raise RuntimeError("Expense search MCP tool is unavailable")
 
         pager = ExpenseSummaryPager(period_from, period_to, runtime.execute_tool)
-        audits: list[dict[str, object]] = []
         loop = McpToolLoop(
             runtime.router,
             tools,
             request_approval=lambda _approval: True,
             execute=pager.execute,
             emit=lambda _event, _data: None,
-            audit=audits.append,
             prepare_arguments=pager.prepare,
             max_tool_calls=100,
         )
         session_id = f"scheduled-{job.id}"
-        log_id = runtime.agent_logs.start_turn(session_id)
         prompt = expense_summary_prompt(job, period_from, period_to, report_timezone)
         try:
             agent = runtime.make_agent(config, runtime.router, session_id=session_id)
-            with agent_log_turn(session_id, log_id, provider=config.provider, model=config.model):
-                response = agent.ask(prompt, agent_log_id=log_id, completion=loop.complete)
+            response = agent.ask(prompt, completion=loop.complete)
             if not pager.called or not pager.finished:
                 raise RuntimeError("Agent did not read every expense page")
             if not response.content.strip():
                 raise RuntimeError("Agent returned an empty summary")
-            for entry in audits:
-                runtime.agent_logs.append_tool_call(log_id, entry)
-            runtime.finish_log(
-                log_id,
-                provider=response.provider,
-                model=response.model,
-                usage=response.usage,
-                status="completed",
+            return (
+                humanize_report_datetimes(response.content.strip(), report_timezone),
+                response.provider,
+                response.model,
+                response.usage,
             )
-            return humanize_report_datetimes(response.content.strip(), report_timezone), log_id
         except Exception as error:
-            for entry in audits:
-                runtime.agent_logs.append_tool_call(log_id, entry)
-            runtime.finish_log(log_id, status="failed", error=runtime.sanitize_error(str(error)))
-            raise ScheduledJobFailure(runtime.sanitize_error(str(error)), log_id) from error
+            raise ScheduledJobFailure(runtime.sanitize_error(str(error))) from error

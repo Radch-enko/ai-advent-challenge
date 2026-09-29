@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from math import ceil
 from typing import Protocol
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_operation
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
@@ -285,28 +284,23 @@ class StickyFactsStrategy:
         }
         started_at = time.perf_counter()
         try:
-            with agent_log_operation(
-                "facts_update",
-                provider=updater_config.provider,
-                model=updater_config.model,
-            ):
-                response = self._router.complete(
-                    [
-                        ChatMessage(
-                            role="system",
-                            content="\n\n".join(
-                                part
-                                for part in (
-                                    updater_config.system_prompt,
-                                    render_invariants_context(self._invariants),
-                                )
-                                if part
-                            ),
+            response = self._router.complete(
+                [
+                    ChatMessage(
+                        role="system",
+                        content="\n\n".join(
+                            part
+                            for part in (
+                                updater_config.system_prompt,
+                                render_invariants_context(self._invariants),
+                            )
+                            if part
                         ),
-                        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-                    ],
-                    updater_config,
-                )
+                    ),
+                    ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+                ],
+                updater_config,
+            )
             updates, deletions = self._changes_from_response(response.structured_data)
         except (ProviderError, ValueError) as error:
             event.duration_seconds = time.perf_counter() - started_at

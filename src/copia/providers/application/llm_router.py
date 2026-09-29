@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dotenv import load_dotenv
 
-from copia.agent_logs.domain.contracts.agent_log_sink import AgentLogSink
 from copia.providers.data.llm import GigaChatProvider, LLMProvider, OpenAIProvider, ProviderError
 from copia.providers.data.model_catalog import context_window_for
 from copia.providers.domain.models.llm_config import LLMConfig
@@ -21,13 +20,11 @@ class LLMRouter:
     def __init__(
         self,
         providers: dict[ProviderName, LLMProvider] | None = None,
-        agent_log_store: AgentLogSink | None = None,
     ) -> None:
         load_dotenv()
-        self._agent_log_store = agent_log_store
         self._providers = providers or {
-            ProviderName.OPENAI: OpenAIProvider(log_store=agent_log_store),
-            ProviderName.GIGACHAT: GigaChatProvider(log_store=agent_log_store),
+            ProviderName.OPENAI: OpenAIProvider(),
+            ProviderName.GIGACHAT: GigaChatProvider(),
         }
 
     def complete(

@@ -3,7 +3,6 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import Any
 
-from copia.agent_logs.domain.services.agent_log_context import agent_log_operation, agent_log_turn
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.data.llm import ProviderError
@@ -29,7 +28,7 @@ class SessionTitleGenerator:
         self._get_router = get_router
         self._get_lifecycle_lock = get_lifecycle_lock
 
-    def generate(self, session_id: str, agent_log_id: str | None = None) -> None:
+    def generate(self, session_id: str) -> None:
         session = self._get_sessions().load(session_id)
         if session is None or session.title is not None or len(session.messages) < 2:
             return
@@ -40,18 +39,7 @@ class SessionTitleGenerator:
         messages = self._title_messages(session, invariant_context)
         config = self._title_config(session)
         try:
-            if agent_log_id is None:
-                response = self._get_router().complete(messages, config)
-            else:
-                with agent_log_turn(
-                    session_id,
-                    agent_log_id,
-                    provider=config.provider,
-                    model=config.model,
-                    operation="title",
-                ):
-                    with agent_log_operation("title", provider=config.provider, model=config.model):
-                        response = self._get_router().complete(messages, config)
+            response = self._get_router().complete(messages, config)
         except ProviderError:
             return
         data = response.structured_data

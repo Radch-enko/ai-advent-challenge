@@ -1,6 +1,5 @@
 import { AgentConfig, CompletionConfig } from '../../domain/models/agent'
 import {
-  AgentLogDetail,
   FactsUpdateEvent,
   ProviderTrace,
   SummarizationEvent,
@@ -39,7 +38,6 @@ type SessionChatResponseData = Omit<ChatResponseData, 'trace'> & { trace?: null 
 
 export type ChatResponse = {
   response: ChatResponseData
-  agent_log_id?: string
   summarization_events: SummarizationEvent[]
   facts_events: FactsUpdateEvent[]
   facts: Record<string, string>
@@ -48,9 +46,9 @@ export type ChatResponse = {
   working_memory: WorkingMemoryItem[]
 }
 
-export type SessionChatResponse = Omit<ChatResponse, 'response' | 'agent_log_id'> & {
+export type SessionChatResponse = Omit<ChatResponse, 'response'> & {
   response: SessionChatResponseData
-  agent_log_id: string
+  duration_seconds: number
 }
 
 export type McpTurn = {
@@ -73,7 +71,11 @@ export type StoredMessage = {
   created_at?: string | null
   usage?: TokenUsage | null
   context_window?: number | null
-  agent_log_id?: string | null
+  provider?: Provider | null
+  model?: string | null
+  duration_seconds?: number | null
+  execution_status?: 'completed' | 'failed' | null
+  execution_error?: string | null
   task_id?: string | null
   task_step_id?: string | null
 }
@@ -110,16 +112,6 @@ export class ApiRequestError extends Error {
     super(apiErrorMessage(body, status))
   }
 
-  get providerTrace(): ChatResponse['response']['trace'] {
-    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
-      return undefined
-    }
-    const detail = this.body.detail
-    return typeof detail === 'object' && detail !== null && 'provider_trace' in detail
-      ? (detail.provider_trace as ChatResponse['response']['trace'])
-      : undefined
-  }
-
   get errorCode(): string | undefined {
     if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
       return undefined
@@ -130,19 +122,6 @@ export class ApiRequestError extends Error {
       'code' in detail &&
       typeof detail.code === 'string'
       ? detail.code
-      : undefined
-  }
-
-  get agentLogId(): string | undefined {
-    if (typeof this.body !== 'object' || this.body === null || !('detail' in this.body)) {
-      return undefined
-    }
-    const detail = this.body.detail
-    return typeof detail === 'object' &&
-      detail !== null &&
-      'agent_log_id' in detail &&
-      typeof detail.agent_log_id === 'string'
-      ? detail.agent_log_id
       : undefined
   }
 
@@ -454,19 +433,6 @@ export function deleteInvariant(itemId: string): Promise<void> {
     (response) => {
       if (!response.ok) throw new Error(`Could not delete invariant: ${response.status}`)
     },
-  )
-}
-export function getAgentLog(sessionId: string, agentLogId: string): Promise<AgentLogDetail> {
-  return request(
-    `/sessions/${encodeURIComponent(sessionId)}/agent-logs/${encodeURIComponent(agentLogId)}`,
-  )
-}
-export function getScheduledRunAgentLog(
-  jobId: string,
-  scheduledAt: string,
-): Promise<AgentLogDetail> {
-  return request(
-    `/scheduled-jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(scheduledAt)}/log`,
   )
 }
 export function getLatestScheduledSummary(): Promise<ScheduledSummary> {

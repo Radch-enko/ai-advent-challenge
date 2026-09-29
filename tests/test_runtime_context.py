@@ -123,7 +123,6 @@ def test_task_complete_call_adds_runtime_context(monkeypatch) -> None:
     monkeypatch.setattr(service, "_get_session", get_session)
     monkeypatch.setattr(service, "_task_call_start", lambda *args, **kwargs: "log-id")
     monkeypatch.setattr(service, "_task_call_finish", lambda *args, **kwargs: None)
-    monkeypatch.setattr(service, "_finish_agent_log", lambda *args, **kwargs: None)
 
     response = asyncio.run(
         service._task_complete_call(

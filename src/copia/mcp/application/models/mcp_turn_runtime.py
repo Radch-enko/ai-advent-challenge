@@ -19,4 +19,3 @@ class McpTurnRuntime:
     decision: bool | None = None
     decision_event: threading.Event = field(default_factory=threading.Event)
     lock: threading.RLock = field(default_factory=threading.RLock)
-    audits: list[dict[str, Any]] = field(default_factory=list)

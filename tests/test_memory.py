@@ -481,7 +481,7 @@ def test_direct_profile_agent_requires_explicit_memory_opt_in_and_redacts_its_tr
         f"/agents/{default_agent.json()['agent_id']}/messages", json={"content": "default"}
     )
     assert default_response.status_code == 200
-    assert default_response.json()["response"]["trace"] is not None
+    assert default_response.json()["response"]["trace"] is None
     assert "secret-memory-value" not in requests[-1][0].content
 
     enabled_agent = client.post(
@@ -493,7 +493,7 @@ def test_direct_profile_agent_requires_explicit_memory_opt_in_and_redacts_its_tr
         f"/agents/{enabled_agent.json()['agent_id']}/messages", json={"content": "enabled"}
     )
     assert enabled_response.status_code == 200
-    assert enabled_response.json()["response"]["trace"] is not None
+    assert enabled_response.json()["response"]["trace"] is None
     assert "secret-memory-value" in requests[-1][0].content
 
     def fail(messages, config):
@@ -509,10 +509,9 @@ def test_direct_profile_agent_requires_explicit_memory_opt_in_and_redacts_its_tr
         f"/agents/{enabled_agent.json()['agent_id']}/messages", json={"content": "failure"}
     )
     assert failure.status_code == 502
-    trace = failure.json()["detail"]["provider_trace"]
-    assert trace["request_body"] == {"secret": "[REDACTED]"}
-    assert trace["response_body"] == {"echo": "secret-memory-value"}
-    assert "secret-memory-value" in failure.text
+    assert "provider_trace" not in failure.text
+    assert "request_body" not in failure.text and "response_body" not in failure.text
+    assert "secret-memory-value" not in failure.text
 
 
 def test_toggle_persists_and_fork_copies_it_without_message_writes(
@@ -601,10 +600,9 @@ def test_long_term_memory_sanitizes_provider_failure_trace(monkeypatch, tmp_path
     response = client.post(f"/sessions/{session_id}/messages", json={"content": "hello"})
 
     assert response.status_code == 502
-    trace = response.json()["detail"]["provider_trace"]
-    assert trace["request_body"] == {"secret": "[REDACTED]"}
-    assert trace["response_body"] == {"echo": "secret-memory-value"}
-    assert "secret-memory-value" in response.text
+    assert "provider_trace" not in response.text
+    assert "request_body" not in response.text and "response_body" not in response.text
+    assert "secret-memory-value" not in response.text
 
 
 def test_memory_api_uses_threadpool_and_facts_errors_are_generic(

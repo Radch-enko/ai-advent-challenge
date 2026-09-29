@@ -12,7 +12,7 @@ from copia.sessions.domain.models.summarization_event import SummarizationEvent
 
 class SessionMessageResponse(BaseModel):
     response: SessionLLMResponse
-    agent_log_id: str
+    duration_seconds: float
     summarization_events: list[SummarizationEvent] = Field(default_factory=list)
     facts_events: list[FactsUpdateEvent] = Field(default_factory=list)
     facts: dict[str, str] = Field(default_factory=dict)

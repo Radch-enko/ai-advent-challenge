@@ -179,7 +179,8 @@ def test_provider_error_preserves_memory_and_sanitizes_credentials(monkeypatch, 
     response = TestClient(app).post(f"/sessions/{session.id}/messages", json={"content": "hello"})
 
     assert response.status_code == 502
-    assert response.json()["detail"]["provider_trace"]["request_body"] == {"memory": "value"}
+    assert "provider_trace" not in response.text
+    assert "request_body" not in response.text and "response_body" not in response.text
     assert working.load(session.id)[0].value == "value"
 
 

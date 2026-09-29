@@ -4,8 +4,6 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from copia import service
-from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.agents.domain.models.agent import Agent
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.invariants.data.invariants_repository import InvariantsRepository
@@ -133,11 +131,6 @@ def test_session_invariant_crud_and_request_inclusion(monkeypatch, tmp_path) -> 
         service,
         "pending_memory_repository",
         PendingMemoryRepository(tmp_path / "sessions"),
-    )
-    monkeypatch.setattr(
-        service,
-        "agent_log_store",
-        AgentLogStore(repository=JsonAgentLogRepository(tmp_path / "sessions")),
     )
     requests: list[list[ChatMessage]] = []
 

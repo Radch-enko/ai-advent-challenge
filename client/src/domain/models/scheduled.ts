@@ -1,3 +1,5 @@
+import { TokenUsage } from './chat'
+
 export type ScheduledRun = {
   job_id: string
   kind: string
@@ -7,9 +9,11 @@ export type ScheduledRun = {
   status: 'running' | 'completed' | 'failed'
   answer: string | null
   error: string | null
-  agent_log_id: string | null
   started_at: string
   finished_at: string | null
+  provider: string | null
+  model: string | null
+  usage: TokenUsage | null
 }
 
 export type ScheduledSummary = {

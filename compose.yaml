@@ -1,0 +1,44 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      COPIA_DATA_ROOT: /data
+      COPIA_PROFILES_PATH: /app/profiles.json
+      COPIA_OTEL_ENABLED: "true"
+      COPIA_OTEL_CAPTURE_HTTP_BODIES: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4317}
+      COPIA_MCP_TRUSTED_ENDPOINT: http://mcp-server:8001/mcp
+    ports:
+      - "8000:8000"
+    volumes:
+      - copia-data:/data
+    depends_on:
+      - mcp-server
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    environment:
+      COPIA_API_URL: http://backend:8000
+    expose:
+      - "8001"
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  copia-data:

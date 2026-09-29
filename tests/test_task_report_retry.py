@@ -5,8 +5,6 @@ from pathlib import Path
 import httpx
 
 from copia import service
-from copia.agent_logs.data.agent_log_repository import JsonAgentLogRepository
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.invariants.data.invariants_repository import InvariantsRepository
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.sessions.data.sessions_repository import SessionsRepository
@@ -77,11 +75,6 @@ def test_task_retries_report_when_model_adds_an_extra_heading(monkeypatch, tmp_p
     monkeypatch.setattr(service, "sessions", SessionsRepository(tmp_path / "sessions"))
     monkeypatch.setattr(
         service, "invariants_repository", InvariantsRepository(tmp_path / "invariants.json")
-    )
-    monkeypatch.setattr(
-        service,
-        "agent_log_store",
-        AgentLogStore(repository=JsonAgentLogRepository(tmp_path / "logs")),
     )
     router = MalformedThenValidReportRouter()
     monkeypatch.setattr(service, "router", router)

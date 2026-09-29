@@ -77,4 +77,4 @@ class ProviderRoutes:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=runtime.provider_error_detail(error),
             ) from error
-        return MessageResponse(response=response)
+        return MessageResponse(response=response.model_copy(update={"trace": None}))

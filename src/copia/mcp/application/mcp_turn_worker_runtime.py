@@ -3,7 +3,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.mcp.application.models.mcp_turn_runtime import McpTurnRuntime
 from copia.mcp.domain.models.mcp_approval import McpApproval
@@ -28,7 +27,6 @@ class McpTurnWorkerRuntime:
     finalize_response: Callable[[str, LLMResponse, tuple[McpArtifact, ...]], LLMResponse]
     emit_turn: Callable[[McpTurnRuntime, str, dict[str, Any]], None]
     send_locked: Callable[..., Awaitable[Any]]
-    agent_logs: AgentLogStore
     persist_turn: Callable[..., None]
     turns_lock: Any
     workers: dict[str, asyncio.Task[None]]

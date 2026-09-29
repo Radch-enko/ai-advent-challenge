@@ -4,7 +4,6 @@ import json
 from datetime import UTC, datetime
 
 from copia import service
-from copia.agent_logs.data.agent_log_store import AgentLogStore
 from copia.mcp.domain.services.mcp_tool_loop import ResolvedMcpTool, ToolExecutionResult
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.providers.domain.models.tool_call import ToolCall
@@ -35,7 +34,6 @@ def install_expense_tool(monkeypatch) -> None:
         return [tool]
 
     monkeypatch.setattr(service, "_resolved_mcp_tools", resolve)
-    monkeypatch.setattr(service, "agent_log_store", AgentLogStore())
     monkeypatch.setattr(
         service,
         "_execute_resolved_tool",
@@ -92,7 +90,7 @@ def test_false_empty_report_is_published_without_a_correction_call(monkeypatch):
     monkeypatch.setattr(service, "router", router)
     start = datetime(2026, 9, 24, 18, tzinfo=UTC)
     end = datetime(2026, 9, 25, 7, 28, tzinfo=UTC)
-    answer, _log_id = service._expense_summary_job(day_job(), start, end)
+    answer, _provider, _model, _usage = service._expense_summary_job(day_job(), start, end)
 
     assert router.calls == 2
     assert answer == "Ваши расходы за сегодняшний день отсутствуют."
@@ -123,7 +121,7 @@ def test_nonempty_report_dates_are_humanized(monkeypatch):
     monkeypatch.setattr(service, "router", router)
     start = datetime(2026, 9, 24, 18, tzinfo=UTC)
     end = datetime(2026, 9, 25, 7, 28, tzinfo=UTC)
-    answer, _log_id = service._expense_summary_job(day_job(), start, end)
+    answer, _provider, _model, _usage = service._expense_summary_job(day_job(), start, end)
 
     assert router.calls == 2
     assert "такси — 250 ₽" in answer

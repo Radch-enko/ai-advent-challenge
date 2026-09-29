@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from copia.providers.domain.models.provider_name import ProviderName
+
 
 class ScheduledRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -15,9 +17,11 @@ class ScheduledRun(BaseModel):
     status: Literal["running", "completed", "failed"]
     answer: str | None = None
     error: str | None = None
-    agent_log_id: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+    provider: ProviderName | None = None
+    model: str | None = None
+    usage: dict[str, int] | None = None
 
     @field_validator("scheduled_at", "period_from", "period_to", "started_at", "finished_at")
     @classmethod

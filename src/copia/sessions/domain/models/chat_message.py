@@ -11,6 +11,10 @@ class ChatMessage(BaseModel):
     created_at: datetime | None = None
     usage: dict[str, int] | None = None
     context_window: int | None = Field(default=None, gt=0)
-    agent_log_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    execution_status: str | None = Field(default=None, pattern="^(completed|failed)$")
+    execution_error: str | None = None
     task_id: str | None = None
     task_step_id: str | None = None
