@@ -1,7 +1,8 @@
 import { ReactNode } from 'react'
 import { ChatSessionSummary } from '../domain/models/session'
 
-export type AppMode = 'chat' | 'agents' | 'profiles' | 'invariants' | 'mcp' | 'summaries'
+export type AppMode =
+  'chat' | 'agents' | 'profiles' | 'documents' | 'invariants' | 'mcp' | 'summaries'
 
 type Props = {
   mode: AppMode
@@ -75,6 +76,14 @@ export function ApplicationShell({
               onClick={() => onNavigate('profiles')}
             >
               Профили общения
+            </button>
+            <button
+              type="button"
+              className={'agents-nav ' + (mode === 'documents' ? 'active' : '')}
+              aria-current={mode === 'documents' ? 'page' : undefined}
+              onClick={() => onNavigate('documents')}
+            >
+              Документы
             </button>
             <div className="nav-section-label">Расширения (MCP)</div>
             <button

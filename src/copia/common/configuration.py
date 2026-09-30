@@ -13,6 +13,9 @@ class CopiaSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     data_root: Path = Field(default=Path("~/.copia"), validation_alias="COPIA_DATA_ROOT")
+    documents_path_override: Path | None = Field(
+        default=None, validation_alias="COPIA_DOCUMENTS_PATH"
+    )
     profiles_path_override: Path | None = Field(
         default=None, validation_alias="COPIA_PROFILES_PATH"
     )
@@ -107,6 +110,10 @@ class CopiaSettings(BaseSettings):
     @property
     def scheduler_state_path(self) -> Path:
         return self.scheduler_state_path_override or self.data_root / "scheduler-state.json"
+
+    @property
+    def documents_path(self) -> Path:
+        return self.documents_path_override or self.data_root.expanduser() / "documents"
 
     @property
     def allow_local_mcp(self) -> bool:

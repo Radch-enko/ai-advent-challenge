@@ -21,6 +21,7 @@ from copia.common.observability import shutdown as shutdown_observability
 from copia.conversations.api.router import create_conversation_router
 from copia.conversations.api.service_composition import ConversationServiceComposition
 from copia.conversations.application.conversation_store import ConversationStore
+from copia.document_indexing.api.service_composition import DocumentIndexingServiceComposition
 from copia.expenses.api.router import create_expenses_router
 from copia.expenses.api.validation import expense_validation_error_response
 from copia.expenses.data.expenses_repository import ExpensesRepository
@@ -38,6 +39,7 @@ from copia.profile_memory.api.router import create_profile_memory_router
 from copia.profile_memory.data.profile_memory_repository import ProfileMemoryRepository
 from copia.providers.api.provider_route_runtime import ProviderRouteRuntime
 from copia.providers.api.routes import ProviderRoutes
+from copia.providers.application.embedding_router import EmbeddingRouter
 from copia.providers.application.llm_router import LLMRouter
 from copia.providers.data.llm import ProviderError
 from copia.providers.data.model_catalog import context_window_for
@@ -98,6 +100,11 @@ profiles_path = settings.profiles_path
 sessions_path = settings.sessions_path
 invariants_path = settings.invariants_path
 router = LLMRouter()
+document_indexing_composition = DocumentIndexingServiceComposition(
+    data_root,
+    settings.documents_path,
+    EmbeddingRouter(),
+)
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}
 sessions = SessionsRepository(sessions_path)
@@ -157,10 +164,16 @@ async def lifespan(_app: FastAPI):
             cleanup.callback(shutdown_observability)
             cleanup.callback(conversation_store.close)
             cleanup.callback(router.close)
+            cleanup.callback(document_indexing_composition.close)
             cleanup.callback(scheduled_runner.shutdown)
 
 
-app = FastAPI(title="Copia API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Copia API",
+    version="0.1.0",
+    lifespan=lifespan,
+    telemetry={"auto_configure": False},
+)
 instrument_app(app)
 
 
@@ -224,6 +237,7 @@ _start_task_worker = task_workflow.start_worker
 
 
 app.include_router(create_expenses_router(lambda: expenses))
+app.include_router(document_indexing_composition.router())
 
 
 @app.get("/health")

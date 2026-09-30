@@ -13,4 +13,3 @@ client/dist/
 *.egg-info/
 *.tsbuildinfo
 .DS_Store
-SUBAGENTS.md

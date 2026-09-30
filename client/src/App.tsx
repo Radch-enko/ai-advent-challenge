@@ -12,6 +12,7 @@ import { UserProfilesScreen } from './features/profiles/ui/UserProfilesScreen'
 import { TaskPlanApprovalBar } from './features/tasks/ui/TaskPlanApprovalBar'
 import { McpSettingsScreen } from './features/mcp/ui/McpSettingsScreen'
 import { SummariesScreen } from './features/summaries/ui/SummariesScreen'
+import { DocumentsScreen } from './features/document-indexing/ui/DocumentsScreen'
 import { useInvariants } from './features/invariants/application/useInvariants'
 import { useSavedSessions } from './features/chat/application/useSavedSessions'
 import { useUserProfiles } from './features/profiles/application/useUserProfiles'
@@ -502,6 +503,8 @@ export function App() {
     >
       {mode === 'mcp' ? (
         <McpSettingsScreen />
+      ) : mode === 'documents' ? (
+        <DocumentsScreen />
       ) : mode === 'summaries' ? (
         <SummariesScreen />
       ) : mode === 'invariants' ? (
