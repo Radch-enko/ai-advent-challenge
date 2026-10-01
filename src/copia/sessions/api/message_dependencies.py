@@ -37,3 +37,5 @@ class SessionMessageDependencies:
     safe_summary: Callable[..., Any]
     make_response: Callable[..., SessionMessageResponse]
     generate_title: Callable[..., None]
+    retrieve_chunk: Callable[[str], Any]
+    contextualize: Callable[..., list[Any]]

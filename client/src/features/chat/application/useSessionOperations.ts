@@ -8,6 +8,7 @@ import {
   getSession,
   updateSessionContextManagement,
   updateSessionLongTermMemory,
+  updateSessionRagMode,
   updateSessionTaskMode,
 } from '../../../data/api/sessionsApi'
 import { AgentConfig, ContextManagementConfig } from '../../../domain/models/agent'
@@ -20,6 +21,7 @@ type SessionOperationsState = {
   activeSession: ChatSession | null
   activeTask: TaskState | undefined
   taskIsActive: boolean
+  ragModeDraft: boolean
   isLoading: boolean
   profileSettingsSaving: boolean
   forkingMessageIndex: number | null
@@ -32,6 +34,7 @@ type SessionOperationsActions = {
   refreshSessions: () => Promise<boolean>
   setActiveSession: Dispatch<SetStateAction<ChatSession | null>>
   setTaskModeDraft: Dispatch<SetStateAction<boolean>>
+  setRagModeDraft: Dispatch<SetStateAction<boolean>>
   setSelectedUserProfileId: Dispatch<SetStateAction<string | null>>
   setProfileSelectionError: Dispatch<SetStateAction<string | null>>
   setProfileSelectionLoading: Dispatch<SetStateAction<boolean>>
@@ -108,11 +111,11 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
   ])
 
   async function createFromProfile(profileName: string): Promise<ChatSession> {
-    return createSessionFromProfile(profileName)
+    return createSessionFromProfile(profileName, state.ragModeDraft)
   }
 
   async function createWithConfig(config: AgentConfig): Promise<ChatSession> {
-    return createSession(config)
+    return createSession(config, null, false, state.ragModeDraft)
   }
 
   async function openSavedSession(sessionId: string) {
@@ -143,6 +146,32 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
       actions.setProfileSettingsError(
         error instanceof Error ? error.message : 'Не удалось изменить Task mode',
       )
+    }
+  }
+
+  async function setRagMode(enabled: boolean) {
+    if (state.taskIsActive) return
+    if (!state.activeSession) {
+      actions.setRagModeDraft(enabled)
+      return
+    }
+    if (state.profileSettingsSaving) return
+    actions.setProfileSettingsSaving(true)
+    actions.setProfileSettingsError(null)
+    try {
+      const updated = await updateSessionRagMode(state.activeSession.id, enabled)
+      if (activeSessionIdRef.current === updated.id) {
+        actions.setActiveSession(updated)
+        actions.setRagModeDraft(updated.rag_enabled)
+      }
+    } catch (error) {
+      if (activeSessionIdRef.current === state.activeSession.id) {
+        actions.setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось изменить RAG mode',
+        )
+      }
+    } finally {
+      actions.setProfileSettingsSaving(false)
     }
   }
 
@@ -233,6 +262,7 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
     openSavedSession,
     removeSession,
     setTaskMode,
+    setRagMode,
     selectUserProfile,
     retryProfileSelection,
     setProfileContextManagement,

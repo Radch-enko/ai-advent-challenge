@@ -42,7 +42,7 @@
 .documents-screen > article,
 .documents-screen > .documents-actions,
 .documents-screen > .documents-error,
-.documents-comparison {
+.documents-index-summary {
   max-width: 1080px;
   margin-right: auto;
   margin-left: auto;
@@ -57,7 +57,7 @@
 .documents-source-card,
 .documents-embedding-card,
 .documents-progress,
-.documents-comparison {
+.documents-index-summary {
   margin-bottom: 16px;
 }
 
@@ -285,7 +285,7 @@
   font-size: 12px;
 }
 
-.documents-comparison {
+.documents-index-summary {
   padding-top: 7px;
 }
 
@@ -301,9 +301,9 @@
     monospace;
 }
 
-.documents-comparison-grid {
+.documents-index-card-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -318,7 +318,7 @@
 }
 
 .documents-chunk-card > div > p,
-.documents-no-comparison {
+.documents-no-summary {
   margin: 5px 0 0;
   color: var(--color-text-muted);
   font-size: 11px;
@@ -368,6 +368,35 @@
   font-size: 12px;
 }
 
+.documents-indexed-sources {
+  max-width: 100%;
+  margin-top: 5px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.documents-indexed-sources > summary,
+.documents-file-tree details > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.documents-file-tree {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0 0;
+  padding-left: 19px;
+  color: var(--color-text-secondary);
+  list-style: none;
+}
+
+.documents-file-tree code {
+  color: var(--color-text-secondary);
+  font:
+    11px 'JetBrains Mono',
+    monospace;
+}
+
 @media (max-width: 720px) {
   .documents-screen {
     padding: 20px 14px 32px;
@@ -382,7 +411,7 @@
   }
 
   .documents-settings-grid,
-  .documents-comparison-grid {
+  .documents-index-card-grid {
     grid-template-columns: 1fr;
   }
 

@@ -11,6 +11,7 @@ class CreateSessionRequest(BaseModel):
     config: AgentConfig | None = None
     user_profile_id: str | None = None
     task_mode_enabled: bool = False
+    rag_enabled: bool = False
 
     @model_validator(mode="after")
     def require_one_source(self) -> CreateSessionRequest:

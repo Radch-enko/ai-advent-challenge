@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from copia.agents.domain.models.agent_config import AgentConfig
+from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
@@ -100,6 +101,11 @@ class Agent:
     @property
     def history(self) -> list[ChatMessage]:
         return list(self._history)
+
+    def attach_sources_to_last_response(self, sources: list[KnowledgeSource]) -> None:
+        if not sources or not self._history or self._history[-1].role != "assistant":
+            return
+        self._history[-1] = self._history[-1].model_copy(update={"sources": sources})
 
     @property
     def context(self) -> ConversationContext:

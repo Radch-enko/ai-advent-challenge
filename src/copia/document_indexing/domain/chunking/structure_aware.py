@@ -8,6 +8,11 @@ from copia.document_indexing.domain.models.document_chunk import DocumentChunk
 from copia.document_indexing.domain.models.source_document import SourceDocument
 from copia.providers.domain.contracts.embedding_provider import EmbeddingProvider
 
+_YAML_FRONT_MATTER = re.compile(
+    r"\A(?:\ufeff)?---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
 
 class StructureAwareChunkingStrategy:
     id = "structure-aware"
@@ -121,6 +126,7 @@ class StructureAwareChunkingStrategy:
 
     @staticmethod
     def _markdown_sections(text: str) -> list[tuple[str, str, list[str]]]:
+        text = _YAML_FRONT_MATTER.sub("", text, count=1)
         sections: OrderedDict[str, tuple[str, list[str]]] = OrderedDict()
         heading_stack: list[tuple[int, str]] = []
         section = "Document"

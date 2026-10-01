@@ -16,10 +16,9 @@ from copia.document_indexing.application.document_indexer import DocumentIndexer
 from copia.document_indexing.data.document_loader import DocumentLoader
 from copia.document_indexing.data.index_artifact_store import IndexArtifactStore
 from copia.document_indexing.domain.chunking import (
-    FixedSizeChunkingStrategy,
     StructureAwareChunkingStrategy,
 )
-from copia.document_indexing.domain.errors import IndexRunConflict
+from copia.document_indexing.domain.errors import DocumentIndexingError, IndexRunConflict
 from copia.document_indexing.domain.models.embedding_settings import EmbeddingSettings
 from copia.document_indexing.domain.models.source_document import SourceDocument
 from copia.providers.application.embedding_router import EmbeddingRouter
@@ -83,19 +82,78 @@ def wait_until_finished(indexer: DocumentIndexer, run_id: str) -> str:
     raise AssertionError("Indexing run did not finish")
 
 
-def test_loader_reads_text_and_markdown_with_relative_metadata(tmp_path: Path) -> None:
+def test_loader_reads_only_non_empty_markdown_with_relative_metadata(tmp_path: Path) -> None:
     documents_path = tmp_path / "documents"
     (documents_path / "nested").mkdir(parents=True)
     (documents_path / "nested" / "article.md").write_text("# A title\n\nText.", encoding="utf-8")
     (documents_path / "plain.txt").write_text("A text article.", encoding="utf-8")
+    (documents_path / "empty.md").write_text("  \n", encoding="utf-8")
     (documents_path / "ignored.pdf").write_bytes(b"pdf")
 
     documents = DocumentLoader(documents_path).load()
 
-    assert [document.source for document in documents] == ["nested/article.md", "plain.txt"]
+    assert [document.source for document in documents] == ["nested/article.md"]
     assert documents[0].title == "article"
     assert documents[0].suffix == ".md"
     assert documents[0].size_bytes == len(b"# A title\n\nText.")
+    assert DocumentLoader(documents_path).summary() == (1, len(b"# A title\n\nText."))
+
+
+def test_loader_applies_root_and_nested_ignore_globs(tmp_path: Path) -> None:
+    documents_path = tmp_path / "documents"
+    (documents_path / "nested" / "generated").mkdir(parents=True)
+    (documents_path / "private").mkdir()
+    (documents_path / "article.md").write_text("# Article", encoding="utf-8")
+    (documents_path / "secret-draft.md").write_text("# Secret", encoding="utf-8")
+    (documents_path / "private" / "hidden.md").write_text("# Hidden", encoding="utf-8")
+    (documents_path / "nested" / "keep.md").write_text("# Keep", encoding="utf-8")
+    (documents_path / "nested" / "omit-me.md").write_text("# Omit", encoding="utf-8")
+    (documents_path / "nested" / "generated" / "hidden.md").write_text(
+        "# Generated", encoding="utf-8"
+    )
+    (documents_path / ".ignore").write_text(
+        "# Root rules\n\nsecret*.md\nprivate\n**/generated/**\n", encoding="utf-8"
+    )
+    (documents_path / "nested" / ".ignore").write_text("omit*.md\n", encoding="utf-8")
+
+    documents = DocumentLoader(documents_path).load()
+
+    assert [document.source for document in documents] == ["article.md", "nested/keep.md"]
+
+
+def test_loader_fails_when_ignore_file_cannot_be_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents_path = tmp_path / "documents"
+    documents_path.mkdir()
+    ignore_path = documents_path / ".ignore"
+    ignore_path.write_text("private/**", encoding="utf-8")
+    read_text = Path.read_text
+
+    def fail_to_read_ignore(path: Path, *args: object, **kwargs: object) -> str:
+        if path == ignore_path:
+            raise PermissionError("permission denied")
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_to_read_ignore)
+
+    with pytest.raises(DocumentIndexingError, match="Unable to read ignore rules"):
+        DocumentLoader(documents_path).load()
+
+
+def test_loader_rejects_ignore_negation_and_parent_paths(tmp_path: Path) -> None:
+    documents_path = tmp_path / "documents"
+    documents_path.mkdir()
+    ignore_path = documents_path / ".ignore"
+    ignore_path.write_text("!keep.md", encoding="utf-8")
+
+    with pytest.raises(DocumentIndexingError, match="Negation is not supported"):
+        DocumentLoader(documents_path).load()
+
+    ignore_path.write_text("../outside.md", encoding="utf-8")
+    with pytest.raises(DocumentIndexingError, match="Invalid ignore pattern"):
+        DocumentLoader(documents_path).load()
 
 
 def test_document_source_path_defaults_to_data_root_and_accepts_override(
@@ -136,23 +194,10 @@ def test_structure_strategy_preserves_markdown_sections_and_splits_long_blocks()
     assert len({chunk.chunk_id for chunk in chunks}) == len(chunks)
 
 
-def test_fixed_strategy_obeys_token_limit_and_uses_sixty_four_token_overlap() -> None:
-    provider = FakeEmbeddingProvider()
-    document = SourceDocument(
-        source="long.txt",
-        title="long",
-        suffix=".txt",
-        text=" ".join(f"token{index}" for index in range(1200)),
-        size_bytes=0,
-    )
+def test_chunking_package_exports_only_structure_aware_strategy() -> None:
+    from copia.document_indexing.domain import chunking
 
-    chunks = FixedSizeChunkingStrategy().chunk(document, provider, "fake-model")
-
-    assert len(chunks) == 3
-    assert all(chunk.token_count <= 512 for chunk in chunks)
-    assert chunks[0].text.split()[-64:] == chunks[1].text.split()[:64]
-    assert all(chunk.source == "long.txt" and chunk.title == "long" for chunk in chunks)
-    assert len({chunk.chunk_id for chunk in chunks}) == len(chunks)
+    assert chunking.__all__ == ["ChunkingStrategy", "StructureAwareChunkingStrategy"]
 
 
 def test_indexer_writes_jsonl_manifest_and_keeps_previous_success_after_failure(
@@ -160,7 +205,8 @@ def test_indexer_writes_jsonl_manifest_and_keeps_previous_success_after_failure(
 ) -> None:
     documents_path = tmp_path / "documents"
     documents_path.mkdir()
-    (documents_path / "article.txt").write_text("one two three", encoding="utf-8")
+    (documents_path / "article.md").write_text("# Article\n\none two three", encoding="utf-8")
+    (documents_path / "not-indexed.txt").write_text("not indexed", encoding="utf-8")
     provider = FakeEmbeddingProvider()
     indexer = DocumentIndexer(
         DocumentLoader(documents_path),
@@ -175,14 +221,18 @@ def test_indexer_writes_jsonl_manifest_and_keeps_previous_success_after_failure(
     assert latest is not None
     assert latest["manifest"]["embedding_dimension"] == 2
     assert latest["manifest"]["text_volume"]["file_count"] == 1
+    assert latest["manifest"]["sources"][0]["source"] == "article.md"
+    assert set(latest["manifest"]["chunking"]) == {"structure-aware"}
     run_path = Path(latest["artifact_path"])
     assert (run_path / "comparison.md").exists()
-    for filename in ("fixed-size.jsonl", "structure-aware.jsonl"):
-        rows = [json.loads(line) for line in (run_path / filename).read_text().splitlines()]
-        assert rows
-        assert {"text", "source", "title", "section", "chunk_id", "embedding"} <= rows[0].keys()
-        assert rows[0]["source"] == "article.txt"
-        assert len(rows[0]["embedding"]) == 2
+    rows = [
+        json.loads(line) for line in (run_path / "structure-aware.jsonl").read_text().splitlines()
+    ]
+    assert rows
+    assert {"text", "source", "title", "section", "chunk_id", "embedding"} <= rows[0].keys()
+    assert rows[0]["source"] == "article.md"
+    assert len(rows[0]["embedding"]) == 2
+    assert not (run_path / "fixed-size.jsonl").exists()
 
     provider.fail = True
     failed = indexer.start(settings)
@@ -193,7 +243,7 @@ def test_indexer_writes_jsonl_manifest_and_keeps_previous_success_after_failure(
 def test_indexer_rejects_a_second_concurrent_run(tmp_path: Path) -> None:
     documents_path = tmp_path / "documents"
     documents_path.mkdir()
-    (documents_path / "article.txt").write_text("one two three", encoding="utf-8")
+    (documents_path / "article.md").write_text("# Article\n\none two three", encoding="utf-8")
     provider = FakeEmbeddingProvider(block=True)
     indexer = DocumentIndexer(
         DocumentLoader(documents_path),
@@ -215,6 +265,9 @@ def test_document_indexing_api_persists_settings_and_reports_run_progress(
     documents_path = tmp_path / "documents"
     documents_path.mkdir()
     (documents_path / "article.md").write_text("# Intro\n\nHello.", encoding="utf-8")
+    (documents_path / "hidden.md").write_text("# Hidden\n\nNot indexed.", encoding="utf-8")
+    (documents_path / "not-indexed.txt").write_text("Not indexed.", encoding="utf-8")
+    (documents_path / ".ignore").write_text("hidden.md\n", encoding="utf-8")
     provider = FakeEmbeddingProvider(block=True)
     composition = DocumentIndexingServiceComposition(
         tmp_path,
@@ -257,6 +310,7 @@ def test_document_indexing_api_persists_settings_and_reports_run_progress(
     latest = client.get("/document-indexing/latest")
     assert latest.status_code == 200
     assert latest.json()["manifest"]["model"] == "custom-model-id"
+    assert [source["source"] for source in latest.json()["manifest"]["sources"]] == ["article.md"]
     composition.close()
 
 

@@ -14,7 +14,6 @@ from copia.document_indexing.data.document_loader import DocumentLoader
 from copia.document_indexing.data.index_artifact_store import IndexArtifactStore
 from copia.document_indexing.domain.chunking import (
     ChunkingStrategy,
-    FixedSizeChunkingStrategy,
     StructureAwareChunkingStrategy,
 )
 from copia.document_indexing.domain.errors import DocumentIndexingError, IndexRunConflict
@@ -117,13 +116,10 @@ class DocumentIndexer:
             documents = self._loader.load()
             if not documents:
                 raise DocumentIndexingError(
-                    "No non-empty .txt or .md documents were found in the source folder"
+                    "No non-empty Markdown documents were found in the source folder"
                 )
             self._set_status(total_files=len(documents), stage="chunking")
-            strategies: tuple[ChunkingStrategy, ...] = (
-                FixedSizeChunkingStrategy(),
-                StructureAwareChunkingStrategy(),
-            )
+            strategies: tuple[ChunkingStrategy, ...] = (StructureAwareChunkingStrategy(),)
             strategy_stats: dict[str, dict[str, float | int]] = {}
             embedding_dimension: int | None = None
             source_stats: list[dict[str, Any]] = []
@@ -292,7 +288,7 @@ class DocumentIndexer:
     @staticmethod
     def _comparison_markdown(stats: dict[str, dict[str, float | int]]) -> str:
         lines = [
-            "# Chunking comparison",
+            "# Markdown indexing summary",
             "",
             "| Strategy | Chunks | Average tokens | Maximum tokens | Configured limit |",
             "| --- | ---: | ---: | ---: | ---: |",
@@ -312,7 +308,7 @@ class DocumentIndexer:
                 )
                 + " |"
             )
-        lines.extend(["", "Both strategies were embedded with the same provider and model.", ""])
+        lines.extend(["", "Markdown headings and section context are preserved in each chunk.", ""])
         return "\n".join(lines)
 
     @staticmethod

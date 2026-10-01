@@ -17,6 +17,10 @@ services:
       - "8000:8000"
     volumes:
       - copia-data:/data
+      - type: bind
+        source: ${HOME}/Desktop/CopiaKnowledgeBase
+        target: /data/documents/CopiaKnowledgeBase
+        read_only: true
     depends_on:
       - mcp-server
 

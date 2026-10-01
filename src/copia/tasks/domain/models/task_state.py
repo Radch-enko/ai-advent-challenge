@@ -15,6 +15,7 @@ from copia.tasks.domain.models.task_validation_result import TaskValidationResul
 class TaskState(BaseModel):
     id: str
     original_instruction: str = Field(min_length=1)
+    rag_enabled: bool = False
     status: TaskStatus = TaskStatus.RUNNING
     stage: TaskStage = TaskStage.PLANNING
     current_step: int | None = Field(default=None, ge=0)

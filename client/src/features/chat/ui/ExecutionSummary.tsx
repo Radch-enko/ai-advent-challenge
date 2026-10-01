@@ -1,10 +1,11 @@
 import { ChatMessage } from '../../../domain/models/chat'
 import type { MemoryEvent } from '../../../domain/models/memory'
+import type { KnowledgeSource } from '../../../domain/models/knowledgeSource'
 
 type Props = Pick<
   ChatMessage,
   'provider' | 'model' | 'durationSeconds' | 'executionStatus' | 'executionError' | 'usage'
-> & { memoryEvents?: MemoryEvent[] }
+> & { memoryEvents?: MemoryEvent[]; sources?: KnowledgeSource[] }
 
 export function ExecutionSummary({
   provider,
@@ -14,6 +15,7 @@ export function ExecutionSummary({
   executionError,
   usage,
   memoryEvents,
+  sources,
 }: Props) {
   if (
     !provider &&
@@ -22,7 +24,8 @@ export function ExecutionSummary({
     !usage &&
     !executionError &&
     !executionStatus &&
-    !memoryEvents?.length
+    !memoryEvents?.length &&
+    !sources?.length
   )
     return null
   const summaryLabel =
@@ -46,6 +49,18 @@ export function ExecutionSummary({
               <TokenStat label="Output" value={usage.completion_tokens} />
               <TokenStat label="Total" value={usage.total_tokens} />
             </dl>
+          </section>
+        )}
+        {sources && sources.length > 0 && (
+          <section className="execution-summary-sources">
+            <h3>Найденные chunk ID</h3>
+            <ul>
+              {sources.map((source) => (
+                <li key={source.chunk_id}>
+                  <code>{source.chunk_id}</code>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
         {(provider || model) && (

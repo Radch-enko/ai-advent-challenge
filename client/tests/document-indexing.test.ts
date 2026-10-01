@@ -76,13 +76,6 @@ const latestIndex: LatestIndex = {
     embedding_dimension: 1536,
     text_volume: { file_count: 3, bytes: 4096, characters: 3900, tokens: 1200 },
     chunking: {
-      'fixed-size': {
-        chunk_count: 8,
-        total_chunk_tokens: 3100,
-        average_chunk_tokens: 387.5,
-        max_chunk_tokens: 512,
-        configured_max_tokens: 512,
-      },
       'structure-aware': {
         chunk_count: 6,
         total_chunk_tokens: 3300,
@@ -91,20 +84,41 @@ const latestIndex: LatestIndex = {
         configured_max_tokens: 680,
       },
     },
+    sources: [
+      {
+        source: 'CopiaKnowledgeBase/goals/year.md',
+        title: 'year',
+        size_bytes: 1200,
+        characters: 1100,
+      },
+      {
+        source: 'CopiaKnowledgeBase/notes.md',
+        title: 'notes',
+        size_bytes: 1800,
+        characters: 1700,
+      },
+      {
+        source: 'overview.md',
+        title: 'overview',
+        size_bytes: 1096,
+        characters: 1100,
+      },
+    ],
   },
   artifact_path: '/tmp/copia-data/document-index/runs/run-123',
   comparison: '# Chunking comparison',
 }
 
 describe('DocumentsLibrary', () => {
-  it('shows the source folder, embedding controls, empty comparison and cost notice', () => {
+  it('shows the source folder, embedding controls, empty index summary and cost notice', () => {
     const html = renderLibrary(createIndexingState())
 
     expect(html).toContain('/tmp/copia-documents')
     expect(html).toContain('text-embedding-3-small')
     expect(html).toContain('Текст каждого чанка отправляется в OpenAI')
     expect(html).toContain('Успешных запусков пока нет')
-    expect(html).toContain('Запустите индексацию, чтобы увидеть сравнение.')
+    expect(html).toContain('Запустите индексацию, чтобы увидеть статистику.')
+    expect(html).toContain('Markdown-файлов')
   })
 
   it('shows stage, processed file progress and previous successful result during a run', () => {
@@ -128,7 +142,7 @@ describe('DocumentsLibrary', () => {
     expect(html).toContain('Копировать путь')
   })
 
-  it('shows both strategy summaries and a failed run without removing the last success', () => {
+  it('shows one structural summary and indexed source tree after a failed run', () => {
     const failed: IndexingRunStatus = {
       run_id: 'run-789',
       state: 'failed',
@@ -144,11 +158,14 @@ describe('DocumentsLibrary', () => {
 
     expect(html).toContain('Последняя попытка не завершилась')
     expect(html).toContain('Embedding provider request failed')
-    expect(html).toContain('Фиксированный размер')
+    expect(html).not.toContain('Фиксированный размер')
     expect(html).toContain('Средний размер')
-    expect(html).toContain('387.5 токенов')
-    expect(html).toContain('С учётом структуры')
+    expect(html).toContain('Структура Markdown')
     expect(html).toContain('550 токенов')
+    expect(html).toContain('Файлы последней успешной индексации · 3')
+    expect(html).toContain('CopiaKnowledgeBase')
+    expect(html).toContain('year.md')
+    expect(html).toContain('overview.md')
     expect(html).toContain('/tmp/copia-data/document-index/runs/run-123')
   })
 })

@@ -36,13 +36,20 @@ class TaskWorkflow:
         step_id: str | None,
         messages: list[ChatMessage],
         config: LLMConfig,
+        retrieval_query: str = "",
+        rag_enabled: bool = False,
     ) -> LLMResponse:
         runtime = self._get_runtime()
         call_id = runtime.task_call_start(
             session_id, task_id=task_id, stage=stage, kind=kind, step_id=step_id
         )
+        sources = []
         try:
             session = await runtime.get_session(session_id)
+            if rag_enabled:
+                chunk = await runtime.threadpool(runtime.retrieve_chunk, retrieval_query)
+                messages = runtime.contextualize(messages, chunk)
+                sources = [chunk.source]
             resolved_tools = (
                 await runtime.resolve_tools(session.config) if session.config.mcp_access else []
             )
@@ -72,6 +79,7 @@ class TaskWorkflow:
                 task_id=task_id,
                 status_value=TaskLlmCallStatus.FAILED,
                 error=str(error),
+                sources=sources,
             )
             raise
         runtime.task_call_finish(
@@ -80,6 +88,7 @@ class TaskWorkflow:
             task_id=task_id,
             status_value=TaskLlmCallStatus.COMPLETED,
             usage=response.usage,
+            sources=sources,
         )
         return response
 
@@ -144,6 +153,8 @@ class TaskWorkflow:
             messages=runtime.system_messages(session, task_text.TASK_ROLE_PROMPTS["planner"])
             + [runtime.prompt_message(task_text._task_plan_payload(task))],
             config=config,
+            retrieval_query=task.original_instruction,
+            rag_enabled=task.rag_enabled,
         )
         planned = _PlannerResponse.model_validate(response.structured_data)
         plan = TaskPlan(
@@ -205,6 +216,8 @@ class TaskWorkflow:
             messages=runtime.system_messages(session, task_text.TASK_ROLE_PROMPTS["executor"])
             + [runtime.prompt_message(task_text._task_execution_payload(task, step))],
             config=config,
+            retrieval_query=step.instruction,
+            rag_enabled=task.rag_enabled,
         )
         latest_task = await runtime.threadpool(runtime.task_state, session_id, task_id)
         execution_log_id = next(
@@ -235,6 +248,13 @@ class TaskWorkflow:
                     id=execution_log_id,
                     task_id=task_id,
                     task_step_id=current.id,
+                    provider=response.provider.value,
+                    model=response.model,
+                    sources=next(
+                        call.sources
+                        for call in latest.task.llm_calls
+                        if call.id == execution_log_id
+                    ),
                 )
             )
 
@@ -258,6 +278,8 @@ class TaskWorkflow:
             )
             + [runtime.prompt_message(task_text._task_validation_payload(task, invariants))],
             config=config,
+            retrieval_query=task.original_instruction,
+            rag_enabled=task.rag_enabled,
         )
         validation = task_text._finalize_task_validation(
             TaskValidationResult.model_validate(response.structured_data),
@@ -295,6 +317,8 @@ class TaskWorkflow:
                 )
                 + [runtime.prompt_message(report_payload)],
                 config=config,
+                retrieval_query=task.original_instruction,
+                rag_enabled=task.rag_enabled,
             )
             if task_text._valid_task_report(response.content):
                 break
@@ -319,6 +343,11 @@ class TaskWorkflow:
                     context_window=response.context_window,
                     id=report_log_id,
                     task_id=task_id,
+                    provider=response.provider.value,
+                    model=response.model,
+                    sources=next(
+                        call.sources for call in latest.task.llm_calls if call.id == report_log_id
+                    ),
                 )
             )
             runtime.state_machine.apply(latest.task, TaskEvent.REPORT_SAVED)

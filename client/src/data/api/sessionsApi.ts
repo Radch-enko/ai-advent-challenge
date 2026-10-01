@@ -18,6 +18,7 @@ export function createSession(
   config: AgentConfig,
   userProfileId: string | null = null,
   taskModeEnabled = false,
+  ragEnabled = false,
 ): Promise<ChatSession> {
   return request('/sessions', {
     method: 'POST',
@@ -25,6 +26,7 @@ export function createSession(
       config,
       user_profile_id: userProfileId,
       task_mode_enabled: taskModeEnabled,
+      rag_enabled: ragEnabled,
     }),
   })
 }
@@ -36,10 +38,20 @@ export function updateSessionTaskMode(sessionId: string, enabled: boolean): Prom
   })
 }
 
-export function createSessionFromProfile(profileName: string): Promise<ChatSession> {
+export function updateSessionRagMode(sessionId: string, enabled: boolean): Promise<ChatSession> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/rag-mode`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+export function createSessionFromProfile(
+  profileName: string,
+  ragEnabled = false,
+): Promise<ChatSession> {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ profile_name: profileName }),
+    body: JSON.stringify({ profile_name: profileName, rag_enabled: ragEnabled }),
   })
 }
 

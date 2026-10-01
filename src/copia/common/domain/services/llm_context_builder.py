@@ -13,6 +13,23 @@ class LLMContextBuilder:
     """Build the exact chat messages sent to an LLM from named context inputs."""
 
     @staticmethod
+    def with_additional_system_context(
+        messages: Sequence[ChatMessage], additional_system_context: str
+    ) -> list[ChatMessage]:
+        system_sections = [message.content for message in messages if message.role == "system"]
+        history = [message for message in messages if message.role != "system"]
+        system_prompt = (
+            PromptBuilder()
+            .extend(("system_context", section) for section in system_sections)
+            .build()
+        )
+        return LLMContextBuilder.build(
+            history=history,
+            system_prompt=system_prompt,
+            additional_system_context=additional_system_context,
+        )
+
+    @staticmethod
     def build(
         *,
         history: Sequence[ChatMessage] = (),

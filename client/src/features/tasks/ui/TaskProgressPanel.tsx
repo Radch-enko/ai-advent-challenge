@@ -176,6 +176,7 @@ export function TaskProgressPanel({
                 {call.status === 'running' ? 'Выполняется…' : formatDuration(call.duration_seconds)}
               </b>
               {call.usage && <small>Токены: {call.usage.total_tokens ?? '—'}</small>}
+              <CallSources sources={call.sources} />
               {call.error && <small role="alert">{call.error}</small>}
             </div>
           ))}
@@ -233,10 +234,20 @@ function TaskSubtask({
           {call.usage && (
             <span className="task-call-tokens">Токены: {call.usage.total_tokens ?? '—'}</span>
           )}
+          <CallSources sources={call.sources} />
           {call.error && <p className="task-error-text">{call.error}</p>}
         </>
       )}
     </article>
+  )
+}
+
+function CallSources({ sources }: { sources?: TaskLlmCall['sources'] }) {
+  if (!sources?.length) return null
+  return (
+    <small className="task-call-sources">
+      Chunk ID: {sources.map((source) => source.chunk_id).join(', ')}
+    </small>
   )
 }
 

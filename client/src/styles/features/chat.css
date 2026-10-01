@@ -338,9 +338,35 @@
   background: #222228;
 }
 .execution-summary-tokens,
+.execution-summary-sources,
 .execution-summary-memory {
   display: grid;
   gap: 12px;
+}
+
+.execution-summary-sources ul,
+.retrieved-sources ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.retrieved-sources {
+  margin-top: 0.75rem;
+  border-left: 2px solid var(--accent, #7984ff);
+  padding: 0.35rem 0 0.35rem 0.75rem;
+  color: var(--muted, #717786);
+  font-size: 0.82rem;
+}
+
+.retrieved-sources ul {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.retrieved-sources li small {
+  display: block;
+  overflow-wrap: anywhere;
 }
 .execution-summary-tokens h3,
 .execution-summary-memory h3 {

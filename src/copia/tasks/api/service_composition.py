@@ -5,6 +5,7 @@ from typing import Self
 
 from fastapi import HTTPException
 
+from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.invariants.domain.models.invariant import Invariant
 from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.models.chat_session import ChatSession
@@ -41,6 +42,12 @@ class TaskServiceComposition:
                 _task_plan_schema=lambda: service._task_plan_schema,
                 _task_system_messages=lambda: service._task_system_messages,
                 _task_validation_schema=lambda: service._task_validation_schema,
+                _retrieve_document_chunk=lambda: (
+                    service.document_indexing_composition.retriever.retrieve
+                ),
+                _contextualize_document_chunk=lambda: (
+                    service.document_indexing_composition.retriever.contextualize
+                ),
                 invariants_repository=lambda: service.invariants_repository,
                 router=lambda: service.router,
                 run_in_threadpool=lambda: service.run_in_threadpool,
@@ -121,6 +128,7 @@ class TaskServiceComposition:
         status_value: TaskLlmCallStatus,
         error: str | None = None,
         usage: dict[str, int] | None = None,
+        sources: list[KnowledgeSource] | None = None,
     ) -> ChatSession:
         return self.state_access.call_finish(
             session_id,
@@ -129,6 +137,7 @@ class TaskServiceComposition:
             status_value=status_value,
             error=error,
             usage=usage,
+            sources=sources,
         )
 
     def recover_orphaned_task(self, task: TaskState) -> None:
@@ -155,6 +164,8 @@ class TaskServiceComposition:
             system_messages=service._task_system_messages(),
             prompt_message=task_prompt.prompt_message,
             validation_schema=service._task_validation_schema(),
+            retrieve_chunk=service._retrieve_document_chunk(),
+            contextualize=service._contextualize_document_chunk(),
             invariants=service.invariants_repository(),
             session_task=service._session_task(),
             state_machine=service.task_state_machine(),

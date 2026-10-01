@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from copia.document_indexing.api.routes import DocumentIndexingRoutes
 from copia.document_indexing.application.document_indexer import DocumentIndexer
+from copia.document_indexing.application.document_retriever import DocumentRetriever
 from copia.document_indexing.data.document_loader import DocumentLoader
 from copia.document_indexing.data.embedding_settings_repository import (
     EmbeddingSettingsRepository,
@@ -24,11 +25,13 @@ class DocumentIndexingServiceComposition:
         resolved_root = data_root.expanduser().resolve()
         resolved_documents = documents_path.expanduser().resolve()
         self.providers = providers
+        self.artifact_store = IndexArtifactStore(resolved_root / "document-index")
         self.indexer = DocumentIndexer(
             DocumentLoader(resolved_documents),
-            IndexArtifactStore(resolved_root / "document-index"),
+            self.artifact_store,
             providers,
         )
+        self.retriever = DocumentRetriever(self.artifact_store, providers)
         self.settings_repository = EmbeddingSettingsRepository(
             resolved_root / "document-index" / "settings.json"
         )

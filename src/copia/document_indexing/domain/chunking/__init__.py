@@ -1,4 +1,3 @@
-from copia.document_indexing.domain.chunking.fixed_size import FixedSizeChunkingStrategy
 from copia.document_indexing.domain.chunking.strategy import ChunkingStrategy
 from copia.document_indexing.domain.chunking.structure_aware import (
     StructureAwareChunkingStrategy,
@@ -6,6 +5,5 @@ from copia.document_indexing.domain.chunking.structure_aware import (
 
 __all__ = [
     "ChunkingStrategy",
-    "FixedSizeChunkingStrategy",
     "StructureAwareChunkingStrategy",
 ]

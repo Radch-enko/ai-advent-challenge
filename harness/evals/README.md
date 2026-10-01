@@ -76,4 +76,7 @@ Deterministic validation покрывает catalog structure, required file pre
 known assertion identifiers и fixture values.
 
 Manual review покрывает reasoning quality, sufficiency of tests, scope judgment, architecture judgment beyond static checks
-и reporting quality.
+и reporting quality. Все eval fixtures и ожидаемые реплики должны быть вымышленными демонстрационными данными; нельзя
+копировать или перефразировать факты из персональной базы знаний, профиля или реальных диалогов пользователя. Runner
+проверяет структуру и допустимые значения, но не распознаёт смысловые утечки, поэтому reviewer обязан проверять diff,
+включая untracked fixtures, вручную.

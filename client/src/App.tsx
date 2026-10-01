@@ -72,6 +72,7 @@ export function App() {
   const [summarizingSessionIds, setSummarizingSessionIds] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [taskModeDraft, setTaskModeDraft] = useState(false)
+  const [ragModeDraft, setRagModeDraft] = useState(false)
   const [profileSettingsSaving, setProfileSettingsSaving] = useState(false)
   const [profileSettingsError, setProfileSettingsError] = useState<string | null>(null)
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
@@ -155,6 +156,7 @@ export function App() {
   const isProfileSession = activeSession?.profile_name != null
   const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
   const taskModeEnabled = activeSession?.task_mode_enabled ?? taskModeDraft
+  const ragModeEnabled = activeSession?.rag_enabled ?? ragModeDraft
   const sessionTasks = useMemo(() => tasksForSession(activeSession), [activeSession])
   const activeTask = sessionTasks.find(isActiveTask)
   const taskIsActive = activeTask != null
@@ -225,6 +227,7 @@ export function App() {
       summaryFailed: failedSummarization != null,
       taskIsActive,
       taskModeEnabled,
+      ragModeEnabled,
     },
     actions: {
       buildConfig,
@@ -232,6 +235,7 @@ export function App() {
       refreshSessions,
       setActiveSession,
       setTaskModeDraft,
+      setRagModeDraft,
       setMessage,
       setMessages,
       setPendingSessionIds,
@@ -342,6 +346,7 @@ export function App() {
       setMcpApproval(null)
       setRunningMcpTool(null)
       setTaskModeDraft(session.task_mode_enabled)
+      setRagModeDraft(session.rag_enabled)
       resetTaskActionsForSession()
       setSelectedUserProfileId(session.user_profile_id)
       activeSessionIdRef.current = session.id
@@ -365,6 +370,7 @@ export function App() {
     setMcpApproval(null)
     setRunningMcpTool(null)
     setTaskModeDraft(false)
+    setRagModeDraft(false)
     activeSessionIdRef.current = null
     localStorage.removeItem('copia.activeSessionId')
     setMessages(starterMessages)
@@ -386,6 +392,7 @@ export function App() {
       activeSession,
       activeTask,
       taskIsActive,
+      ragModeDraft,
       isLoading,
       profileSettingsSaving,
       forkingMessageIndex,
@@ -397,6 +404,7 @@ export function App() {
       refreshSessions,
       setActiveSession,
       setTaskModeDraft,
+      setRagModeDraft,
       setSelectedUserProfileId,
       setProfileSelectionError,
       setProfileSelectionLoading,
@@ -594,6 +602,9 @@ export function App() {
                   taskModeEnabled={taskModeEnabled}
                   taskModeDisabled={taskIsActive}
                   onTaskMode={(enabled) => void sessionOperations.setTaskMode(enabled)}
+                  ragEnabled={ragModeEnabled}
+                  ragModeDisabled={taskIsActive || profileSettingsSaving}
+                  onRagMode={(enabled) => void sessionOperations.setRagMode(enabled)}
                 />
               ) : (
                 <Settings
@@ -629,6 +640,10 @@ export function App() {
                   taskModeEnabled={taskModeEnabled}
                   taskModeDisabled={taskIsActive}
                   onTaskMode={(enabled) => void sessionOperations.setTaskMode(enabled)}
+                  ragEnabled={ragModeEnabled}
+                  ragModeDisabled={taskIsActive || profileSettingsSaving}
+                  onRagMode={(enabled) => void sessionOperations.setRagMode(enabled)}
+                  error={profileSettingsError}
                 />
               )
             }

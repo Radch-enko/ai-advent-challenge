@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from copia.sessions.api.models.context_management_update import ContextManagementUpdate
 from copia.sessions.api.models.fork_session_request import ForkSessionRequest
 from copia.sessions.api.models.long_term_memory_toggle_update import LongTermMemoryToggleUpdate
+from copia.sessions.api.models.rag_mode_update import RagModeUpdate
 from copia.sessions.api.models.user_profile_selection_update import UserProfileSelectionUpdate
 from copia.sessions.api.threadpool import ThreadpoolRunner
 from copia.sessions.data.sessions_repository import SessionsRepository
@@ -29,6 +30,7 @@ class SessionSettingsRoutes:
         mutation_lock: Callable[[str], AbstractContextManager[Any]],
         get_lifecycle_lock: Callable[[], AbstractContextManager[Any]],
         get_threadpool: Callable[[], ThreadpoolRunner],
+        has_active_task: Callable[[ChatSession], bool],
     ) -> None:
         self._get_repository = get_repository
         self._get_user_profiles = get_user_profiles
@@ -37,6 +39,7 @@ class SessionSettingsRoutes:
         self._mutation_lock = mutation_lock
         self._get_lifecycle_lock = get_lifecycle_lock
         self._get_threadpool = get_threadpool
+        self._has_active_task = has_active_task
 
     async def get_session_facts(self, session_id: str) -> dict[str, str]:
         await self._require_session(session_id)
@@ -97,6 +100,22 @@ class SessionSettingsRoutes:
             self._update_session_long_term_memory, session_id, request
         )
 
+    async def update_session_rag_mode(self, session_id: str, request: RagModeUpdate) -> ChatSession:
+        return await self._get_threadpool()(self._update_session_rag_mode, session_id, request)
+
+    def _update_session_rag_mode(self, session_id: str, request: RagModeUpdate) -> ChatSession:
+        with self._mutation_lock(session_id):
+            session = self._get_session_locked(session_id)
+            if self._has_active_task(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="RAG mode cannot be changed while a task is active",
+                )
+            session.rag_enabled = request.enabled
+            session.updated_at = datetime.now(UTC)
+            self._get_repository().save(session)
+            return session
+
     def _update_session_long_term_memory(
         self, session_id: str, request: LongTermMemoryToggleUpdate
     ) -> ChatSession:
@@ -138,6 +157,7 @@ class SessionSettingsRoutes:
                 user_profile_id=source.user_profile_id,
                 long_term_memory_enabled=source.long_term_memory_enabled,
                 task_mode_enabled=source.task_mode_enabled,
+                rag_enabled=source.rag_enabled,
                 created_at=now,
                 updated_at=now,
             )
@@ -171,6 +191,12 @@ class SessionSettingsRoutes:
         router.add_api_route(
             "/sessions/{session_id}/long-term-memory",
             self.update_session_long_term_memory,
+            methods=["PATCH"],
+            response_model=ChatSession,
+        )
+        router.add_api_route(
+            "/sessions/{session_id}/rag-mode",
+            self.update_session_rag_mode,
             methods=["PATCH"],
             response_model=ChatSession,
         )

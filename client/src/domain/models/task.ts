@@ -38,11 +38,13 @@ export type TaskLlmCall = {
   completed_at?: string | null
   error?: string | null
   usage?: import('./chat').TokenUsage | null
+  sources?: import('./knowledgeSource').KnowledgeSource[]
 }
 
 export type TaskState = {
   id: string
   original_instruction: string
+  rag_enabled: boolean
   status: TaskStatus
   stage: TaskStage
   current_step?: number | null

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.session_memory.domain.models.memory_event import MemoryEvent
 from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
 from copia.session_memory.domain.models.working_memory_item import WorkingMemoryItem
@@ -19,3 +20,4 @@ class SessionMessageResponse(BaseModel):
     memory_events: list[MemoryEvent] = Field(default_factory=list)
     pending_memory: list[PendingMemorySuggestion] = Field(default_factory=list)
     working_memory: list[WorkingMemoryItem] = Field(default_factory=list)
+    sources: list[KnowledgeSource] = Field(default_factory=list)

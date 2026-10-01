@@ -1,3 +1,4 @@
+from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.providers.domain.models.llm_response import LLMResponse
 from copia.session_memory.domain.models.memory_event import MemoryEvent
 from copia.session_memory.domain.models.pending_memory_suggestion import PendingMemorySuggestion
@@ -23,6 +24,7 @@ def make_session_message_response(
     memory_events: list[MemoryEvent] | None = None,
     pending_memory: list[PendingMemorySuggestion] | None = None,
     working_memory: list[WorkingMemoryItem] | None = None,
+    sources: list[KnowledgeSource] | None = None,
 ) -> SessionMessageResponse:
     return SessionMessageResponse(
         response=SessionLLMResponse.from_response(response),
@@ -33,4 +35,5 @@ def make_session_message_response(
         memory_events=safe_memory_events(memory_events or []),
         pending_memory=pending_memory or [],
         working_memory=working_memory or [],
+        sources=sources or [],
     )

@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from copia.common.domain.models.knowledge_source import KnowledgeSource
+
 
 class ChatMessage(BaseModel):
     role: str = Field(pattern="^(system|user|assistant)$")
@@ -18,3 +20,4 @@ class ChatMessage(BaseModel):
     execution_error: str | None = None
     task_id: str | None = None
     task_step_id: str | None = None
+    sources: list[KnowledgeSource] = Field(default_factory=list)

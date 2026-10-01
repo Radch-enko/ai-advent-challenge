@@ -38,6 +38,13 @@ export type ChunkingSummary = {
   configured_max_tokens: number
 }
 
+export type IndexedSource = {
+  source: string
+  title: string
+  size_bytes: number
+  characters: number
+}
+
 export type LatestIndex = {
   manifest: {
     run_id: string
@@ -52,6 +59,7 @@ export type LatestIndex = {
       tokens: number
     }
     chunking: Record<string, ChunkingSummary>
+    sources?: IndexedSource[]
   }
   artifact_path: string
   comparison: string

@@ -90,6 +90,9 @@ requirement text или `not individually tracked` с кратким описа�
 - Does the test still protect the same behavior?
 - Was production code incorrectly avoided?
 - Should production code have been fixed instead?
+- Are all test inputs, fixtures, snapshots, and expected utterances invented for demonstration and free of facts copied or
+  paraphrased from personal knowledge bases, profiles, or real user conversations? Review staged, unstaged, and untracked
+  changes.
 
 Reviewer verdict должен быть одним из:
 

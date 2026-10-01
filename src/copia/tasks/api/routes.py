@@ -118,6 +118,7 @@ class TaskRoutes:
                 task = TaskState(
                     id=str(uuid.uuid4()),
                     original_instruction=request.instruction,
+                    rag_enabled=session.rag_enabled,
                     stage=TaskStage.PLANNING,
                     status=TaskStatus.RUNNING,
                     expected_action="Create a plan for the task",

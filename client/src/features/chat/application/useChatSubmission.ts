@@ -35,6 +35,7 @@ type SubmissionState = {
   summaryFailed: boolean
   taskIsActive: boolean
   taskModeEnabled: boolean
+  ragModeEnabled: boolean
 }
 
 type SubmissionActions = {
@@ -43,6 +44,7 @@ type SubmissionActions = {
   refreshSessions: () => Promise<boolean>
   setActiveSession: Dispatch<SetStateAction<ChatSession | null>>
   setTaskModeDraft: Dispatch<SetStateAction<boolean>>
+  setRagModeDraft: Dispatch<SetStateAction<boolean>>
   setMessage: Dispatch<SetStateAction<string>>
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>
   setPendingSessionIds: Dispatch<SetStateAction<string[]>>
@@ -75,11 +77,12 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
     try {
       const config = actions.buildConfig()
       if (!session) {
-        session = await createSession(config, state.selectedProfileId, true)
+        session = await createSession(config, state.selectedProfileId, true, state.ragModeEnabled)
         actions.setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
         actions.setTaskModeDraft(true)
+        actions.setRagModeDraft(session.rag_enabled)
       }
       await startTask(session.id, instruction)
       const latest = await getSession(session.id)
@@ -125,10 +128,11 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
       ])
       session = state.session
       if (!session) {
-        session = await createSession(config, state.selectedProfileId)
+        session = await createSession(config, state.selectedProfileId, false, state.ragModeEnabled)
         actions.setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
+        actions.setRagModeDraft(session.rag_enabled)
         void actions.refreshSessions()
       }
       const requestSession = session
@@ -217,6 +221,7 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
             executionStatus: 'completed' as const,
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
+            sources: response.sources,
             transcriptIndex: userTranscriptIndex + 1,
           }
           return assistantMessageId === null

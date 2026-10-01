@@ -20,6 +20,8 @@ class TaskServiceBindings:
     _task_plan_schema: Callable[[], Any]
     _task_system_messages: Callable[[], Any]
     _task_validation_schema: Callable[[], Any]
+    _retrieve_document_chunk: Callable[[], Any]
+    _contextualize_document_chunk: Callable[[], Any]
     invariants_repository: Callable[[], Any]
     router: Callable[[], Any]
     run_in_threadpool: Callable[[], Any]

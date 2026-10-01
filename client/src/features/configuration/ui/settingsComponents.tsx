@@ -19,6 +19,9 @@ export function ProfileSessionSettings({
   taskModeEnabled,
   taskModeDisabled,
   onTaskMode,
+  ragEnabled,
+  ragModeDisabled,
+  onRagMode,
 }: {
   profileControl: ReactNode
   value: ContextManagementConfig
@@ -32,6 +35,9 @@ export function ProfileSessionSettings({
   taskModeEnabled: boolean
   taskModeDisabled: boolean
   onTaskMode: (enabled: boolean) => void
+  ragEnabled: boolean
+  ragModeDisabled: boolean
+  onRagMode: (enabled: boolean) => void
 }) {
   return (
     <section className="settings-popover">
@@ -44,6 +50,7 @@ export function ProfileSessionSettings({
       <div className="dialog-profile-control">{profileControl}</div>
       <MemoryLayerStatus longTermState={longTermMemoryEnabled ? 'enabled' : 'disabled'} />
       <TaskModeToggle enabled={taskModeEnabled} disabled={taskModeDisabled} onChange={onTaskMode} />
+      <RagModeToggle enabled={ragEnabled} disabled={ragModeDisabled} onChange={onRagMode} />
       <label className="toggle-row">
         <span>
           <b>Long-term memory</b>
@@ -85,6 +92,33 @@ export function TaskModeToggle({
         <b>Task mode</b>
         <small>
           Планирует задачу, выполняет подзадачи по очереди и проверяет итоговый результат.
+        </small>
+      </span>
+      <input
+        type="checkbox"
+        checked={enabled}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  )
+}
+
+export function RagModeToggle({
+  enabled,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean
+  disabled: boolean
+  onChange: (enabled: boolean) => void
+}) {
+  return (
+    <label className="toggle-row rag-mode-toggle">
+      <span>
+        <b>RAG enabled</b>
+        <small>
+          Ищет один подходящий фрагмент в проиндексированных документах и добавляет его к запросу.
         </small>
       </span>
       <input
@@ -145,6 +179,10 @@ export type SettingsProps = {
   taskModeEnabled: boolean
   taskModeDisabled: boolean
   onTaskMode: (enabled: boolean) => void
+  ragEnabled: boolean
+  ragModeDisabled: boolean
+  onRagMode: (enabled: boolean) => void
+  error?: string | null
 }
 
 export function Settings(props: SettingsProps) {
@@ -161,6 +199,12 @@ export function Settings(props: SettingsProps) {
         disabled={props.taskModeDisabled}
         onChange={props.onTaskMode}
       />
+      <RagModeToggle
+        enabled={props.ragEnabled}
+        disabled={props.ragModeDisabled}
+        onChange={props.onRagMode}
+      />
+      {props.error && <p className="model-note">{props.error}</p>}
       <p className="model-note">Long-term memory недоступна без профиля.</p>
       <div className="settings-grid">
         <label>

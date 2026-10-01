@@ -17,6 +17,7 @@ export function mapStoredMessages(messages: StoredMessage[]): ChatMessage[] {
     executionError: item.execution_error,
     taskId: item.task_id ?? undefined,
     taskStepId: item.task_step_id ?? undefined,
+    sources: item.sources ?? [],
     transcriptIndex: index,
   }))
 }

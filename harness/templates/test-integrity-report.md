@@ -32,6 +32,8 @@
 - Does The Test Still Protect The Same Behavior:
 - Was Production Code Incorrectly Avoided:
 - Should Production Code Have Been Fixed Instead:
+- Synthetic Test Data Review: `YES` or `NO`
+- Synthetic Test Data Evidence:
 - Notes:
 
 ## Evidence

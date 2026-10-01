@@ -120,6 +120,7 @@ export function useConversationControls({ state, actions, meta }: ConversationCo
             executionStatus: 'completed',
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
+            sources: response.sources,
             transcriptIndex: transcriptLength(current),
           }
           return assistantMessageId === null

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.sessions.data.sessions_repository import SessionsRepository
 from copia.sessions.domain.models.chat_session import ChatSession
 from copia.tasks.domain.models.task_llm_call import TaskLlmCall
@@ -116,6 +117,7 @@ class TaskStateAccess:
         status_value: TaskLlmCallStatus,
         error: str | None = None,
         usage: dict[str, int] | None = None,
+        sources: list[KnowledgeSource] | None = None,
     ) -> ChatSession:
         finished_at = datetime.now(UTC)
 
@@ -132,5 +134,6 @@ class TaskStateAccess:
             call.duration_seconds = max(0, (finished_at - call.started_at).total_seconds())
             call.error = error
             call.usage = usage
+            call.sources = sources or []
 
         return self._get_checkpoint()(session_id, update)

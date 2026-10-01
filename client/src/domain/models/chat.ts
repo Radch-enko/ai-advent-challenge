@@ -1,4 +1,5 @@
 import type { MemoryEvent } from './memory'
+import type { KnowledgeSource } from './knowledgeSource'
 
 export type TokenUsage = {
   prompt_tokens?: number
@@ -29,6 +30,7 @@ export type ChatMessage = {
   transcriptIndex?: number
   taskId?: string
   taskStepId?: string
+  sources?: KnowledgeSource[]
 }
 
 export type SummarizationEvent = {

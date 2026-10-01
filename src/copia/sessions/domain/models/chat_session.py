@@ -22,6 +22,7 @@ class ChatSession(BaseModel):
     user_profile_id: str | None = None
     long_term_memory_enabled: bool = False
     task_mode_enabled: bool = False
+    rag_enabled: bool = False
     task: TaskState | None = None
     tasks: list[TaskState] = Field(default_factory=list)
     created_at: datetime

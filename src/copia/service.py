@@ -359,6 +359,7 @@ update_session_context_management = session_settings_routes.update_session_conte
 update_session_user_profile = session_settings_routes.update_session_user_profile
 update_session_long_term_memory = session_settings_routes.update_session_long_term_memory
 _update_session_long_term_memory = session_settings_routes._update_session_long_term_memory
+update_session_rag_mode = session_settings_routes.update_session_rag_mode
 fork_session = session_settings_routes.fork_session
 
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useDocumentIndexing } from '../application/useDocumentIndexing'
-import { EmbeddingSettings } from '../../../domain/models/documentIndexing'
+import { EmbeddingSettings, IndexedSource } from '../../../domain/models/documentIndexing'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return String(bytes) + ' Б'
@@ -9,9 +9,7 @@ function formatBytes(bytes: number): string {
 }
 
 function stageLabel(stage: string): string {
-  if (stage.startsWith('chunking:fixed-size')) return 'Разбиение: фиксированный размер'
   if (stage.startsWith('chunking:structure-aware')) return 'Разбиение: по структуре'
-  if (stage.startsWith('embedding:fixed-size')) return 'Эмбеддинги: фиксированный размер'
   if (stage.startsWith('embedding:structure-aware')) return 'Эмбеддинги: по структуре'
   if (stage === 'scanning') return 'Чтение каталога'
   if (stage === 'saving') return 'Сохранение локального индекса'
@@ -69,7 +67,6 @@ export function DocumentsLibrary({
   const sourceReady = settings.source_file_count > 0
   const canIndex =
     sourceReady && selectedProvider?.configured === true && !isRunning && !indexing.loading
-  const fixed = indexing.latest?.manifest.chunking['fixed-size']
   const structural = indexing.latest?.manifest.chunking['structure-aware']
   const artifactPath = indexing.latest?.artifact_path
 
@@ -108,7 +105,7 @@ export function DocumentsLibrary({
       <header className="documents-heading">
         <div>
           <h1 id="documents-title">Документы</h1>
-          <p>Локальная библиотека для подготовки индекса. Агенты пока его не используют.</p>
+          <p>Локальная библиотека документов для RAG-поиска в чатах.</p>
         </div>
         <button
           type="button"
@@ -132,7 +129,7 @@ export function DocumentsLibrary({
         </div>
         <div className="documents-source-stats">
           <div>
-            <span>Текстовых файлов</span>
+            <span>Markdown-файлов</span>
             <strong>{settings.source_file_count}</strong>
           </div>
           <div>
@@ -141,7 +138,8 @@ export function DocumentsLibrary({
           </div>
         </div>
         <p className="documents-supported-formats">
-          Поддерживаются TXT и Markdown. Файлы читаются рекурсивно.
+          Индексируются Markdown-файлы. В .ignore указывайте пути от папки с файлом: * совпадает
+          внутри одного сегмента, ** — через вложенные папки; правила ! не поддерживаются.
         </p>
       </article>
 
@@ -268,7 +266,7 @@ export function DocumentsLibrary({
             value={indexing.run.processed_files}
             aria-label="Обработано файлов"
           />
-          <p>Строятся обе стратегии разбиения и записываются локальные артефакты.</p>
+          <p>Разделы Markdown разбиваются по заголовкам и сохраняются в локальный индекс.</p>
         </article>
       ) : null}
       {indexing.run?.state === 'failed' ? (
@@ -277,24 +275,19 @@ export function DocumentsLibrary({
         </p>
       ) : null}
 
-      <section className="documents-comparison" aria-labelledby="chunking-title">
+      <section className="documents-index-summary" aria-labelledby="chunking-title">
         <div className="documents-section-heading">
           <div>
-            <h2 id="chunking-title">Сравнение стратегий разбиения</h2>
-            <p>Оба результата сохраняются отдельно в JSONL вместе с метаданными и векторами.</p>
+            <h2 id="chunking-title">Индексация по заголовкам</h2>
+            <p>Каждый чанк сохраняет заголовочный контекст и эмбеддинг в локальном индексе.</p>
           </div>
           {indexing.latest ? (
             <span>Вектор: {indexing.latest.manifest.embedding_dimension} измерений</span>
           ) : null}
         </div>
-        <div className="documents-comparison-grid">
+        <div className="documents-index-card-grid">
           <ChunkingCard
-            title="Фиксированный размер"
-            detail="До 512 токенов · перекрытие 64"
-            summary={fixed}
-          />
-          <ChunkingCard
-            title="С учётом структуры"
+            title="Структура Markdown"
             detail="Заголовки и абзацы · до 680 токенов"
             summary={structural}
           />
@@ -311,6 +304,7 @@ export function DocumentsLibrary({
                 {formatBytes(indexing.latest.manifest.text_volume.bytes)} ·{' '}
                 {indexing.latest.manifest.text_volume.tokens.toLocaleString('ru-RU')} токенов текста
               </small>
+              <IndexedSources sources={indexing.latest.manifest.sources} />
             </div>
             <button
               type="button"
@@ -333,6 +327,68 @@ export function DocumentsLibrary({
         ) : null}
       </section>
     </section>
+  )
+}
+
+type SourceTreeNode = {
+  directories: Map<string, SourceTreeNode>
+  files: string[]
+}
+
+function IndexedSources({ sources }: { sources?: IndexedSource[] }) {
+  if (!sources) {
+    return <small>Список файлов не сохранён в этом manifest.</small>
+  }
+  if (sources.length === 0) {
+    return <small>В manifest нет списка исходных файлов.</small>
+  }
+
+  const root: SourceTreeNode = { directories: new Map(), files: [] }
+  for (const source of sources) {
+    const parts = source.source.split('/').filter(Boolean)
+    let current = root
+    for (const directory of parts.slice(0, -1)) {
+      let child = current.directories.get(directory)
+      if (!child) {
+        child = { directories: new Map(), files: [] }
+        current.directories.set(directory, child)
+      }
+      current = child
+    }
+    const filename = parts.at(-1)
+    if (filename) current.files.push(filename)
+  }
+
+  return (
+    <details className="documents-indexed-sources">
+      <summary>Файлы последней успешной индексации · {sources.length}</summary>
+      <SourceTreeContents node={root} />
+    </details>
+  )
+}
+
+function SourceTreeContents({ node }: { node: SourceTreeNode }) {
+  const directories = [...node.directories.entries()].sort(([left], [right]) =>
+    left.localeCompare(right, 'ru'),
+  )
+  const files = [...node.files].sort((left, right) => left.localeCompare(right, 'ru'))
+
+  return (
+    <ul className="documents-file-tree">
+      {directories.map(([name, child]) => (
+        <li key={name}>
+          <details open>
+            <summary>{name}/</summary>
+            <SourceTreeContents node={child} />
+          </details>
+        </li>
+      ))}
+      {files.map((filename) => (
+        <li key={filename}>
+          <code>{filename}</code>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -374,7 +430,7 @@ function ChunkingCard({
           </div>
         </dl>
       ) : (
-        <p className="documents-no-comparison">Запустите индексацию, чтобы увидеть сравнение.</p>
+        <p className="documents-no-summary">Запустите индексацию, чтобы увидеть статистику.</p>
       )}
     </article>
   )

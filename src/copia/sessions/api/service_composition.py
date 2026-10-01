@@ -58,6 +58,7 @@ class SessionServiceComposition:
                 task_state_rules=lambda: service.task_state_rules,
                 user_profiles=lambda: service.user_profiles,
                 working_memory=lambda: service.working_memory,
+                document_retriever=lambda: service.document_indexing_composition.retriever,
             )
         )
 
@@ -106,6 +107,7 @@ class SessionServiceComposition:
             service._session_mutation_lock(),
             lambda: service.session_lifecycle_lock(),
             lambda: service.run_in_threadpool(),
+            service.task_state_rules().session_has_active_task,
         )
 
     def message_dependencies(self) -> SessionMessageDependencies:
@@ -133,6 +135,8 @@ class SessionServiceComposition:
             safe_summary=service._safe_summarization_events(),
             make_response=service._session_message_response(),
             generate_title=service.generate_session_title(),
+            retrieve_chunk=lambda question: service.document_retriever().retrieve(question),
+            contextualize=service.document_retriever().contextualize,
         )
 
     def message_routes(self) -> SessionMessageRoutes:

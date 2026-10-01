@@ -83,5 +83,4 @@ class IndexArtifactStore:
             raise DocumentIndexingError("The latest document index pointer is invalid") from error
 
     def remove_temporary_files(self, run_path: Path) -> None:
-        for strategy_id in ("fixed-size", "structure-aware"):
-            (run_path / f"{strategy_id}.jsonl.tmp").unlink(missing_ok=True)
+        (run_path / "structure-aware.jsonl.tmp").unlink(missing_ok=True)

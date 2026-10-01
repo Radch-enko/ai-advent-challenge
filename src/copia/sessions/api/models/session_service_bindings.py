@@ -38,3 +38,4 @@ class SessionServiceBindings:
     task_state_rules: Callable[[], Any]
     user_profiles: Callable[[], Any]
     working_memory: Callable[[], Any]
+    document_retriever: Callable[[], Any]

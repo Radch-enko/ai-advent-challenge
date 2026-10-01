@@ -8,6 +8,7 @@ from copia.agents.application.agent_runtime import (
     SummarizationFailed,
     SummarizationRetryRequired,
 )
+from copia.document_indexing.domain.errors import DocumentRetrievalError
 from copia.providers.application.collect_streamed_response import collect_streamed_response
 from copia.providers.data.llm import ProviderError
 from copia.sessions.api.message_dependencies import SessionMessageDependencies
@@ -98,6 +99,7 @@ class SessionMessageRoutes:
                 detail="A task is active for this session; resume or wait for it to finish",
             )
         started_at = time.perf_counter()
+        completion, sources = await self._prepare_rag(runtime, session, request.content, completion)
         if request.config is not None and session.profile_name is None:
             session.config = request.config
         user_profile = await runtime.load_profile(session)
@@ -202,6 +204,8 @@ class SessionMessageRoutes:
                 },
             ) from error
 
+        if sources:
+            agent.attach_sources_to_last_response(sources)
         runtime.save_agent(session, agent)
         if session.title is None:
             background_tasks.add_task(runtime.generate_title, session.id)
@@ -214,6 +218,7 @@ class SessionMessageRoutes:
             memory_events=agent.memory_events,
             pending_memory=agent.pending_memory,
             working_memory=agent.working_memory,
+            sources=sources,
         )
 
     async def retry_session_summarization(
@@ -232,6 +237,15 @@ class SessionMessageRoutes:
                     "Session is unavailable", "session_unavailable"
                 ) from error
             started_at = time.perf_counter()
+            query = next(
+                (
+                    message.content
+                    for message in reversed(session.messages)
+                    if message.role == "user"
+                ),
+                "",
+            )
+            completion, sources = await self._prepare_rag(runtime, session, query, completion)
             user_profile = await runtime.load_profile(session)
             try:
                 facts = await runtime.threadpool(runtime.sessions.load_facts, session.id)
@@ -304,6 +318,8 @@ class SessionMessageRoutes:
                     },
                 ) from error
 
+            if sources:
+                agent.attach_sources_to_last_response(sources)
             runtime.save_agent(session, agent)
             return runtime.make_response(
                 response,
@@ -314,7 +330,25 @@ class SessionMessageRoutes:
                 memory_events=agent.memory_events,
                 pending_memory=agent.pending_memory,
                 working_memory=agent.working_memory,
+                sources=sources,
             )
         finally:
             message_lock.lock.release()
             runtime.release_lock(message_lock)
+
+    async def _prepare_rag(self, runtime, session, query: str, completion):
+        if not session.rag_enabled:
+            return completion, []
+        try:
+            chunk = await runtime.threadpool(runtime.retrieve_chunk, query)
+        except DocumentRetrievalError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "rag_unavailable", "message": str(error)},
+            ) from error
+        base_completion = completion or runtime.llm_router.complete
+
+        def complete_with_rag(messages, config):
+            return base_completion(runtime.contextualize(messages, chunk), config)
+
+        return complete_with_rag, [chunk.source]

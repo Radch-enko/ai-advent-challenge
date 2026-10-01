@@ -3,6 +3,7 @@ import { FactsUpdateEvent, ProviderTrace, SummarizationEvent, TokenUsage } from 
 import { Provider } from './provider'
 import { TaskState } from './task'
 import { MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem } from './memory'
+import { KnowledgeSource } from './knowledgeSource'
 
 type ChatResponseData = {
   content: string
@@ -28,6 +29,7 @@ export type ChatResponse = {
 export type SessionChatResponse = Omit<ChatResponse, 'response'> & {
   response: SessionChatResponseData
   duration_seconds: number
+  sources: KnowledgeSource[]
 }
 
 export type StoredMessage = {
@@ -43,6 +45,7 @@ export type StoredMessage = {
   execution_error?: string | null
   task_id?: string | null
   task_step_id?: string | null
+  sources?: KnowledgeSource[]
 }
 
 export type ChatSession = {
@@ -52,6 +55,7 @@ export type ChatSession = {
   user_profile_id: string | null
   long_term_memory_enabled: boolean
   task_mode_enabled: boolean
+  rag_enabled: boolean
   task: TaskState | null
   tasks: TaskState[]
   config: AgentConfig

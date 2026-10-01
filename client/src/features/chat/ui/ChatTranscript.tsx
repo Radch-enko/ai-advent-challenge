@@ -182,6 +182,20 @@ export function ChatTranscript({
                       <Markdown content={entry.content} />
                     </div>
                   )}
+                  {entry.role !== 'user' && entry.sources && entry.sources.length > 0 && (
+                    <section className="retrieved-sources" aria-label="Использованные источники">
+                      <b>Источники</b>
+                      <ul>
+                        {entry.sources.map((source) => (
+                          <li key={source.chunk_id}>
+                            <span>{source.title}</span>
+                            {source.section && <small>{source.section}</small>}
+                            <small>{source.source}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
                   {entry.role !== 'user' && (
                     <ExecutionSummary
                       key={`${activeSession?.id ?? 'session'}-${entry.id}`}
@@ -192,6 +206,7 @@ export function ChatTranscript({
                       executionError={entry.executionError}
                       usage={entry.usage}
                       memoryEvents={entry.memoryEvents}
+                      sources={entry.sources}
                     />
                   )}
                   {(entry.timestamp ||

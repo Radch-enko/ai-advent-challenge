@@ -63,6 +63,7 @@ class SessionCollectionRoutes:
             profile_name=request.profile_name,
             user_profile_id=request.user_profile_id,
             task_mode_enabled=request.task_mode_enabled,
+            rag_enabled=request.rag_enabled,
             created_at=now,
             updated_at=now,
         )

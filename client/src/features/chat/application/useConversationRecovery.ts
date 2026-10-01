@@ -93,6 +93,7 @@ export function useConversationRecovery({
               }
               duration_seconds?: number
               memory_events?: MemoryEvent[]
+              sources?: import('../../../domain/models/knowledgeSource').KnowledgeSource[]
             }
           | undefined
         if (result?.response) {
@@ -112,6 +113,7 @@ export function useConversationRecovery({
                         executionStatus: 'completed',
                         memoryEvents: result.memory_events,
                         contextWindow: result.response?.context_window,
+                        sources: result.sources,
                       }
                     : entry,
                 )
@@ -129,6 +131,7 @@ export function useConversationRecovery({
                     executionStatus: 'completed',
                     memoryEvents: result.memory_events,
                     contextWindow: result.response?.context_window,
+                    sources: result.sources,
                     transcriptIndex,
                   },
                 ],
