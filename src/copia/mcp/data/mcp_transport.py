@@ -9,9 +9,9 @@ from opentelemetry import trace
 
 from copia.common.observability import (
     MAX_BODY_BYTES,
-    _body_value,
     _safe_headers,
-    emit_http_log,
+    _structured_body_value,
+    emit_http_exchange,
     http_body_capture_enabled,
 )
 from copia.mcp.data.mcp_endpoint import (
@@ -74,6 +74,7 @@ class _LimitedResponseStream(httpx2.AsyncByteStream):
         self._captured = bytearray()
         self._capture_overflow = False
         self._capture_disabled = not http_body_capture_enabled()
+        self._log_emitted = False
         self._request = request
         self._response = response
         self._span_context = span_context
@@ -82,6 +83,9 @@ class _LimitedResponseStream(httpx2.AsyncByteStream):
         async for chunk in self._stream:
             self._total += len(chunk)
             if self._total > MAX_RESPONSE_BYTES:
+                self._capture_overflow = not self._capture_disabled
+                self._captured.clear()
+                self._emit_response_log()
                 raise McpDiscoveryError(
                     MCP_RESPONSE_TOO_LARGE,
                     "MCP response exceeds the allowed size",
@@ -97,34 +101,23 @@ class _LimitedResponseStream(httpx2.AsyncByteStream):
         self._emit_response_log()
 
     def _emit_response_log(self) -> None:
-        body, body_truncated = (
-            (None, self._capture_overflow)
-            if self._capture_overflow
-            else (None, False)
-            if self._capture_disabled
-            else _body_value(self._response.headers.get("content-type", ""), bytes(self._captured))
+        if self._log_emitted:
+            return
+        self._log_emitted = True
+        response_bytes = None if self._capture_overflow else bytes(self._captured)
+        _emit_mcp_exchange(
+            self._request,
+            self._response,
+            self._span_context,
+            response_body=response_bytes,
+            response_body_truncated=self._capture_overflow,
         )
-        attributes: dict[str, object] = {
-            "http.request.method": self._request.method,
-            "url.full": sanitize_url(str(self._request.url)),
-            "http.request.headers.safe": _safe_headers(self._request.headers),
-            "http.response.status_code": self._response.status_code,
-            "http.response.headers.safe": _safe_headers(self._response.headers),
-            "http.response.body_captured": body is not None,
-            "http.body.truncated": body_truncated,
-        }
-        if body is not None:
-            attributes["http.response.body"] = body
-        if not self._capture_disabled:
-            request_body, request_truncated = _body_value(
-                self._request.headers.get("content-type", ""), self._request.content
-            )
-            attributes["http.body.truncated"] = body_truncated or request_truncated
-            if request_body is not None:
-                attributes["http.request.body"] = request_body
-        emit_http_log("http.mcp.response.complete", attributes, context=self._span_context)
 
     async def aclose(self) -> None:
+        if not self._log_emitted:
+            self._capture_overflow = not self._capture_disabled
+            self._captured.clear()
+            self._emit_response_log()
         await self._stream.aclose()
 
 
@@ -148,71 +141,33 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
             if hasattr(request, "headers"):
                 safe_headers = _safe_headers(dict(request.headers.items()))
                 span.set_attribute("http.request.headers.safe", safe_headers)
-            request_attributes: dict[str, object] = {
-                "http.request.method": getattr(request, "method", ""),
-                "url.full": sanitize_url(str(getattr(request, "url", ""))),
-                "http.request.headers.safe": (
-                    _safe_headers(dict(request.headers.items()))
-                    if hasattr(request, "headers")
-                    else "{}"
-                ),
-            }
             try:
-                try:
-                    body_value, truncated = (
-                        _body_value(request.headers.get("content-type", ""), request.content)
-                        if http_body_capture_enabled()
-                        else (None, False)
-                    )
-                    if body_value is not None:
-                        request_attributes["http.request.body"] = body_value
-                    request_attributes["http.body.truncated"] = truncated
-                except (AttributeError, RuntimeError):
-                    pass
-                if hasattr(request, "method") and hasattr(request, "url"):
-                    emit_http_log("http.mcp.request", request_attributes, context=span_context)
                 response = await self._delegate.handle_async_request(request)
                 span.set_attribute("http.response.status_code", response.status_code)
-                emit_http_log(
-                    "http.mcp.response",
-                    {
-                        "http.request.method": getattr(request, "method", ""),
-                        "url.full": sanitize_url(str(getattr(request, "url", ""))),
-                        "http.response.status_code": response.status_code,
-                        "http.response.headers.safe": _safe_headers(response.headers),
-                        "http.response.body_captured": False,
-                    },
-                    context=span_context,
-                )
             except Exception as error:
                 span.set_attribute("error.type", type(error).__name__)
                 raise
         if 300 <= response.status_code < 400:
             await response.aclose()
+            _emit_mcp_exchange(
+                request,
+                response,
+                span_context,
+                response_body_truncated=True,
+            )
             raise McpDiscoveryError(
                 MCP_REDIRECT_REJECTED,
                 "MCP server redirects are not supported",
             )
         if response.status_code in (401, 403):
             body = await _read_limited_response_body(response)
-            captured_body, truncated = (
-                _body_value(response.headers.get("content-type", ""), body)
-                if http_body_capture_enabled()
-                else (None, False)
+            _emit_mcp_exchange(
+                request,
+                response,
+                span_context,
+                response_body=(body if len(body) < MAX_ERROR_BODY_BYTES else None),
+                response_body_truncated=len(body) >= MAX_ERROR_BODY_BYTES,
             )
-            attributes: dict[str, object] = {
-                "http.request.method": getattr(request, "method", ""),
-                "url.full": sanitize_url(str(getattr(request, "url", ""))),
-                "http.request.headers.safe": (
-                    _safe_headers(request.headers) if hasattr(request, "headers") else "{}"
-                ),
-                "http.response.status_code": response.status_code,
-                "http.response.headers.safe": _safe_headers(response.headers),
-                "http.body.truncated": truncated,
-            }
-            if captured_body is not None:
-                attributes["http.response.body"] = captured_body
-            emit_http_log("http.mcp.response.complete", attributes, context=span_context)
             await response.aclose()
             if response.status_code == 401:
                 raise McpDiscoveryError(
@@ -228,11 +183,24 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
             try:
                 if int(content_length) > MAX_RESPONSE_BYTES:
                     await response.aclose()
+                    _emit_mcp_exchange(
+                        request,
+                        response,
+                        span_context,
+                        response_body_truncated=True,
+                    )
                     raise McpDiscoveryError(
                         MCP_RESPONSE_TOO_LARGE,
                         "MCP response exceeds the allowed size",
                     )
             except ValueError:
+                await response.aclose()
+                _emit_mcp_exchange(
+                    request,
+                    response,
+                    span_context,
+                    response_body_truncated=True,
+                )
                 raise McpDiscoveryError(
                     MCP_PROTOCOL_ERROR,
                     "MCP server returned an invalid response",
@@ -251,6 +219,42 @@ class _LimitedPinnedTransport(httpx2.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._delegate.aclose()
+
+
+def _emit_mcp_exchange(
+    request: httpx2.Request,
+    response: httpx2.Response,
+    span_context: object,
+    *,
+    response_body: bytes | None = None,
+    response_body_truncated: bool = False,
+) -> None:
+    request_body = response_value = None
+    request_body_truncated = False
+    if http_body_capture_enabled():
+        try:
+            request_body, request_body_truncated = _structured_body_value(
+                request.headers.get("content-type", ""), request.content
+            )
+        except (AttributeError, RuntimeError):
+            request_body_truncated = True
+        if response_body is not None:
+            response_value, response_body_truncated = _structured_body_value(
+                response.headers.get("content-type", ""), response_body
+            )
+    emit_http_exchange(
+        direction="outbound",
+        method=request.method,
+        url=sanitize_url(str(request.url)),
+        request_headers=request.headers,
+        request_body=request_body,
+        request_body_truncated=request_body_truncated,
+        status_code=response.status_code,
+        response_headers=response.headers,
+        response_body=response_value,
+        response_body_truncated=response_body_truncated,
+        context=span_context,
+    )
 
 
 async def _read_limited_response_body(response: httpx2.Response) -> bytes:

@@ -5,6 +5,7 @@ import { ReactNode, useState } from 'react'
 import { ContextManagementConfig, ContextStrategy } from '../../../domain/models/agent'
 import { Provider, ProviderModel } from '../../../domain/models/provider'
 import { FactsUpdateEvent, SummarizationEvent } from '../../../domain/models/chat'
+import { RagSettings } from '../../../domain/models/ragSettings'
 
 export function ProfileSessionSettings({
   profileControl,
@@ -22,6 +23,9 @@ export function ProfileSessionSettings({
   ragEnabled,
   ragModeDisabled,
   onRagMode,
+  ragSettings,
+  onRagSettingsChange,
+  onRagSettingsSave,
 }: {
   profileControl: ReactNode
   value: ContextManagementConfig
@@ -38,6 +42,9 @@ export function ProfileSessionSettings({
   ragEnabled: boolean
   ragModeDisabled: boolean
   onRagMode: (enabled: boolean) => void
+  ragSettings: RagSettings
+  onRagSettingsChange: (settings: RagSettings) => void
+  onRagSettingsSave: (settings: RagSettings) => void
 }) {
   return (
     <section className="settings-popover">
@@ -51,6 +58,14 @@ export function ProfileSessionSettings({
       <MemoryLayerStatus longTermState={longTermMemoryEnabled ? 'enabled' : 'disabled'} />
       <TaskModeToggle enabled={taskModeEnabled} disabled={taskModeDisabled} onChange={onTaskMode} />
       <RagModeToggle enabled={ragEnabled} disabled={ragModeDisabled} onChange={onRagMode} />
+      {ragEnabled && (
+        <RagSettingsControls
+          value={ragSettings}
+          disabled={ragModeDisabled}
+          onChange={onRagSettingsChange}
+          onSave={onRagSettingsSave}
+        />
+      )}
       <label className="toggle-row">
         <span>
           <b>Long-term memory</b>
@@ -118,7 +133,7 @@ export function RagModeToggle({
       <span>
         <b>RAG enabled</b>
         <small>
-          Ищет один подходящий фрагмент в проиндексированных документах и добавляет его к запросу.
+          Ищет релевантные фрагменты в проиндексированных документах и добавляет их к запросу.
         </small>
       </span>
       <input
@@ -128,6 +143,110 @@ export function RagModeToggle({
         onChange={(event) => onChange(event.target.checked)}
       />
     </label>
+  )
+}
+
+function RagSettingsControls({
+  value,
+  disabled,
+  onChange,
+  onSave,
+}: {
+  value: RagSettings
+  disabled: boolean
+  onChange: (settings: RagSettings) => void
+  onSave: (settings: RagSettings) => void
+}) {
+  function update(next: Partial<RagSettings>) {
+    onChange({ ...value, ...next })
+  }
+
+  return (
+    <section className="rag-settings" aria-label="Настройки поиска RAG">
+      <div className="settings-grid">
+        <label>
+          Top-K до фильтрации
+          <input
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            value={value.top_k_before}
+            disabled={disabled}
+            onChange={(event) => {
+              const entered = event.currentTarget.valueAsNumber
+              if (!Number.isFinite(entered)) return
+              const next = Math.max(1, Math.min(100, Math.trunc(entered)))
+              update({ top_k_before: next, top_k_after: Math.min(value.top_k_after, next) })
+            }}
+            onBlur={() => onSave(value)}
+          />
+        </label>
+        <label>
+          Top-K после фильтрации
+          <input
+            type="number"
+            min="1"
+            max={value.top_k_before}
+            step="1"
+            value={value.top_k_after}
+            disabled={disabled}
+            onChange={(event) => {
+              const entered = event.currentTarget.valueAsNumber
+              if (!Number.isFinite(entered)) return
+              const next = Math.max(1, Math.min(value.top_k_before, Math.trunc(entered)))
+              update({ top_k_after: next })
+            }}
+            onBlur={() => onSave(value)}
+          />
+        </label>
+      </div>
+      <label>
+        Порог similarity ({value.similarity_threshold.toFixed(2)})
+        <input
+          type="range"
+          min="-1"
+          max="1"
+          step="0.01"
+          value={value.similarity_threshold}
+          disabled={disabled}
+          onChange={(event) => update({ similarity_threshold: Number(event.currentTarget.value) })}
+          onBlur={() => onSave(value)}
+        />
+      </label>
+      <label className="toggle-row">
+        <span>
+          <b>Query rewrite</b>
+          <small>Уточняет поисковый запрос по контексту диалога.</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={value.query_rewrite_enabled}
+          disabled={disabled}
+          onChange={(event) => {
+            const next = { ...value, query_rewrite_enabled: event.currentTarget.checked }
+            onChange(next)
+            onSave(next)
+          }}
+        />
+      </label>
+      <label className="toggle-row">
+        <span>
+          <b>Reranker</b>
+          <small>Выбирает один лучший чанк из прошедших фильтр.</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={value.reranker_enabled}
+          disabled={disabled}
+          onChange={(event) => {
+            const next = { ...value, reranker_enabled: event.currentTarget.checked }
+            onChange(next)
+            onSave(next)
+          }}
+        />
+      </label>
+    </section>
   )
 }
 
@@ -182,6 +301,9 @@ export type SettingsProps = {
   ragEnabled: boolean
   ragModeDisabled: boolean
   onRagMode: (enabled: boolean) => void
+  ragSettings: RagSettings
+  onRagSettingsChange: (settings: RagSettings) => void
+  onRagSettingsSave: (settings: RagSettings) => void
   error?: string | null
 }
 
@@ -204,6 +326,14 @@ export function Settings(props: SettingsProps) {
         disabled={props.ragModeDisabled}
         onChange={props.onRagMode}
       />
+      {props.ragEnabled && (
+        <RagSettingsControls
+          value={props.ragSettings}
+          disabled={props.ragModeDisabled}
+          onChange={props.onRagSettingsChange}
+          onSave={props.onRagSettingsSave}
+        />
+      )}
       {props.error && <p className="model-note">{props.error}</p>}
       <p className="model-note">Long-term memory недоступна без профиля.</p>
       <div className="settings-grid">

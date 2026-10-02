@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from copia.agents.domain.models.agent_config import AgentConfig
+from copia.common.domain.models.rag_settings import RagSettings
 from copia.storage.domain.services.path_identifiers import validate_path_identifier
 
 
@@ -12,6 +13,7 @@ class CreateSessionRequest(BaseModel):
     user_profile_id: str | None = None
     task_mode_enabled: bool = False
     rag_enabled: bool = False
+    rag_settings: RagSettings = Field(default_factory=RagSettings)
 
     @model_validator(mode="after")
     def require_one_source(self) -> CreateSessionRequest:

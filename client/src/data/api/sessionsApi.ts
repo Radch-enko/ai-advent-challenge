@@ -1,6 +1,7 @@
 import { AgentConfig } from '../../domain/models/agent'
 import { request } from './request'
 import type { ChatSession, ChatSessionSummary } from '../../domain/models/session'
+import type { RagSettings } from '../../domain/models/ragSettings'
 
 export function getSessions(): Promise<ChatSessionSummary[]> {
   return request('/sessions')
@@ -19,6 +20,7 @@ export function createSession(
   userProfileId: string | null = null,
   taskModeEnabled = false,
   ragEnabled = false,
+  ragSettings?: RagSettings,
 ): Promise<ChatSession> {
   return request('/sessions', {
     method: 'POST',
@@ -27,6 +29,7 @@ export function createSession(
       user_profile_id: userProfileId,
       task_mode_enabled: taskModeEnabled,
       rag_enabled: ragEnabled,
+      rag_settings: ragSettings,
     }),
   })
 }
@@ -38,20 +41,29 @@ export function updateSessionTaskMode(sessionId: string, enabled: boolean): Prom
   })
 }
 
-export function updateSessionRagMode(sessionId: string, enabled: boolean): Promise<ChatSession> {
+export function updateSessionRagMode(
+  sessionId: string,
+  enabled: boolean,
+  settings?: RagSettings,
+): Promise<ChatSession> {
   return request(`/sessions/${encodeURIComponent(sessionId)}/rag-mode`, {
     method: 'PATCH',
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({ enabled, settings }),
   })
 }
 
 export function createSessionFromProfile(
   profileName: string,
   ragEnabled = false,
+  ragSettings?: RagSettings,
 ): Promise<ChatSession> {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ profile_name: profileName, rag_enabled: ragEnabled }),
+    body: JSON.stringify({
+      profile_name: profileName,
+      rag_enabled: ragEnabled,
+      rag_settings: ragSettings,
+    }),
   })
 }
 

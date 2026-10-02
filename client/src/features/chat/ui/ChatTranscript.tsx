@@ -114,6 +114,9 @@ export function ChatTranscript({
             loadingStep != null &&
             task != null &&
             messages.some((item) => item.taskId === task.id && item.taskStepId === loadingStep.id)
+          const contextSources = entry.sources?.filter(
+            (source) => source.selected_for_context !== false,
+          )
 
           return (
             <Fragment key={entry.id}>
@@ -182,11 +185,11 @@ export function ChatTranscript({
                       <Markdown content={entry.content} />
                     </div>
                   )}
-                  {entry.role !== 'user' && entry.sources && entry.sources.length > 0 && (
-                    <section className="retrieved-sources" aria-label="Использованные источники">
+                  {entry.role !== 'user' && contextSources && contextSources.length > 0 && (
+                    <section className="retrieved-sources" aria-label="Источники RAG">
                       <b>Источники</b>
                       <ul>
-                        {entry.sources.map((source) => (
+                        {contextSources.map((source) => (
                           <li key={source.chunk_id}>
                             <span>{source.title}</span>
                             {source.section && <small>{source.section}</small>}
@@ -206,7 +209,7 @@ export function ChatTranscript({
                       executionError={entry.executionError}
                       usage={entry.usage}
                       memoryEvents={entry.memoryEvents}
-                      sources={entry.sources}
+                      sources={contextSources}
                     />
                   )}
                   {(entry.timestamp ||

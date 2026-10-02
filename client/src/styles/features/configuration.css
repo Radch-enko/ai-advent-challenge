@@ -74,6 +74,19 @@
 .task-mode-toggle small {
   max-width: 270px;
 }
+.rag-settings {
+  margin: -2px 0 12px;
+  padding: 8px 9px 2px;
+  border: 1px solid #30303b;
+  border-radius: 7px;
+  background: #17171d;
+}
+.rag-settings .toggle-row {
+  padding-top: 8px;
+}
+.rag-settings .toggle-row:last-child {
+  margin-bottom: 6px;
+}
 .task-mode-toggle input {
   width: auto;
   margin: 0;

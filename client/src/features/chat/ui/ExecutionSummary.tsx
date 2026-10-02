@@ -53,11 +53,14 @@ export function ExecutionSummary({
         )}
         {sources && sources.length > 0 && (
           <section className="execution-summary-sources">
-            <h3>Найденные chunk ID</h3>
+            <h3>Чанки в контексте LLM</h3>
             <ul>
               {sources.map((source) => (
                 <li key={source.chunk_id}>
                   <code>{source.chunk_id}</code>
+                  {source.similarity_score != null && (
+                    <span> · similarity {source.similarity_score.toFixed(3)}</span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -12,6 +12,7 @@ import {
 } from '../../../domain/models/conversation'
 import { McpApproval } from '../../../domain/models/mcp'
 import { ChatSession } from '../../../domain/models/session'
+import { RagSettings } from '../../../domain/models/ragSettings'
 import {
   WorkingMemoryItem,
   PendingMemorySuggestion,
@@ -36,6 +37,7 @@ type SubmissionState = {
   taskIsActive: boolean
   taskModeEnabled: boolean
   ragModeEnabled: boolean
+  ragSettings: RagSettings
 }
 
 type SubmissionActions = {
@@ -45,6 +47,7 @@ type SubmissionActions = {
   setActiveSession: Dispatch<SetStateAction<ChatSession | null>>
   setTaskModeDraft: Dispatch<SetStateAction<boolean>>
   setRagModeDraft: Dispatch<SetStateAction<boolean>>
+  setRagSettingsDraft: Dispatch<SetStateAction<RagSettings>>
   setMessage: Dispatch<SetStateAction<string>>
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>
   setPendingSessionIds: Dispatch<SetStateAction<string[]>>
@@ -77,12 +80,19 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
     try {
       const config = actions.buildConfig()
       if (!session) {
-        session = await createSession(config, state.selectedProfileId, true, state.ragModeEnabled)
+        session = await createSession(
+          config,
+          state.selectedProfileId,
+          true,
+          state.ragModeEnabled,
+          state.ragSettings,
+        )
         actions.setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
         actions.setTaskModeDraft(true)
         actions.setRagModeDraft(session.rag_enabled)
+        actions.setRagSettingsDraft(session.rag_settings)
       }
       await startTask(session.id, instruction)
       const latest = await getSession(session.id)
@@ -128,11 +138,18 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
       ])
       session = state.session
       if (!session) {
-        session = await createSession(config, state.selectedProfileId, false, state.ragModeEnabled)
+        session = await createSession(
+          config,
+          state.selectedProfileId,
+          false,
+          state.ragModeEnabled,
+          state.ragSettings,
+        )
         actions.setActiveSession(session)
         activeSessionIdRef.current = session.id
         localStorage.setItem('copia.activeSessionId', session.id)
         actions.setRagModeDraft(session.rag_enabled)
+        actions.setRagSettingsDraft(session.rag_settings)
         void actions.refreshSessions()
       }
       const requestSession = session

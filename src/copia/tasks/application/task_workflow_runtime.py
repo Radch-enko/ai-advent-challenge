@@ -35,7 +35,7 @@ class TaskWorkflowRuntime:
     system_messages: Callable[..., list[ChatMessage]]
     prompt_message: Callable[[str], ChatMessage]
     validation_schema: Callable[[], dict[str, object]]
-    retrieve_chunk: Callable[[str], Any]
+    retrieve_chunk: Callable[..., Any]
     contextualize: Callable[..., list[ChatMessage]]
     invariants: InvariantsRepository
     session_task: Callable[[ChatSession, str], TaskState]

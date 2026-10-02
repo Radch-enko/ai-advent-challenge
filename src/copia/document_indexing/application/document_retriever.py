@@ -1,35 +1,116 @@
 from __future__ import annotations
 
+import heapq
 import json
 import math
 from typing import Any
 
+from copia.common.domain.models.rag_settings import RagSettings
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.common.domain.services.prompt_resources import render_prompt
 from copia.document_indexing.data.index_artifact_store import IndexArtifactStore
 from copia.document_indexing.domain.errors import DocumentRetrievalError
+from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.document_indexing.domain.models.retrieved_chunk import RetrievedChunk
 from copia.providers.application.embedding_router import EmbeddingRouter
+from copia.providers.application.llm_router import LLMRouter
 from copia.providers.domain.errors import ProviderError
+from copia.providers.domain.models.generation_config import GenerationConfig
+from copia.providers.domain.models.llm_config import LLMConfig
+from copia.providers.domain.models.structured_output_config import StructuredOutputConfig
 from copia.sessions.domain.models.chat_message import ChatMessage
 
 
 class DocumentRetriever:
-    def __init__(self, artifact_store: IndexArtifactStore, providers: EmbeddingRouter) -> None:
+    def __init__(
+        self,
+        artifact_store: IndexArtifactStore,
+        embedding_providers: EmbeddingRouter,
+        llm_router: LLMRouter | None = None,
+    ) -> None:
         self._artifacts = artifact_store
-        self._providers = providers
+        self._embedding_providers = embedding_providers
+        self._llm_router = llm_router
 
-    def retrieve(self, question: str) -> RetrievedChunk:
+    def retrieve(
+        self,
+        question: str,
+        settings: RagSettings | None = None,
+        *,
+        config: LLMConfig | None = None,
+        history: list[ChatMessage] | None = None,
+        summary: str = "",
+    ) -> RetrievedChunk | RagRetrievalResult:
+        """Keep the original single-best-chunk API for existing internal callers."""
+        if settings is not None:
+            return self.retrieve_with_settings(
+                question,
+                settings,
+                config=config,
+                history=history,
+                summary=summary,
+            )
+        result = self.retrieve_with_settings(
+            question,
+            RagSettings(top_k_before=100, similarity_threshold=-1, top_k_after=100),
+        )
+        if not result.context_chunks:
+            raise DocumentRetrievalError(
+                "RAG is enabled, but no document chunks passed the similarity threshold."
+            )
+        return result.context_chunks[0]
+
+    def retrieve_with_settings(
+        self,
+        question: str,
+        settings: RagSettings,
+        *,
+        config: LLMConfig | None = None,
+        history: list[ChatMessage] | None = None,
+        summary: str = "",
+    ) -> RagRetrievalResult:
         if not question.strip():
             raise DocumentRetrievalError("RAG search requires a non-empty question")
 
         try:
-            return self._retrieve(question)
+            search_query = question
+            if settings.query_rewrite_enabled:
+                search_query = self._rewrite_query(question, history or [], summary, config)
+
+            candidates = self._search(search_query, settings)
+            filtered = [item for item in candidates if item[0] >= settings.similarity_threshold][
+                : settings.top_k_after
+            ]
+            selected_ids = {chunk.source.chunk_id for _, chunk in filtered}
+
+            if settings.reranker_enabled and filtered:
+                winner_id = self._rerank(question, filtered, config)
+                if winner_id not in selected_ids:
+                    raise DocumentRetrievalError(
+                        "RAG reranker selected a chunk outside the filtered candidates."
+                    )
+                context_chunks = [
+                    chunk for _, chunk in filtered if chunk.source.chunk_id == winner_id
+                ]
+            else:
+                context_chunks = [chunk for _, chunk in filtered]
+
+            context_chunk_ids = {item.source.chunk_id for item in context_chunks}
+            sources = [
+                chunk.source.model_copy(
+                    update={
+                        "similarity_score": score,
+                        "selected_for_context": chunk.source.chunk_id in context_chunk_ids,
+                    }
+                )
+                for score, chunk in filtered
+            ]
+            return RagRetrievalResult(context_chunks=context_chunks, filtered_sources=sources)
         except DocumentRetrievalError:
             raise
         except ProviderError as error:
             raise DocumentRetrievalError(
-                "RAG search failed. Check the embedding provider configuration and retry."
+                "RAG search failed. Check the embedding and language model provider configuration and retry."
             ) from error
         except (OSError, UnicodeError, ValueError, TypeError, KeyError, IndexError) as error:
             raise DocumentRetrievalError(
@@ -37,32 +118,119 @@ class DocumentRetriever:
             ) from error
         except Exception as error:
             raise DocumentRetrievalError(
-                "RAG search failed. Check the embedding provider and document index, then retry."
+                "RAG search failed. Check the provider configuration and document index, then retry."
             ) from error
 
     def contextualize(
         self,
         messages: list[ChatMessage],
-        retrieved_chunk: RetrievedChunk,
+        result: RagRetrievalResult | RetrievedChunk,
     ) -> list[ChatMessage]:
-        serialized_chunk = json.dumps(
-            {
-                "chunk_id": retrieved_chunk.source.chunk_id,
-                "source": retrieved_chunk.source.source,
-                "title": retrieved_chunk.source.title,
-                "section": retrieved_chunk.source.section,
-                "text": retrieved_chunk.text,
-            },
+        chunks = result.context_chunks if isinstance(result, RagRetrievalResult) else [result]
+        serialized_chunks = json.dumps(
+            [
+                {
+                    "chunk_id": chunk.source.chunk_id,
+                    "source": chunk.source.source,
+                    "title": chunk.source.title,
+                    "section": chunk.source.section,
+                    "text": chunk.text,
+                }
+                for chunk in chunks
+            ],
             ensure_ascii=False,
         )
         context = render_prompt(
             "copia.document_indexing",
             "rag_context.md",
-            retrieved_chunk_json=serialized_chunk,
+            retrieved_chunks_json=serialized_chunks,
         )
         return LLMContextBuilder.with_additional_system_context(messages, context)
 
-    def _retrieve(self, question: str) -> RetrievedChunk:
+    def _rewrite_query(
+        self,
+        question: str,
+        history: list[ChatMessage],
+        summary: str,
+        config: LLMConfig | None,
+    ) -> str:
+        router = self._required_llm_router(config)
+        history_data = [
+            {"role": message.role, "content": message.content}
+            for message in history[-10:]
+            if message.role in {"user", "assistant"}
+        ]
+        prompt = render_prompt(
+            "copia.document_indexing",
+            "query_rewrite.md",
+            summary_json=json.dumps(summary, ensure_ascii=False),
+            history_json=json.dumps(history_data, ensure_ascii=False),
+            question_json=json.dumps(question, ensure_ascii=False),
+        )
+        response = router.complete(
+            [ChatMessage(role="user", content=prompt)], _helper_config(config)
+        )
+        rewritten = response.content.strip()
+        if not rewritten:
+            raise DocumentRetrievalError("RAG query rewriting returned an empty search query.")
+        return rewritten[:2000]
+
+    def _rerank(
+        self,
+        question: str,
+        candidates: list[tuple[float, RetrievedChunk]],
+        config: LLMConfig | None,
+    ) -> str:
+        router = self._required_llm_router(config)
+        candidate_data = [
+            {
+                "chunk_id": chunk.source.chunk_id,
+                "title": chunk.source.title,
+                "section": chunk.source.section,
+                "text": chunk.text,
+            }
+            for _, chunk in candidates
+        ]
+        candidate_ids = [item["chunk_id"] for item in candidate_data]
+        prompt = render_prompt(
+            "copia.document_indexing",
+            "rag_rerank.md",
+            question_json=json.dumps(question, ensure_ascii=False),
+            candidates_json=json.dumps(candidate_data, ensure_ascii=False),
+        )
+        helper_config = _helper_config(config).model_copy(
+            update={
+                "structured_output": StructuredOutputConfig(
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "selected_chunk_id": {
+                                "type": "string",
+                                "enum": candidate_ids,
+                            }
+                        },
+                        "required": ["selected_chunk_id"],
+                        "additionalProperties": False,
+                    },
+                    strict=True,
+                )
+            }
+        )
+        response = router.complete([ChatMessage(role="user", content=prompt)], helper_config)
+        data = response.structured_data
+        selected_id = data.get("selected_chunk_id") if isinstance(data, dict) else None
+        if not isinstance(selected_id, str) or selected_id not in candidate_ids:
+            raise DocumentRetrievalError("RAG reranker returned an invalid chunk selection.")
+        return selected_id
+
+    def _required_llm_router(self, config: LLMConfig | None) -> LLMRouter:
+        if self._llm_router is None or config is None:
+            raise DocumentRetrievalError(
+                "RAG query rewriting and reranking require a configured conversation model."
+            )
+        return self._llm_router
+
+    def _search(self, question: str, settings: RagSettings) -> list[tuple[float, RetrievedChunk]]:
         latest = self._artifacts.latest()
         if latest is None:
             raise DocumentRetrievalError(
@@ -76,7 +244,7 @@ class DocumentRetriever:
         if not isinstance(dimension, int) or dimension <= 0:
             raise ValueError("Invalid embedding dimension")
 
-        provider = self._providers.provider(provider_id)
+        provider = self._embedding_providers.provider(provider_id)
         if not provider.is_configured:
             raise ProviderError("Embedding provider is not configured")
         query_vectors = provider.embed([question], model)
@@ -88,13 +256,14 @@ class DocumentRetriever:
             raise ValueError("Embedding provider returned a zero vector")
 
         index_path = run_path / "structure-aware.jsonl"
-        best: tuple[float, RetrievedChunk] | None = None
+        scored: list[tuple[float, int, RetrievedChunk]] = []
+        sequence = 0
         with index_path.open(encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
                     continue
                 record = json.loads(line)
-                chunk = _parse_chunk(record, dimension)
+                chunk = _parse_chunk(record)
                 vector = _validated_vector(record.get("embedding"), dimension)
                 vector_norm = math.sqrt(math.fsum(value * value for value in vector))
                 if vector_norm == 0:
@@ -102,14 +271,29 @@ class DocumentRetriever:
                 score = math.fsum(
                     left * right for left, right in zip(query_vector, vector, strict=True)
                 ) / (query_norm * vector_norm)
-                if best is None or score > best[0]:
-                    best = (score, chunk)
+                score = max(-1.0, min(1.0, score))
+                item = (score, -sequence, chunk)
+                if len(scored) < settings.top_k_before:
+                    heapq.heappush(scored, item)
+                elif item[:2] > scored[0][:2]:
+                    heapq.heapreplace(scored, item)
+                sequence += 1
 
-        if best is None:
+        if not scored:
             raise DocumentRetrievalError(
                 "RAG is enabled, but the document index contains no chunks."
             )
-        return best[1]
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [(score, chunk) for score, _, chunk in scored]
+
+
+def _helper_config(config: LLMConfig | None) -> LLMConfig:
+    assert config is not None
+    return LLMConfig(
+        provider=config.provider,
+        model=config.model,
+        generation=GenerationConfig(max_output_tokens=128, temperature=0),
+    )
 
 
 def _required_string(record: dict[str, Any], field: str) -> str:
@@ -127,7 +311,7 @@ def _validated_vector(value: Any, expected_dimension: int) -> list[float]:
     return [float(item) for item in value]
 
 
-def _parse_chunk(record: Any, expected_dimension: int) -> RetrievedChunk:
+def _parse_chunk(record: Any) -> RetrievedChunk:
     if not isinstance(record, dict):
         raise ValueError("Invalid index record")
     text = _required_string(record, "text")

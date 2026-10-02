@@ -243,10 +243,11 @@ function TaskSubtask({
 }
 
 function CallSources({ sources }: { sources?: TaskLlmCall['sources'] }) {
-  if (!sources?.length) return null
+  const contextSources = sources?.filter((source) => source.selected_for_context !== false)
+  if (!contextSources?.length) return null
   return (
     <small className="task-call-sources">
-      Chunk ID: {sources.map((source) => source.chunk_id).join(', ')}
+      Chunk ID: {contextSources.map((source) => source.chunk_id).join(', ')}
     </small>
   )
 }

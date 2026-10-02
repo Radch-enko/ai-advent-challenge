@@ -119,6 +119,7 @@ class TaskRoutes:
                     id=str(uuid.uuid4()),
                     original_instruction=request.instruction,
                     rag_enabled=session.rag_enabled,
+                    rag_settings=session.rag_settings.model_copy(deep=True),
                     stage=TaskStage.PLANNING,
                     status=TaskStatus.RUNNING,
                     expected_action="Create a plan for the task",

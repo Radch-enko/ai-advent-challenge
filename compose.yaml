@@ -14,7 +14,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4317}
       COPIA_MCP_TRUSTED_ENDPOINT: http://mcp-server:8001/mcp
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - copia-data:/data
       - type: bind
@@ -40,7 +40,7 @@ services:
     environment:
       VITE_API_TARGET: http://backend:8000
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       - backend
 

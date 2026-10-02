@@ -135,7 +135,7 @@ class SessionServiceComposition:
             safe_summary=service._safe_summarization_events(),
             make_response=service._session_message_response(),
             generate_title=service.generate_session_title(),
-            retrieve_chunk=lambda question: service.document_retriever().retrieve(question),
+            retrieve_chunk=service.document_retriever().retrieve,
             contextualize=service.document_retriever().contextualize,
         )
 

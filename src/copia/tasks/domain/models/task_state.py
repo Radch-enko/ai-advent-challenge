@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from copia.common.domain.models.rag_settings import RagSettings
 from copia.mcp.domain.models.mcp_approval import McpApproval
 from copia.tasks.domain.models.task_llm_call import TaskLlmCall
 from copia.tasks.domain.models.task_plan import TaskPlan
@@ -16,6 +17,7 @@ class TaskState(BaseModel):
     id: str
     original_instruction: str = Field(min_length=1)
     rag_enabled: bool = False
+    rag_settings: RagSettings = Field(default_factory=RagSettings)
     status: TaskStatus = TaskStatus.RUNNING
     stage: TaskStage = TaskStage.PLANNING
     current_step: int | None = Field(default=None, ge=0)

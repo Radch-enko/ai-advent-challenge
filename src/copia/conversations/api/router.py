@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from copia.common.observability import bind_http_log_context
 from copia.conversations.api.conversation_route_runtime import ConversationRouteRuntime
 from copia.conversations.api.models.conversation_command import (
     ApprovalDecisionCommand,
@@ -14,9 +15,8 @@ from copia.conversations.api.models.conversation_command import (
     ResumeConversationCommand,
     SendMessageCommand,
 )
-from copia.conversations.application.conversation_store import (
-    ConversationConflictError,
-)
+from copia.conversations.application.conversation_run import ConversationRun
+from copia.conversations.application.conversation_store import ConversationConflictError
 from copia.conversations.data.conversation_repository import ConversationStorageLimitError
 
 
@@ -116,7 +116,7 @@ def create_conversation_router(
         if created and run.status == "running":
             if isinstance(command, SendMessageCommand) and command.target.kind == "session":
                 run.session_id = command.target.id
-            asyncio.create_task(runtime.execute(run, command))
+            asyncio.create_task(_execute_conversation(runtime, run, command))
         return _stream_response(run, 0, request)
 
     router.add_api_route("/conversation", conversation, methods=["POST"])
@@ -125,27 +125,38 @@ def create_conversation_router(
 
 async def _execute_approval(
     runtime: ConversationRouteRuntime,
-    run,
+    run: ConversationRun,
     command: ApprovalDecisionCommand,
 ) -> None:
-    try:
-        await runtime.decide_approval(command.session_id, command.approval_id, command.decision)
-        run.emit(
-            "approval.accepted", {"approval_id": command.approval_id, "decision": command.decision}
-        )
-        run.emit("conversation.completed", {"conversation_id": run.id})
-    except Exception:
-        run.emit(
-            "conversation.failed",
-            {
-                "conversation_id": run.id,
-                "code": "approval_decision_failed",
-                "message": "Approval decision could not be applied",
-            },
-        )
+    with bind_http_log_context(conversation_id=run.id, request_id=command.request_id):
+        try:
+            await runtime.decide_approval(command.session_id, command.approval_id, command.decision)
+            run.emit(
+                "approval.accepted",
+                {"approval_id": command.approval_id, "decision": command.decision},
+            )
+            run.emit("conversation.completed", {"conversation_id": run.id})
+        except Exception:
+            run.emit(
+                "conversation.failed",
+                {
+                    "conversation_id": run.id,
+                    "code": "approval_decision_failed",
+                    "message": "Approval decision could not be applied",
+                },
+            )
 
 
-def _stream_response(run, index: int, request: Request) -> StreamingResponse:
+async def _execute_conversation(
+    runtime: ConversationRouteRuntime,
+    run: ConversationRun,
+    command: ConversationCommand,
+) -> None:
+    with bind_http_log_context(conversation_id=run.id, request_id=command.request_id):
+        await runtime.execute(run, command)
+
+
+def _stream_response(run: ConversationRun, index: int, request: Request) -> StreamingResponse:
     async def events() -> AsyncIterator[str]:
         cursor = index
         while True:

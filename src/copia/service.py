@@ -104,6 +104,7 @@ document_indexing_composition = DocumentIndexingServiceComposition(
     data_root,
     settings.documents_path,
     EmbeddingRouter(),
+    router,
 )
 factory = AgentFactory(router, ProfilesRepository(profiles_path))
 agents: dict[str, Agent] = {}

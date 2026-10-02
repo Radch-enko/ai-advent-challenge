@@ -112,6 +112,8 @@ class SessionSettingsRoutes:
                     detail="RAG mode cannot be changed while a task is active",
                 )
             session.rag_enabled = request.enabled
+            if request.settings is not None:
+                session.rag_settings = request.settings
             session.updated_at = datetime.now(UTC)
             self._get_repository().save(session)
             return session
@@ -158,6 +160,7 @@ class SessionSettingsRoutes:
                 long_term_memory_enabled=source.long_term_memory_enabled,
                 task_mode_enabled=source.task_mode_enabled,
                 rag_enabled=source.rag_enabled,
+                rag_settings=source.rag_settings.model_copy(deep=True),
                 created_at=now,
                 updated_at=now,
             )

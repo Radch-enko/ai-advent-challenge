@@ -1,8 +1,10 @@
 import asyncio
+import inspect
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from copia.common.domain.services.runtime_context import with_current_datetime_context
+from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.mcp.domain.services.mcp_tool_loop import McpToolLoop
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
@@ -47,9 +49,26 @@ class TaskWorkflow:
         try:
             session = await runtime.get_session(session_id)
             if rag_enabled:
-                chunk = await runtime.threadpool(runtime.retrieve_chunk, retrieval_query)
-                messages = runtime.contextualize(messages, chunk)
-                sources = [chunk.source]
+                task = runtime.session_task(session, task_id)
+                retrieval_args = (retrieval_query, task.rag_settings)
+                retrieval_kwargs = {
+                    "config": config,
+                    "history": session.messages,
+                    "summary": session.context.summary,
+                }
+                try:
+                    inspect.signature(runtime.retrieve_chunk).bind(
+                        *retrieval_args, **retrieval_kwargs
+                    )
+                except (TypeError, ValueError):
+                    chunk = await runtime.threadpool(runtime.retrieve_chunk, retrieval_query)
+                    result = RagRetrievalResult.from_single_chunk(chunk)
+                else:
+                    result = await runtime.threadpool(
+                        runtime.retrieve_chunk, *retrieval_args, **retrieval_kwargs
+                    )
+                messages = runtime.contextualize(messages, result)
+                sources = result.filtered_sources
             resolved_tools = (
                 await runtime.resolve_tools(session.config) if session.config.mcp_access else []
             )

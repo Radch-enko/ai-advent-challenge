@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from copia.common.configuration import get_settings
+from copia.common.observability import MAX_BODY_BYTES, http_body_capture_enabled
 from copia.providers.data.http_logging import record_response, record_stream_response
 from copia.providers.data.llm import (
     LLMProvider,
@@ -262,9 +263,13 @@ class OpenAIProvider(LLMProvider):
 
         content: list[str] = []
         tool_deltas: dict[int, dict[str, Any]] = {}
+        stream_events: list[dict[str, Any]] | None = [] if http_body_capture_enabled() else None
+        stream_event_bytes = 16
+        stream_events_truncated = False
         usage: dict[str, Any] | None = None
         response_model = config.model
         response: httpx.Response | None = None
+        stream_response_body: dict[str, Any] | None = None
         try:
             with self._client.stream(
                 "POST",
@@ -272,8 +277,20 @@ class OpenAIProvider(LLMProvider):
                 json=payload,
                 headers={"Authorization": f"Bearer {self._api_key}"},
             ) as response:
+                response.request.extensions["copia.otel.request.body"] = payload
+                if response.is_error:
+                    response.read()
                 response.raise_for_status()
                 for event in _stream_data(response):
+                    if stream_events is not None and not stream_events_truncated:
+                        event_size = len(json.dumps(event, ensure_ascii=True).encode("utf-8"))
+                        event_size += 1 if stream_events else 0
+                        if stream_event_bytes + event_size > MAX_BODY_BYTES:
+                            stream_events.clear()
+                            stream_events_truncated = True
+                        else:
+                            stream_events.append(event)
+                            stream_event_bytes += event_size
                     if isinstance(event.get("model"), str):
                         response_model = event["model"]
                     usage = event.get("usage") or usage
@@ -317,6 +334,7 @@ class OpenAIProvider(LLMProvider):
                 "choices": [{"message": {"content": content_text, "tool_calls": raw_calls}}],
                 "usage": usage,
             }
+            stream_response_body = response_body
             result = LLMResponse(
                 content=content_text,
                 provider=ProviderName.OPENAI,
@@ -343,7 +361,12 @@ class OpenAIProvider(LLMProvider):
             ) from error
         finally:
             if response is not None:
-                record_stream_response(response)
+                record_stream_response(
+                    response,
+                    response_body=stream_response_body,
+                    stream_events=stream_events,
+                    stream_events_truncated=stream_events_truncated,
+                )
 
     def list_models(self) -> list[ProviderModel]:
         if not self._api_key:

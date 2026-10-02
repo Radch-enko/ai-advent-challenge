@@ -20,6 +20,10 @@ description: Используй при ревью работы Copia, затра
 Проверь:
 
 - No secrets, tokens, credentials, signing material или local config не закоммичены.
+- Проведи отдельную смысловую проверку на реальные персональные сведения пользователя в review scope: факты из личной базы знаний или профиля, реальные фрагменты и пересказы диалогов, сессионные transcripts/summaries, LLM prompts/results, logs и dumps embeddings, а также содержимое challenge reports, tests, fixtures, evals и examples. Проверяй staged, unstaged и untracked changes; при repository-wide audit проверяй весь доступный repository content. Ищи реальные или узнаваемые факты, даже если имена заменены или текст слегка перефразирован.
+- Не считай gitleaks, regex или совпадения по именам файлов достаточной проверкой: оценивай смысл содержимого как LLM reviewer. Если нужные файлы недоступны, исключены из review scope или их нельзя безопасно прочитать, явно укажи это как ограничение, не делая вывод об отсутствии утечки.
+- Не читай внешнюю личную базу знаний, реальные `.env`, secrets, keychains, environment values или личную local configuration для сравнения. Если локальный runtime artifact может содержать их, не раскрывай его значения; зафиксируй только путь и причину ограничения.
+- При обнаружении вероятной смысловой утечки укажи file и line references, категорию и severity, но не цитируй и не пересказывай само личное сведение. Не переноси такие факты в review report, примеры, tests или другие outputs.
 - Secrets не выводятся в logs, command lines, generated artifacts, examples или error paths.
 - Auth/authz boundaries соответствуют task и fail closed.
 - Network access и dependency additions имеют явное task justification.

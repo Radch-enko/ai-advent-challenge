@@ -3,6 +3,7 @@ import { AgentConfig, ContextManagementConfig } from './domain/models/agent'
 import { ChatSession } from './domain/models/session'
 import { Provider, ProviderModel } from './domain/models/provider'
 import { ChatMessage, FactsUpdateEvent, SummarizationEvent } from './domain/models/chat'
+import { defaultRagSettings, RagSettings } from './domain/models/ragSettings'
 import { McpApproval } from './domain/models/mcp'
 import { ChatTranscript } from './features/chat/ui/ChatTranscript'
 import { ChatComposer } from './features/chat/ui/ChatComposer'
@@ -73,6 +74,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [taskModeDraft, setTaskModeDraft] = useState(false)
   const [ragModeDraft, setRagModeDraft] = useState(false)
+  const [ragSettingsDraft, setRagSettingsDraft] = useState<RagSettings>(defaultRagSettings)
   const [profileSettingsSaving, setProfileSettingsSaving] = useState(false)
   const [profileSettingsError, setProfileSettingsError] = useState<string | null>(null)
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false)
@@ -157,6 +159,7 @@ export function App() {
   const isLoading = activeSession != null && pendingSessionIds.includes(activeSession.id)
   const taskModeEnabled = activeSession?.task_mode_enabled ?? taskModeDraft
   const ragModeEnabled = activeSession?.rag_enabled ?? ragModeDraft
+  const ragSettings = ragSettingsDraft
   const sessionTasks = useMemo(() => tasksForSession(activeSession), [activeSession])
   const activeTask = sessionTasks.find(isActiveTask)
   const taskIsActive = activeTask != null
@@ -228,6 +231,7 @@ export function App() {
       taskIsActive,
       taskModeEnabled,
       ragModeEnabled,
+      ragSettings,
     },
     actions: {
       buildConfig,
@@ -236,6 +240,7 @@ export function App() {
       setActiveSession,
       setTaskModeDraft,
       setRagModeDraft,
+      setRagSettingsDraft,
       setMessage,
       setMessages,
       setPendingSessionIds,
@@ -347,6 +352,7 @@ export function App() {
       setRunningMcpTool(null)
       setTaskModeDraft(session.task_mode_enabled)
       setRagModeDraft(session.rag_enabled)
+      setRagSettingsDraft(session.rag_settings ?? defaultRagSettings)
       resetTaskActionsForSession()
       setSelectedUserProfileId(session.user_profile_id)
       activeSessionIdRef.current = session.id
@@ -371,6 +377,7 @@ export function App() {
     setRunningMcpTool(null)
     setTaskModeDraft(false)
     setRagModeDraft(false)
+    setRagSettingsDraft(defaultRagSettings)
     activeSessionIdRef.current = null
     localStorage.removeItem('copia.activeSessionId')
     setMessages(starterMessages)
@@ -393,6 +400,7 @@ export function App() {
       activeTask,
       taskIsActive,
       ragModeDraft,
+      ragSettingsDraft,
       isLoading,
       profileSettingsSaving,
       forkingMessageIndex,
@@ -405,6 +413,7 @@ export function App() {
       setActiveSession,
       setTaskModeDraft,
       setRagModeDraft,
+      setRagSettingsDraft,
       setSelectedUserProfileId,
       setProfileSelectionError,
       setProfileSelectionLoading,
@@ -605,6 +614,9 @@ export function App() {
                   ragEnabled={ragModeEnabled}
                   ragModeDisabled={taskIsActive || profileSettingsSaving}
                   onRagMode={(enabled) => void sessionOperations.setRagMode(enabled)}
+                  ragSettings={ragSettings}
+                  onRagSettingsChange={setRagSettingsDraft}
+                  onRagSettingsSave={sessionOperations.saveRagSettings}
                 />
               ) : (
                 <Settings
@@ -643,6 +655,9 @@ export function App() {
                   ragEnabled={ragModeEnabled}
                   ragModeDisabled={taskIsActive || profileSettingsSaving}
                   onRagMode={(enabled) => void sessionOperations.setRagMode(enabled)}
+                  ragSettings={ragSettings}
+                  onRagSettingsChange={setRagSettingsDraft}
+                  onRagSettingsSave={sessionOperations.saveRagSettings}
                   error={profileSettingsError}
                 />
               )

@@ -15,6 +15,7 @@ import { AgentConfig, ContextManagementConfig } from '../../../domain/models/age
 import { ChatMessage } from '../../../domain/models/chat'
 import { ChatSession } from '../../../domain/models/session'
 import { TaskState } from '../../../domain/models/task'
+import { RagSettings } from '../../../domain/models/ragSettings'
 import { mapStoredMessages } from './sessionTranscript'
 
 type SessionOperationsState = {
@@ -22,6 +23,7 @@ type SessionOperationsState = {
   activeTask: TaskState | undefined
   taskIsActive: boolean
   ragModeDraft: boolean
+  ragSettingsDraft: RagSettings
   isLoading: boolean
   profileSettingsSaving: boolean
   forkingMessageIndex: number | null
@@ -35,6 +37,7 @@ type SessionOperationsActions = {
   setActiveSession: Dispatch<SetStateAction<ChatSession | null>>
   setTaskModeDraft: Dispatch<SetStateAction<boolean>>
   setRagModeDraft: Dispatch<SetStateAction<boolean>>
+  setRagSettingsDraft: Dispatch<SetStateAction<RagSettings>>
   setSelectedUserProfileId: Dispatch<SetStateAction<string | null>>
   setProfileSelectionError: Dispatch<SetStateAction<string | null>>
   setProfileSelectionLoading: Dispatch<SetStateAction<boolean>>
@@ -111,11 +114,11 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
   ])
 
   async function createFromProfile(profileName: string): Promise<ChatSession> {
-    return createSessionFromProfile(profileName, state.ragModeDraft)
+    return createSessionFromProfile(profileName, state.ragModeDraft, state.ragSettingsDraft)
   }
 
   async function createWithConfig(config: AgentConfig): Promise<ChatSession> {
-    return createSession(config, null, false, state.ragModeDraft)
+    return createSession(config, null, false, state.ragModeDraft, state.ragSettingsDraft)
   }
 
   async function openSavedSession(sessionId: string) {
@@ -159,15 +162,43 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
     actions.setProfileSettingsSaving(true)
     actions.setProfileSettingsError(null)
     try {
-      const updated = await updateSessionRagMode(state.activeSession.id, enabled)
+      const updated = await updateSessionRagMode(
+        state.activeSession.id,
+        enabled,
+        state.ragSettingsDraft,
+      )
       if (activeSessionIdRef.current === updated.id) {
         actions.setActiveSession(updated)
         actions.setRagModeDraft(updated.rag_enabled)
+        actions.setRagSettingsDraft(updated.rag_settings)
       }
     } catch (error) {
       if (activeSessionIdRef.current === state.activeSession.id) {
         actions.setProfileSettingsError(
           error instanceof Error ? error.message : 'Не удалось изменить RAG mode',
+        )
+      }
+    } finally {
+      actions.setProfileSettingsSaving(false)
+    }
+  }
+
+  async function saveRagSettings(settings: RagSettings) {
+    const session = state.activeSession
+    actions.setRagSettingsDraft(settings)
+    if (!session || state.taskIsActive || state.profileSettingsSaving) return
+    actions.setProfileSettingsSaving(true)
+    actions.setProfileSettingsError(null)
+    try {
+      const updated = await updateSessionRagMode(session.id, session.rag_enabled, settings)
+      if (activeSessionIdRef.current === updated.id) {
+        actions.setActiveSession(updated)
+        actions.setRagSettingsDraft(updated.rag_settings)
+      }
+    } catch (error) {
+      if (activeSessionIdRef.current === session.id) {
+        actions.setProfileSettingsError(
+          error instanceof Error ? error.message : 'Не удалось сохранить настройки RAG',
         )
       }
     } finally {
@@ -263,6 +294,7 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
     removeSession,
     setTaskMode,
     setRagMode,
+    saveRagSettings,
     selectUserProfile,
     retryProfileSelection,
     setProfileContextManagement,

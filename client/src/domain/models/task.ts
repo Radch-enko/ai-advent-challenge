@@ -45,6 +45,7 @@ export type TaskState = {
   id: string
   original_instruction: string
   rag_enabled: boolean
+  rag_settings: import('./ragSettings').RagSettings
   status: TaskStatus
   stage: TaskStage
   current_step?: number | null

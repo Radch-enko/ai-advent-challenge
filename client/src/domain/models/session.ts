@@ -4,6 +4,7 @@ import { Provider } from './provider'
 import { TaskState } from './task'
 import { MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem } from './memory'
 import { KnowledgeSource } from './knowledgeSource'
+import { RagSettings } from './ragSettings'
 
 type ChatResponseData = {
   content: string
@@ -56,6 +57,7 @@ export type ChatSession = {
   long_term_memory_enabled: boolean
   task_mode_enabled: boolean
   rag_enabled: boolean
+  rag_settings: RagSettings
   task: TaskState | null
   tasks: TaskState[]
   config: AgentConfig

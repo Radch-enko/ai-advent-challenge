@@ -12,7 +12,7 @@ from copia.common.observability import (
     _safe_attributes,
     _safe_spans,
 )
-from copia.providers.data.http_logging import _emit_sig_noz_response
+from copia.providers.data.http_logging import record_response
 
 
 def test_json_body_redacts_nested_secrets_before_capture() -> None:
@@ -143,16 +143,22 @@ def test_provider_completed_response_log_includes_headers_body_and_masks_secrets
     )
     response.read()
 
-    _emit_sig_noz_response(request, response)
+    record_response(response)
 
     record = logger.emitted[0]
-    assert record["body"] == "http.client.response.complete"
+    body = record["body"]
+    assert isinstance(body, dict)
+    assert body["event"] == "http.exchange"
+    assert body["direction"] == "outbound"
+    assert body["request"]["body"]["messages"][0]["content"] == "private text"
+    assert body["response"]["body"]["choices"][0]["message"]["content"] == "reply"
+    assert body["request"]["headers"]["Authorization"] == "[REDACTED]"
+    assert body["response"]["headers"]["set-cookie"] == "[REDACTED]"
     attributes = record["attributes"]
     assert isinstance(attributes, dict)
-    assert "private text" in str(attributes["http.request.body"])
-    assert "reply" in str(attributes["http.response.body"])
+    assert attributes["event.name"] == "http.exchange"
+    assert "private text" not in str(attributes)
     assert "secret" not in str(attributes)
-    assert "http.response.headers.safe" in attributes
 
 
 def test_inbound_middleware_logs_request_and_streamed_response_bodies(
@@ -195,12 +201,12 @@ def test_inbound_middleware_logs_request_and_streamed_response_bodies(
         await send_fn(
             {
                 "type": "http.response.body",
-                "body": b'data: {"reply":"visible"}\\n\\n',
+                "body": b'data: {"reply":"visible"}\n\n',
                 "more_body": True,
             }
         )
         await send_fn(
-            {"type": "http.response.body", "body": b"data: [DONE]\\n\\n", "more_body": False}
+            {"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": False}
         )
 
     scope: dict[str, object] = {
@@ -212,12 +218,17 @@ def test_inbound_middleware_logs_request_and_streamed_response_bodies(
     }
     asyncio.run(HttpBodyCaptureMiddleware(app)(scope, receive, send))
 
-    events = {record["body"]: record["attributes"] for record in logger.emitted}
-    assert "private text" in str(events["http.request"])
-    assert "visible" in str(events["http.response"])
-    assert "http.request.body" in events["http.request"]
-    assert "http.response.body" in events["http.response"]
-    assert "http.response.headers.safe" in events["http.response"]
+    assert len(logger.emitted) == 1
+    record = logger.emitted[0]
+    body = record["body"]
+    assert isinstance(body, dict)
+    assert body["event"] == "http.exchange"
+    assert body["request"]["body"]["message"] == "private text"
+    assert body["response"]["body"]["events"] == [
+        {"data": {"reply": "visible"}},
+        {"data": "[DONE]"},
+    ]
+    assert body["response"]["headers"]["content-type"] == "text/event-stream"
     assert len(outgoing) == 3
 
 
@@ -242,7 +253,7 @@ def test_mcp_stream_completion_logs_sse_body_and_redacts_secret_fields(
 
     class Stream(httpx2.AsyncByteStream):
         async def __aiter__(self):
-            yield b'data: {"api_key":"private-secret","result":"visible"}\\n\\n'
+            yield b'data: {"api_key":"private-secret","result":"visible"}\n\n'
 
         async def aclose(self) -> None:
             return None
@@ -275,10 +286,18 @@ def test_mcp_stream_completion_logs_sse_body_and_redacts_secret_fields(
     chunks = asyncio.run(consume())
 
     assert len(chunks) == 1
+    assert len(logger.emitted) == 1
     record = logger.emitted[0]
-    assert record["body"] == "http.mcp.response.complete"
+    body = record["body"]
+    assert isinstance(body, dict)
+    assert body["event"] == "http.exchange"
+    assert body["direction"] == "outbound"
+    assert body["request"]["body"]["params"]["arguments"]["query"] == "visible"
+    assert body["response"]["body"]["events"] == [
+        {"data": {"api_key": "[REDACTED]", "result": "visible"}}
+    ]
+    assert body["request"]["headers"]["authorization"] == "[REDACTED]"
+    assert body["response"]["headers"]["x-api-key"] == "[REDACTED]"
     attributes = record["attributes"]
     assert isinstance(attributes, dict)
-    assert "visible" in str(attributes["http.response.body"])
-    assert "visible" in str(attributes["http.request.body"])
     assert "private-secret" not in str(attributes)

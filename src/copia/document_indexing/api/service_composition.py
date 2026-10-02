@@ -13,6 +13,7 @@ from copia.document_indexing.data.embedding_settings_repository import (
 )
 from copia.document_indexing.data.index_artifact_store import IndexArtifactStore
 from copia.providers.application.embedding_router import EmbeddingRouter
+from copia.providers.application.llm_router import LLMRouter
 
 
 class DocumentIndexingServiceComposition:
@@ -21,6 +22,7 @@ class DocumentIndexingServiceComposition:
         data_root: Path,
         documents_path: Path,
         providers: EmbeddingRouter,
+        llm_router: LLMRouter | None = None,
     ) -> None:
         resolved_root = data_root.expanduser().resolve()
         resolved_documents = documents_path.expanduser().resolve()
@@ -31,7 +33,7 @@ class DocumentIndexingServiceComposition:
             self.artifact_store,
             providers,
         )
-        self.retriever = DocumentRetriever(self.artifact_store, providers)
+        self.retriever = DocumentRetriever(self.artifact_store, providers, llm_router)
         self.settings_repository = EmbeddingSettingsRepository(
             resolved_root / "document-index" / "settings.json"
         )

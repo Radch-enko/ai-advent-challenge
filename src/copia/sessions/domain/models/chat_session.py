@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from copia.agents.domain.models.agent_config import AgentConfig
+from copia.common.domain.models.rag_settings import RagSettings
 from copia.sessions.domain.models.branching_context import BranchingContext
 from copia.sessions.domain.models.chat_message import ChatMessage
 from copia.sessions.domain.models.conversation_context import ConversationContext
@@ -23,6 +24,7 @@ class ChatSession(BaseModel):
     long_term_memory_enabled: bool = False
     task_mode_enabled: bool = False
     rag_enabled: bool = False
+    rag_settings: RagSettings = Field(default_factory=RagSettings)
     task: TaskState | None = None
     tasks: list[TaskState] = Field(default_factory=list)
     created_at: datetime
