@@ -10,6 +10,7 @@ class KnowledgeSource(BaseModel):
     section: str = ""
     similarity_score: float | None = Field(default=None, ge=-1, le=1)
     selected_for_context: bool | None = None
+    quote: str | None = None
 
     @model_serializer(mode="wrap")
     def omit_unset_rag_metadata(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
@@ -18,4 +19,6 @@ class KnowledgeSource(BaseModel):
             data.pop("similarity_score", None)
         if self.selected_for_context is None:
             data.pop("selected_for_context", None)
+        if self.quote is None:
+            data.pop("quote", None)
         return data

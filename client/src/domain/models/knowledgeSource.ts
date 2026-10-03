@@ -5,4 +5,5 @@ export type KnowledgeSource = {
   section: string
   similarity_score?: number | null
   selected_for_context?: boolean | null
+  quote?: string | null
 }

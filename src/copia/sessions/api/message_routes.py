@@ -9,10 +9,15 @@ from copia.agents.application.agent_runtime import (
     SummarizationFailed,
     SummarizationRetryRequired,
 )
+from copia.document_indexing.application.rag_citations import (
+    RagCitationValidationError,
+    complete_with_citation_recovery,
+)
 from copia.document_indexing.domain.errors import DocumentRetrievalError
 from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.providers.application.collect_streamed_response import collect_streamed_response
 from copia.providers.data.llm import ProviderError
+from copia.providers.domain.models.llm_response import LLMResponse
 from copia.sessions.api.message_dependencies import SessionMessageDependencies
 from copia.sessions.api.models.message_request import MessageRequest
 from copia.sessions.api.models.session_message_response import SessionMessageResponse
@@ -59,7 +64,7 @@ class SessionMessageRoutes:
 
             background = BackgroundTasks()
             response = await self._send_session_message_locked(
-                session_id, request, background, completion=completion
+                session_id, request, background, completion=completion, emit=emit
             )
             await background()
             return response
@@ -73,6 +78,7 @@ class SessionMessageRoutes:
         request: MessageRequest,
         background_tasks: BackgroundTasks,
         completion=None,
+        emit=None,
     ) -> SessionMessageResponse:
         runtime = self._get_dependencies()
         try:
@@ -102,7 +108,7 @@ class SessionMessageRoutes:
             )
         started_at = time.perf_counter()
         completion, sources = await self._prepare_rag(
-            runtime, session, request.content, completion, effective_config
+            runtime, session, request.content, completion, effective_config, emit=emit
         )
         if request.config is not None and session.profile_name is None:
             session.config = request.config
@@ -207,7 +213,17 @@ class SessionMessageRoutes:
                     "code": "provider_request_failed",
                 },
             ) from error
+        except RagCitationValidationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "message": "RAG answer failed citation validation after retry",
+                    "code": "rag_citation_validation_failed",
+                },
+            ) from error
 
+        if session.rag_enabled:
+            response = response.model_copy(update={"structured_data": None})
         if sources:
             agent.attach_sources_to_last_response(sources)
         runtime.save_agent(session, agent)
@@ -323,7 +339,17 @@ class SessionMessageRoutes:
                         "code": "provider_request_failed",
                     },
                 ) from error
+            except RagCitationValidationError as error:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "message": "RAG answer failed citation validation after retry",
+                        "code": "rag_citation_validation_failed",
+                    },
+                ) from error
 
+            if session.rag_enabled:
+                response = response.model_copy(update={"structured_data": None})
             if sources:
                 agent.attach_sources_to_last_response(sources)
             runtime.save_agent(session, agent)
@@ -342,7 +368,7 @@ class SessionMessageRoutes:
             message_lock.lock.release()
             runtime.release_lock(message_lock)
 
-    async def _prepare_rag(self, runtime, session, query: str, completion, config):
+    async def _prepare_rag(self, runtime, session, query: str, completion, config, *, emit=None):
         if not session.rag_enabled:
             return completion, []
         try:
@@ -369,9 +395,44 @@ class SessionMessageRoutes:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "rag_unavailable", "message": str(error)},
             ) from error
-        base_completion = completion or runtime.llm_router.complete
+        if not result.context_chunks:
+            sources = []
+
+            def complete_without_context(messages, response_config):
+                response = LLMResponse(
+                    content="Не знаю. Уточните вопрос.",
+                    provider=response_config.provider,
+                    model=response_config.model,
+                )
+                if emit is not None:
+                    emit("message.delta", {"text": response.content})
+                return response
+
+            return complete_without_context, sources
+
+        sources = []
+        rag_completion = (
+            completion
+            if config.mcp_access and completion is not None
+            else runtime.llm_router.complete
+        )
 
         def complete_with_rag(messages, config):
-            return base_completion(runtime.contextualize(messages, result), config)
+            contextualized = runtime.contextualize(messages, result)
+            response, verified_sources = complete_with_citation_recovery(
+                rag_completion,
+                contextualized,
+                config,
+                result,
+                retry_complete=(
+                    runtime.llm_router.complete
+                    if config.mcp_access and completion is not None
+                    else None
+                ),
+            )
+            sources[:] = verified_sources
+            if emit is not None:
+                emit("message.delta", {"text": response.content})
+            return response
 
-        return complete_with_rag, result.filtered_sources
+        return complete_with_rag, sources

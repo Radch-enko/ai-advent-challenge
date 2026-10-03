@@ -87,15 +87,21 @@ export function TaskProgressPanel({
         <div>
           <span className="task-eyebrow">Task mode</span>
           <h2>
-            {task.stage === 'done'
-              ? 'Задача завершена'
-              : task.stage === 'plan_review'
-                ? 'План готов'
-                : validationFailed
-                  ? 'Проверка не пройдена'
-                  : 'План задачи'}
+            {task.status === 'needs_clarification'
+              ? 'Нужно уточнение'
+              : task.stage === 'done'
+                ? 'Задача завершена'
+                : task.stage === 'plan_review'
+                  ? 'План готов'
+                  : validationFailed
+                    ? 'Проверка не пройдена'
+                    : 'План задачи'}
           </h2>
-          <p>{task.expected_action ?? taskStatusLabel(task)}</p>
+          <p>
+            {task.status === 'needs_clarification'
+              ? 'Создайте новую задачу после уточнения вопроса.'
+              : (task.expected_action ?? taskStatusLabel(task))}
+          </p>
         </div>
         <div className={`task-status-badge ${task.status}`}>
           <i /> {taskStatusLabel(task)}
@@ -125,20 +131,34 @@ export function TaskProgressPanel({
           )
         })}
       </div>
-      {task.plan && (
-        <div className="task-subtasks">
-          {task.plan.steps.map((step) => (
-            <TaskSubtask
-              key={step.id}
-              step={step}
-              active={task.current_step != null && step.order === task.current_step + 1}
-              call={task.llm_calls
-                .slice()
-                .reverse()
-                .find((item) => item.step_id === step.id)}
-            />
-          ))}
+      {task.status === 'needs_clarification' && (
+        <div className="task-needs-clarification" role="status">
+          <b>Не знаю. Уточните вопрос.</b>
+          <p>Уточните запрос в чате и создайте новую задачу.</p>
         </div>
+      )}
+      {task.plan && (
+        <>
+          {task.plan.summary && (
+            <div className="task-plan-summary">
+              <b>Ответ с цитатами</b>
+              <p>{task.plan.summary}</p>
+            </div>
+          )}
+          <div className="task-subtasks">
+            {task.plan.steps.map((step) => (
+              <TaskSubtask
+                key={step.id}
+                step={step}
+                active={task.current_step != null && step.order === task.current_step + 1}
+                call={task.llm_calls
+                  .slice()
+                  .reverse()
+                  .find((item) => item.step_id === step.id)}
+              />
+            ))}
+          </div>
+        </>
       )}
       {validationFailed && (
         <div className="task-validation-failure" role="alert">
@@ -246,9 +266,17 @@ function CallSources({ sources }: { sources?: TaskLlmCall['sources'] }) {
   const contextSources = sources?.filter((source) => source.selected_for_context !== false)
   if (!contextSources?.length) return null
   return (
-    <small className="task-call-sources">
-      Chunk ID: {contextSources.map((source) => source.chunk_id).join(', ')}
-    </small>
+    <section className="task-call-sources" aria-label="Источники и цитаты">
+      {contextSources.map((source, index) => (
+        <article key={`${source.chunk_id}-${index}`}>
+          <b>{source.title}</b>
+          {source.section && <span>{source.section}</span>}
+          <small>{source.source}</small>
+          <code>chunk_id: {source.chunk_id}</code>
+          {source.quote && <q>{source.quote}</q>}
+        </article>
+      ))}
+    </section>
   )
 }
 
@@ -268,6 +296,7 @@ function statusLabel(status: TaskState['status']) {
     waiting_for_approval: 'Ждёт утверждения',
     completed: 'Готово',
     failed: 'Ошибка',
+    needs_clarification: 'Нужно уточнение',
   }[status]
 }
 
@@ -279,6 +308,7 @@ function taskStatusLabel(task: TaskState) {
 
 function collapsedLabel(task: TaskState, stepTitle?: string) {
   if (task.status === 'completed') return 'Задача завершена'
+  if (task.status === 'needs_clarification') return 'Нужно уточнение'
   if (task.stage === 'validation' && task.status === 'failed') return 'Проверка не пройдена'
   if (task.status === 'failed') return 'Задача завершилась с ошибкой'
   if (task.status === 'paused') return 'Задача приостановлена'
@@ -289,6 +319,7 @@ function collapsedLabel(task: TaskState, stepTitle?: string) {
 
 function collapsedDetail(task: TaskState, stepTitle?: string) {
   if (task.status === 'completed') return 'Нажмите, чтобы открыть план и проверку'
+  if (task.status === 'needs_clarification') return 'Уточните вопрос и создайте новую задачу'
   if (task.stage === 'validation' && task.status === 'failed')
     return (
       task.validation_result?.issues[0] ??

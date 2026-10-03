@@ -44,7 +44,7 @@ class McpConversationWorker:
                 publish_artifacts=lambda artifacts: runtime.publish_artifacts(
                     session_id, artifacts
                 ),
-                stream_completion=runtime.stream_completion,
+                stream_completion=(None if session.rag_enabled else runtime.stream_completion),
             )
             response = await runtime.send_locked(
                 session_id, request, background, completion=loop.complete

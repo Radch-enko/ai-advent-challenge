@@ -17,6 +17,7 @@ class TaskEvent(StrEnum):
     VALIDATION_FAILED = "validation_failed"
     RETRY_EXECUTION = "retry_execution"
     REPORT_SAVED = "report_saved"
+    NEEDS_CLARIFICATION = "needs_clarification"
     ERROR = "error"
     PAUSE_REQUESTED = "pause_requested"
     PAUSED = "paused"
@@ -51,10 +52,19 @@ class TaskStateMachine:
             if task.stage in {TaskStage.DONE} or task.status in {
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
+                TaskStatus.NEEDS_CLARIFICATION,
             }:
                 raise InvalidTaskTransition("A finished task cannot fail")
             task.status = TaskStatus.FAILED
             task.expected_action = None
+            return
+        if event == TaskEvent.NEEDS_CLARIFICATION:
+            if task.status not in {TaskStatus.RUNNING, TaskStatus.PAUSE_REQUESTED}:
+                raise InvalidTaskTransition("Only an active task can require clarification")
+            task.status = TaskStatus.NEEDS_CLARIFICATION
+            task.expected_action = "Create a new task after clarifying the request"
+            task.mcp_approval = None
+            task.mcp_running_tool = None
             return
         if event == TaskEvent.RETRY_EXECUTION:
             if task.status != TaskStatus.FAILED or task.stage != TaskStage.VALIDATION:
@@ -171,7 +181,11 @@ class TaskStateMachine:
             raise InvalidTaskTransition("Validation must cover every plan step exactly")
 
     def _pause_requested(self, task: TaskState) -> None:
-        if task.stage == TaskStage.DONE or task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+        if task.stage == TaskStage.DONE or task.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.NEEDS_CLARIFICATION,
+        }:
             raise InvalidTaskTransition("A finished task cannot be paused")
         if task.status == TaskStatus.RUNNING:
             task.status = TaskStatus.PAUSE_REQUESTED

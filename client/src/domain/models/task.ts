@@ -1,6 +1,12 @@
 export type TaskStage = 'planning' | 'plan_review' | 'execution' | 'validation' | 'report' | 'done'
 export type TaskStatus =
-  'running' | 'pause_requested' | 'paused' | 'waiting_for_approval' | 'completed' | 'failed'
+  | 'running'
+  | 'pause_requested'
+  | 'paused'
+  | 'waiting_for_approval'
+  | 'completed'
+  | 'failed'
+  | 'needs_clarification'
 export type TaskPlanStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 export type TaskLlmCallStatus = 'running' | 'completed' | 'failed'
 
@@ -15,7 +21,7 @@ export type TaskPlanStep = {
   error?: string | null
 }
 
-export type TaskPlan = { steps: TaskPlanStep[] }
+export type TaskPlan = { summary?: string | null; steps: TaskPlanStep[] }
 
 export type TaskValidationResult = {
   passed: boolean

@@ -368,6 +368,16 @@
   display: block;
   overflow-wrap: anywhere;
 }
+.retrieved-sources li q,
+.execution-summary-sources li q {
+  display: block;
+  margin-top: 0.3rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--accent, #7984ff);
+  color: var(--color-text-secondary, #c1c0ca);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
 .execution-summary-tokens h3,
 .execution-summary-memory h3 {
   margin: 0;

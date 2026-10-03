@@ -55,12 +55,17 @@ export function ExecutionSummary({
           <section className="execution-summary-sources">
             <h3>Чанки в контексте LLM</h3>
             <ul>
-              {sources.map((source) => (
-                <li key={source.chunk_id}>
+              {sources.map((source, index) => (
+                <li key={`${source.chunk_id}-${index}`}>
                   <code>{source.chunk_id}</code>
+                  <span>
+                    {' '}
+                    · {source.title} · {source.section || source.source}
+                  </span>
                   {source.similarity_score != null && (
                     <span> · similarity {source.similarity_score.toFixed(3)}</span>
                   )}
+                  {source.quote && <q>{source.quote}</q>}
                 </li>
               ))}
             </ul>

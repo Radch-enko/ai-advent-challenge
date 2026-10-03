@@ -4,6 +4,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from copia.common.domain.services.runtime_context import with_current_datetime_context
+from copia.document_indexing.application.rag_citations import (
+    complete_with_citation_recovery,
+    strip_rag_citation_warning,
+)
 from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.mcp.domain.services.mcp_tool_loop import McpToolLoop
 from copia.providers.domain.models.llm_config import LLMConfig
@@ -24,6 +28,10 @@ from copia.tasks.domain.services import task_text
 from copia.tasks.domain.services.task_state_machine import InvalidTaskTransition, TaskEvent
 
 
+class MissingRagContext(RuntimeError):
+    """Signals the expected terminal Task Mode outcome when retrieval found no chunks."""
+
+
 class TaskWorkflow:
     def __init__(self, get_runtime: Callable[[], TaskWorkflowRuntime]) -> None:
         self._get_runtime = get_runtime
@@ -40,35 +48,38 @@ class TaskWorkflow:
         config: LLMConfig,
         retrieval_query: str = "",
         rag_enabled: bool = False,
+        require_citations: bool = False,
     ) -> LLMResponse:
         runtime = self._get_runtime()
+        sources = []
+        result = None
+        session = await runtime.get_session(session_id)
+        if rag_enabled:
+            task = runtime.session_task(session, task_id)
+            retrieval_args = (retrieval_query, task.rag_settings)
+            retrieval_kwargs = {
+                "config": config,
+                "history": session.messages,
+                "summary": session.context.summary,
+            }
+            try:
+                inspect.signature(runtime.retrieve_chunk).bind(*retrieval_args, **retrieval_kwargs)
+            except (TypeError, ValueError):
+                chunk = await runtime.threadpool(runtime.retrieve_chunk, retrieval_query)
+                result = RagRetrievalResult.from_single_chunk(chunk)
+            else:
+                result = await runtime.threadpool(
+                    runtime.retrieve_chunk, *retrieval_args, **retrieval_kwargs
+                )
+            if not result.context_chunks:
+                raise MissingRagContext("No retrieved chunks are available for this task stage")
+            messages = runtime.contextualize(messages, result)
         call_id = runtime.task_call_start(
             session_id, task_id=task_id, stage=stage, kind=kind, step_id=step_id
         )
-        sources = []
+        if result is not None and not require_citations:
+            sources = result.filtered_sources
         try:
-            session = await runtime.get_session(session_id)
-            if rag_enabled:
-                task = runtime.session_task(session, task_id)
-                retrieval_args = (retrieval_query, task.rag_settings)
-                retrieval_kwargs = {
-                    "config": config,
-                    "history": session.messages,
-                    "summary": session.context.summary,
-                }
-                try:
-                    inspect.signature(runtime.retrieve_chunk).bind(
-                        *retrieval_args, **retrieval_kwargs
-                    )
-                except (TypeError, ValueError):
-                    chunk = await runtime.threadpool(runtime.retrieve_chunk, retrieval_query)
-                    result = RagRetrievalResult.from_single_chunk(chunk)
-                else:
-                    result = await runtime.threadpool(
-                        runtime.retrieve_chunk, *retrieval_args, **retrieval_kwargs
-                    )
-                messages = runtime.contextualize(messages, result)
-                sources = result.filtered_sources
             resolved_tools = (
                 await runtime.resolve_tools(session.config) if session.config.mcp_access else []
             )
@@ -86,11 +97,22 @@ class TaskWorkflow:
                     ),
                 )
                 completion = tool_loop.complete
-            response = await runtime.threadpool(
-                completion or runtime.router.complete,
-                with_current_datetime_context(messages),
-                config,
-            )
+            request_messages = with_current_datetime_context(messages)
+            if result is not None and require_citations:
+                response, sources = await runtime.threadpool(
+                    complete_with_citation_recovery,
+                    completion or runtime.router.complete,
+                    request_messages,
+                    config,
+                    result,
+                    retry_complete=(runtime.router.complete if completion is not None else None),
+                )
+            else:
+                response = await runtime.threadpool(
+                    completion or runtime.router.complete,
+                    request_messages,
+                    config,
+                )
         except Exception as error:
             runtime.task_call_finish(
                 session_id,
@@ -132,6 +154,8 @@ class TaskWorkflow:
                     return
         except asyncio.CancelledError:
             raise
+        except MissingRagContext:
+            await self.mark_needs_clarification(session_id, task_id)
         except Exception as error:
             error_message = str(error)
             try:
@@ -158,6 +182,35 @@ class TaskWorkflow:
             if current is not None:
                 runtime.finish_worker(session_id, current)
 
+    async def mark_needs_clarification(self, session_id: str, task_id: str) -> None:
+        runtime = self._get_runtime()
+
+        def clarify(session: ChatSession) -> None:
+            task = runtime.session_task(session, task_id)
+            if task.status != TaskStatus.RUNNING:
+                return
+            if (
+                task.stage == TaskStage.EXECUTION
+                and task.plan is not None
+                and task.current_step is not None
+                and task.current_step < len(task.plan.steps)
+            ):
+                step = task.plan.steps[task.current_step]
+                if step.status == TaskPlanStepStatus.RUNNING:
+                    step.status = TaskPlanStepStatus.PENDING
+            runtime.state_machine.apply(task, TaskEvent.NEEDS_CLARIFICATION)
+            session.messages.append(
+                ChatMessage(
+                    role="assistant",
+                    content="Не знаю. Уточните вопрос.",
+                    created_at=datetime.now(UTC),
+                    task_id=task_id,
+                    sources=[],
+                )
+            )
+
+        await runtime.threadpool(runtime.checkpoint, session_id, clarify)
+
     async def run_planning(self, session_id: str, task_id: str, task: TaskState) -> None:
         runtime = self._get_runtime()
         session = await runtime.get_session(session_id)
@@ -174,9 +227,14 @@ class TaskWorkflow:
             config=config,
             retrieval_query=task.original_instruction,
             rag_enabled=task.rag_enabled,
+            require_citations=task.rag_enabled,
         )
-        planned = _PlannerResponse.model_validate(response.structured_data)
+        planner_data = response.structured_data
+        if task.rag_enabled and isinstance(planner_data, dict):
+            planner_data = {"steps": planner_data.get("steps")}
+        planned = _PlannerResponse.model_validate(planner_data)
         plan = TaskPlan(
+            summary=response.content if task.rag_enabled else None,
             steps=[
                 TaskPlanStep(
                     id=f"step-{index}",
@@ -186,7 +244,7 @@ class TaskWorkflow:
                     success_criteria=step.success_criteria,
                 )
                 for index, step in enumerate(planned.steps, start=1)
-            ]
+            ],
         )
 
         def save_plan(latest: ChatSession) -> None:
@@ -237,6 +295,7 @@ class TaskWorkflow:
             config=config,
             retrieval_query=step.instruction,
             rag_enabled=task.rag_enabled,
+            require_citations=task.rag_enabled,
         )
         latest_task = await runtime.threadpool(runtime.task_state, session_id, task_id)
         execution_log_id = next(
@@ -338,8 +397,9 @@ class TaskWorkflow:
                 config=config,
                 retrieval_query=task.original_instruction,
                 rag_enabled=task.rag_enabled,
+                require_citations=task.rag_enabled,
             )
-            if task_text._valid_task_report(response.content):
+            if task_text._valid_task_report(strip_rag_citation_warning(response.content)):
                 break
         else:
             raise ValueError("Report does not match the required template")

@@ -189,11 +189,13 @@ export function ChatTranscript({
                     <section className="retrieved-sources" aria-label="Источники RAG">
                       <b>Источники</b>
                       <ul>
-                        {contextSources.map((source) => (
-                          <li key={source.chunk_id}>
+                        {contextSources.map((source, index) => (
+                          <li key={`${source.chunk_id}-${index}`}>
                             <span>{source.title}</span>
                             {source.section && <small>{source.section}</small>}
                             <small>{source.source}</small>
+                            <small>chunk_id: {source.chunk_id}</small>
+                            {source.quote && <q>{source.quote}</q>}
                           </li>
                         ))}
                       </ul>

@@ -6,4 +6,5 @@ from copia.tasks.domain.models.task_plan_step import TaskPlanStep
 
 
 class TaskPlan(BaseModel):
+    summary: str | None = None
     steps: list[TaskPlanStep] = Field(min_length=1)
