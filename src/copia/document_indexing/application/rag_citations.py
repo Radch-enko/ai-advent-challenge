@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from copia.common.domain.models.knowledge_source import KnowledgeSource
+from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
@@ -26,7 +27,11 @@ def strip_rag_citation_warning(text: str) -> str:
     return text
 
 
-def rag_answer_schema(base_schema: dict[str, Any] | None = None) -> dict[str, Any]:
+def rag_answer_schema(
+    base_schema: dict[str, Any] | None = None,
+    *,
+    allow_uncited_fallback: bool = False,
+) -> dict[str, Any]:
     schema = (
         deepcopy(base_schema)
         if base_schema is not None
@@ -43,7 +48,7 @@ def rag_answer_schema(base_schema: dict[str, Any] | None = None) -> dict[str, An
     properties["answer"] = {"type": "string", "minLength": 1}
     properties["citations"] = {
         "type": "array",
-        "minItems": 1,
+        "minItems": 0 if allow_uncited_fallback else 1,
         "items": {
             "type": "object",
             "properties": {
@@ -54,10 +59,23 @@ def rag_answer_schema(base_schema: dict[str, Any] | None = None) -> dict[str, An
             "additionalProperties": False,
         },
     }
+    if allow_uncited_fallback:
+        properties["answer_mode"] = {
+            "type": "string",
+            "enum": [
+                "grounded",
+                "general_knowledge",
+                "clarification_needed",
+                "personal_unknown",
+            ],
+        }
     required = schema.setdefault("required", [])
     if not isinstance(required, list):
         raise ValueError("RAG structured output schema must define required properties")
-    schema["required"] = [*required, "answer", "citations"]
+    required_fields = ["answer", "citations"]
+    if allow_uncited_fallback:
+        required_fields.append("answer_mode")
+    schema["required"] = list(dict.fromkeys([*required, *required_fields]))
     schema["additionalProperties"] = False
     return schema
 
@@ -69,12 +87,14 @@ def complete_with_citation_recovery(
     result: RagRetrievalResult,
     *,
     retry_complete: Callable[[Sequence[ChatMessage], LLMConfig], LLMResponse] | None = None,
+    allow_uncited_fallback: bool = False,
 ) -> tuple[LLMResponse, list[KnowledgeSource]]:
     structured_config = config.model_copy(
         update={
             "structured_output": StructuredOutputConfig(
                 schema=rag_answer_schema(
-                    config.structured_output.json_schema if config.structured_output else None
+                    config.structured_output.json_schema if config.structured_output else None,
+                    allow_uncited_fallback=allow_uncited_fallback,
                 ),
                 strict=True,
             )
@@ -93,11 +113,7 @@ def complete_with_citation_recovery(
                 ),
                 ChatMessage(
                     role="user",
-                    content=(
-                        "The previous response did not pass citation validation. Return a corrected "
-                        "structured response. Every citation must use a provided chunk_id, its "
-                        "quote must exactly match that chunk, and the exact quote must appear in answer."
-                    ),
+                    content=(_citation_retry_instruction(allow_uncited_fallback)),
                 ),
             ]
         response = (
@@ -107,7 +123,9 @@ def complete_with_citation_recovery(
         )
         previous_response = response
         try:
-            return validate_rag_response(response, result)
+            return validate_rag_response(
+                response, result, allow_uncited_fallback=allow_uncited_fallback
+            )
         except RagCitationValidationError:
             if attempt:
                 return _unverified_response(response, result)
@@ -115,7 +133,10 @@ def complete_with_citation_recovery(
 
 
 def validate_rag_response(
-    response: LLMResponse, result: RagRetrievalResult
+    response: LLMResponse,
+    result: RagRetrievalResult,
+    *,
+    allow_uncited_fallback: bool = False,
 ) -> tuple[LLMResponse, list[KnowledgeSource]]:
     data = response.structured_data
     if not isinstance(data, dict):
@@ -125,6 +146,16 @@ def validate_rag_response(
     citations = data.get("citations")
     if not isinstance(answer, str) or not answer.strip() or not isinstance(citations, list):
         raise RagCitationValidationError("RAG answer failed citation validation after retry.")
+    if allow_uncited_fallback:
+        answer_mode = data.get("answer_mode")
+        if answer_mode in {"general_knowledge", "clarification_needed", "personal_unknown"}:
+            if citations:
+                raise RagCitationValidationError(
+                    "Uncited RAG fallback responses must not include citations."
+                )
+            return response.model_copy(update={"content": answer.strip()}), []
+        if answer_mode != "grounded":
+            raise RagCitationValidationError("RAG answer mode was invalid.")
     if not citations:
         raise RagCitationValidationError("RAG answer failed citation validation after retry.")
 
@@ -149,6 +180,48 @@ def validate_rag_response(
         verified_sources.append(source.model_copy(update={"quote": quote}))
 
     return response.model_copy(update={"content": answer}), verified_sources
+
+
+def complete_with_no_evidence_fallback(
+    complete: Callable[[Sequence[ChatMessage], LLMConfig], LLMResponse],
+    messages: list[ChatMessage],
+    config: LLMConfig,
+    system_context: str,
+) -> LLMResponse:
+    contextualized = LLMContextBuilder.with_additional_system_context(messages, system_context)
+    fallback_config = config.model_copy(
+        update={
+            "structured_output": StructuredOutputConfig(
+                schema=rag_answer_schema(allow_uncited_fallback=True), strict=True
+            )
+        }
+    )
+    response = complete(contextualized, fallback_config)
+    try:
+        validated, _ = validate_rag_response(
+            response, RagRetrievalResult(), allow_uncited_fallback=True
+        )
+    except RagCitationValidationError:
+        validated = response.model_copy(update={"content": _response_answer(response)})
+    return validated.model_copy(update={"structured_data": None, "tool_calls": []})
+
+
+def _citation_retry_instruction(allow_uncited_fallback: bool) -> str:
+    if allow_uncited_fallback:
+        return (
+            "The previous response did not pass citation validation. Return a corrected structured "
+            "response. If the excerpts support the answer, use answer_mode grounded and cite only "
+            "exact quotes from provided chunks. If they do not support it, use general_knowledge "
+            "for a general question, clarification_needed when task-specific inputs are missing, or "
+            "personal_unknown when the user asks for an unavailable personal fact. Use no citations "
+            "for these fallback modes. In your own words, explain when the knowledge base did not "
+            "contain relevant information. Never invent a citation."
+        )
+    return (
+        "The previous response did not pass citation validation. Return a corrected structured "
+        "response. Every citation must use a provided chunk_id, its quote must exactly match that "
+        "chunk, and the exact quote must appear in answer."
+    )
 
 
 def _unverified_response(

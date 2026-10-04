@@ -40,6 +40,7 @@ class DocumentRetriever:
         config: LLMConfig | None = None,
         history: list[ChatMessage] | None = None,
         summary: str = "",
+        task_memory: list[dict[str, str]] | None = None,
     ) -> RetrievedChunk | RagRetrievalResult:
         """Keep the original single-best-chunk API for existing internal callers."""
         if settings is not None:
@@ -49,10 +50,16 @@ class DocumentRetriever:
                 config=config,
                 history=history,
                 summary=summary,
+                task_memory=task_memory,
             )
         result = self.retrieve_with_settings(
             question,
-            RagSettings(top_k_before=100, similarity_threshold=-1, top_k_after=100),
+            RagSettings(
+                top_k_before=100,
+                similarity_threshold=-1,
+                top_k_after=100,
+                query_rewrite_enabled=False,
+            ),
         )
         if not result.context_chunks:
             raise DocumentRetrievalError(
@@ -68,6 +75,7 @@ class DocumentRetriever:
         config: LLMConfig | None = None,
         history: list[ChatMessage] | None = None,
         summary: str = "",
+        task_memory: list[dict[str, str]] | None = None,
     ) -> RagRetrievalResult:
         if not question.strip():
             raise DocumentRetrievalError("RAG search requires a non-empty question")
@@ -75,12 +83,15 @@ class DocumentRetriever:
         try:
             search_query = question
             if settings.query_rewrite_enabled:
-                search_query = self._rewrite_query(question, history or [], summary, config)
+                search_query = self._rewrite_query(
+                    question, history or [], summary, task_memory or [], config
+                )
 
             candidates = self._search(search_query, settings)
-            filtered = [item for item in candidates if item[0] >= settings.similarity_threshold][
-                : settings.top_k_after
-            ]
+            filtered = _filter_candidates(candidates, settings)
+            if not filtered and search_query != question:
+                candidates = self._search(question, settings)
+                filtered = _filter_candidates(candidates, settings)
             selected_ids = {chunk.source.chunk_id for _, chunk in filtered}
 
             if settings.reranker_enabled and filtered:
@@ -125,6 +136,8 @@ class DocumentRetriever:
         self,
         messages: list[ChatMessage],
         result: RagRetrievalResult | RetrievedChunk,
+        *,
+        allow_uncited_fallback: bool = False,
     ) -> list[ChatMessage]:
         chunks = result.context_chunks if isinstance(result, RagRetrievalResult) else [result]
         serialized_chunks = json.dumps(
@@ -140,9 +153,10 @@ class DocumentRetriever:
             ],
             ensure_ascii=False,
         )
+        prompt_name = "rag_chat_context.md" if allow_uncited_fallback else "rag_context.md"
         context = render_prompt(
             "copia.document_indexing",
-            "rag_context.md",
+            prompt_name,
             retrieved_chunks_json=serialized_chunks,
         )
         return LLMContextBuilder.with_additional_system_context(messages, context)
@@ -152,6 +166,7 @@ class DocumentRetriever:
         question: str,
         history: list[ChatMessage],
         summary: str,
+        task_memory: list[dict[str, str]],
         config: LLMConfig | None,
     ) -> str:
         router = self._required_llm_router(config)
@@ -165,6 +180,7 @@ class DocumentRetriever:
             "query_rewrite.md",
             summary_json=json.dumps(summary, ensure_ascii=False),
             history_json=json.dumps(history_data, ensure_ascii=False),
+            task_memory_json=json.dumps(task_memory, ensure_ascii=False),
             question_json=json.dumps(question, ensure_ascii=False),
         )
         response = router.complete(
@@ -285,6 +301,14 @@ class DocumentRetriever:
             )
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [(score, chunk) for score, _, chunk in scored]
+
+
+def _filter_candidates(
+    candidates: list[tuple[float, RetrievedChunk]], settings: RagSettings
+) -> list[tuple[float, RetrievedChunk]]:
+    return [item for item in candidates if item[0] >= settings.similarity_threshold][
+        : settings.top_k_after
+    ]
 
 
 def _helper_config(config: LLMConfig | None) -> LLMConfig:

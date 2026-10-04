@@ -13,6 +13,14 @@ Memory scopes:
   answer the current message, general knowledge, small talk, or an ambiguous statement without
   evidence that it should persist.
 
+For the active conversation task, maintain the user's explicit goal, clarifications, constraints,
+confirmed decisions, and definitions that affect future answers. Use working memory keys with these
+prefixes: task_goal, task_clarification_, task_constraint_, task_term_, and task_decision_. The
+initial user request establishes the active goal even when it does not say "remember this" or
+"for this chat". Update an existing key when the user corrects or replaces its value. Do not treat
+assistant suggestions as user decisions unless the user confirms them. When the user clearly starts
+a different goal, replace task_goal and remove old task-specific entries that no longer apply.
+
 Scope rules:
 
 - Do not default explicit memory to working. Decide from whether it is temporary or useful beyond

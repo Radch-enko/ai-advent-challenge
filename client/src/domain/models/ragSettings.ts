@@ -10,6 +10,6 @@ export const defaultRagSettings: RagSettings = {
   top_k_before: 10,
   similarity_threshold: 0.35,
   top_k_after: 3,
-  query_rewrite_enabled: false,
+  query_rewrite_enabled: true,
   reranker_enabled: false,
 }

@@ -6,12 +6,16 @@ from pathlib import Path
 import pytest
 
 from copia.common.domain.models.knowledge_source import KnowledgeSource
+from copia.common.domain.models.rag_settings import RagSettings
 from copia.document_indexing.application.document_retriever import DocumentRetriever
 from copia.document_indexing.data.index_artifact_store import IndexArtifactStore
 from copia.document_indexing.domain.errors import DocumentRetrievalError
 from copia.document_indexing.domain.models.retrieved_chunk import RetrievedChunk
 from copia.providers.application.embedding_router import EmbeddingRouter
 from copia.providers.domain.models.embedding_provider_info import EmbeddingProviderInfo
+from copia.providers.domain.models.llm_config import LLMConfig
+from copia.providers.domain.models.llm_response import LLMResponse
+from copia.providers.domain.models.provider_name import ProviderName
 from copia.sessions.domain.models.chat_message import ChatMessage
 
 
@@ -88,6 +92,48 @@ def test_retriever_returns_only_the_best_cosine_match(tmp_path: Path) -> None:
         ),
     )
     assert provider.calls == [(["question"], "index-model")]
+
+
+def test_default_query_rewrite_falls_back_to_original_question_when_no_chunks_match(
+    tmp_path: Path,
+) -> None:
+    class QueryAwareEmbeddingProvider(FakeEmbeddingProvider):
+        def embed(self, texts: list[str], model: str) -> list[list[float]]:
+            self.calls.append((texts, model))
+            return [[0.0, 1.0] if texts[0] == "unrelated rewritten query" else [1.0, 0.0]]
+
+    class FakeLLMRouter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages, config) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(
+                content="unrelated rewritten query",
+                provider=ProviderName.OPENAI,
+                model=config.model,
+            )
+
+    provider = QueryAwareEmbeddingProvider()
+    router = FakeLLMRouter()
+    retriever = DocumentRetriever(
+        write_index(tmp_path, [record("moving", "Moving checklist", [1.0, 0.0])]),
+        EmbeddingRouter({"fake": provider}),
+        router,
+    )
+
+    result = retriever.retrieve_with_settings(
+        "How should I plan a move?",
+        RagSettings(),
+        config=LLMConfig(provider=ProviderName.OPENAI, model="chat-model"),
+    )
+
+    assert [chunk.source.chunk_id for chunk in result.context_chunks] == ["moving"]
+    assert provider.calls == [
+        (["unrelated rewritten query"], "index-model"),
+        (["How should I plan a move?"], "index-model"),
+    ]
+    assert router.calls == 1
 
 
 def test_retriever_uses_context_builder_with_untrusted_chunk_content(tmp_path: Path) -> None:

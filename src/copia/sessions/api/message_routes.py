@@ -9,15 +9,17 @@ from copia.agents.application.agent_runtime import (
     SummarizationFailed,
     SummarizationRetryRequired,
 )
+from copia.common.domain.services.prompt_resources import render_prompt
 from copia.document_indexing.application.rag_citations import (
+    RAG_CITATION_WARNING,
     RagCitationValidationError,
     complete_with_citation_recovery,
+    complete_with_no_evidence_fallback,
 )
 from copia.document_indexing.domain.errors import DocumentRetrievalError
 from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.providers.application.collect_streamed_response import collect_streamed_response
 from copia.providers.data.llm import ProviderError
-from copia.providers.domain.models.llm_response import LLMResponse
 from copia.sessions.api.message_dependencies import SessionMessageDependencies
 from copia.sessions.api.models.message_request import MessageRequest
 from copia.sessions.api.models.session_message_response import SessionMessageResponse
@@ -381,6 +383,18 @@ class SessionMessageRoutes:
                 "history": session.messages,
                 "summary": session.context.summary,
             }
+            if session.rag_settings.query_rewrite_enabled:
+                try:
+                    working_memory = await runtime.threadpool(
+                        runtime.memory_access.load_working, session.id
+                    )
+                except (OSError, ValueError) as error:
+                    raise runtime.initialization_error(
+                        "Working memory is unavailable", "working_memory_unavailable"
+                    ) from error
+                retrieval_kwargs["task_memory"] = [
+                    {"key": item.key, "value": item.value} for item in working_memory
+                ]
             try:
                 inspect.signature(runtime.retrieve_chunk).bind(*retrieval_args, **retrieval_kwargs)
             except (TypeError, ValueError):
@@ -399,10 +413,11 @@ class SessionMessageRoutes:
             sources = []
 
             def complete_without_context(messages, response_config):
-                response = LLMResponse(
-                    content="Не знаю. Уточните вопрос.",
-                    provider=response_config.provider,
-                    model=response_config.model,
+                response = complete_with_no_evidence_fallback(
+                    runtime.llm_router.complete,
+                    messages,
+                    response_config,
+                    render_prompt("copia.document_indexing", "rag_no_evidence.md"),
                 )
                 if emit is not None:
                     emit("message.delta", {"text": response.content})
@@ -418,7 +433,7 @@ class SessionMessageRoutes:
         )
 
         def complete_with_rag(messages, config):
-            contextualized = runtime.contextualize(messages, result)
+            contextualized = runtime.contextualize(messages, result, allow_uncited_fallback=True)
             response, verified_sources = complete_with_citation_recovery(
                 rag_completion,
                 contextualized,
@@ -429,7 +444,16 @@ class SessionMessageRoutes:
                     if config.mcp_access and completion is not None
                     else None
                 ),
+                allow_uncited_fallback=True,
             )
+            if response.content.startswith(RAG_CITATION_WARNING):
+                response = complete_with_no_evidence_fallback(
+                    runtime.llm_router.complete,
+                    messages,
+                    config,
+                    render_prompt("copia.document_indexing", "rag_no_evidence.md"),
+                )
+                verified_sources = []
             sources[:] = verified_sources
             if emit is not None:
                 emit("message.delta", {"text": response.content})

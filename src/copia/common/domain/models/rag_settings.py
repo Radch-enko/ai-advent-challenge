@@ -9,7 +9,7 @@ class RagSettings(BaseModel):
     top_k_before: int = Field(default=10, ge=1, le=100)
     similarity_threshold: float = Field(default=0.35, ge=-1, le=1)
     top_k_after: int = Field(default=3, ge=1, le=100)
-    query_rewrite_enabled: bool = False
+    query_rewrite_enabled: bool = True
     reranker_enabled: bool = False
 
     @model_validator(mode="after")

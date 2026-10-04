@@ -110,6 +110,7 @@ def test_chat_retrieves_only_when_enabled_and_persists_used_source(
         answer = 'The guide says retrieval uses one best chunk: "retrieval uses one best chunk".'
         data = {
             "answer": answer,
+            "answer_mode": "grounded",
             "citations": [{"chunk_id": "guide-3", "quote": "retrieval uses one best chunk"}],
         }
         return LLMResponse(
@@ -158,7 +159,7 @@ def test_chat_retrieves_only_when_enabled_and_persists_used_source(
     assert stored["messages"][-1]["sources"][0]["quote"] == "retrieval uses one best chunk"
 
 
-def test_empty_rag_context_returns_dont_know_without_answer_generation(
+def test_empty_rag_context_uses_general_knowledge_with_knowledge_base_notice(
     monkeypatch, tmp_path: Path
 ) -> None:
     sessions = setup_runtime(monkeypatch, tmp_path)
@@ -169,7 +170,17 @@ def test_empty_rag_context_returns_dont_know_without_answer_generation(
 
     def complete(messages, config, tools=None):
         llm_configs.append(config)
-        return LLMResponse(content="unexpected", provider=ProviderName.OPENAI, model=config.model)
+        data = {
+            "answer": "The knowledge base has no relevant information. Two plus two is four.",
+            "answer_mode": "general_knowledge",
+            "citations": [],
+        }
+        return LLMResponse(
+            content=json.dumps(data),
+            structured_data=data,
+            provider=ProviderName.OPENAI,
+            model=config.model,
+        )
 
     monkeypatch.setattr(service.document_indexing_composition.retriever, "retrieve", retrieve)
     monkeypatch.setattr(service.router, "complete", complete)
@@ -184,16 +195,14 @@ def test_empty_rag_context_returns_dont_know_without_answer_generation(
     )
 
     assert response.status_code == 200
-    assert response.json()["response"]["content"] == "Не знаю. Уточните вопрос."
-    assert response.json()["sources"] == []
-    assert all(
-        config.structured_output is None
-        or "citations" not in config.structured_output.json_schema.get("properties", {})
-        for config in llm_configs
+    assert response.json()["response"]["content"] == (
+        "The knowledge base has no relevant information. Two plus two is four."
     )
+    assert response.json()["sources"] == []
+    assert "answer_mode" in llm_configs[-1].structured_output.json_schema["properties"]
 
 
-def test_rag_returns_dont_know_when_chunk_is_below_similarity_threshold(
+def test_rag_preserves_llm_response_when_chunk_is_below_similarity_threshold(
     monkeypatch, tmp_path: Path
 ) -> None:
     setup_runtime(monkeypatch, tmp_path)
@@ -213,7 +222,17 @@ def test_rag_returns_dont_know_when_chunk_is_below_similarity_threshold(
 
     def complete(messages, config, tools=None):
         llm_configs.append(config)
-        return LLMResponse(content="unexpected", provider=ProviderName.OPENAI, model=config.model)
+        data = {
+            "answer": "The knowledge base has no relevant information about this personal detail.",
+            "answer_mode": "personal_unknown",
+            "citations": [],
+        }
+        return LLMResponse(
+            content=json.dumps(data),
+            structured_data=data,
+            provider=ProviderName.OPENAI,
+            model=config.model,
+        )
 
     monkeypatch.setattr(retriever, "_search", search)
     monkeypatch.setattr(service.router, "complete", complete)
@@ -228,17 +247,14 @@ def test_rag_returns_dont_know_when_chunk_is_below_similarity_threshold(
     )
 
     assert response.status_code == 200
-    assert response.json()["response"]["content"] == "Не знаю. Уточните вопрос."
+    content = response.json()["response"]["content"]
+    assert content == "The knowledge base has no relevant information about this personal detail."
     assert response.json()["sources"] == []
     assert settings_seen[0].similarity_threshold == 0.35
-    assert all(
-        config.structured_output is None
-        or "citations" not in config.structured_output.json_schema.get("properties", {})
-        for config in llm_configs
-    )
+    assert "answer_mode" in llm_configs[-1].structured_output.json_schema["properties"]
 
 
-def test_invalid_rag_citation_retries_then_saves_answer_with_warning(
+def test_invalid_rag_citation_retries_then_uses_no_evidence_policy(
     monkeypatch, tmp_path: Path
 ) -> None:
     sessions = setup_runtime(monkeypatch, tmp_path)
@@ -252,12 +268,30 @@ def test_invalid_rag_citation_retries_then_saves_answer_with_warning(
         ),
     )
     citation_calls = 0
+    fallback_calls = 0
 
     def retrieve(question: str) -> RetrievedChunk:
         return retrieved_chunk
 
     def complete(messages, config, tools=None):
-        nonlocal citation_calls
+        nonlocal citation_calls, fallback_calls
+        if any(
+            "Treat conversation history and working memory as context supplied by the user"
+            in item.content
+            for item in messages
+        ):
+            fallback_calls += 1
+            data = {
+                "answer": "I could not find this personal detail in the knowledge base.",
+                "answer_mode": "personal_unknown",
+                "citations": [],
+            }
+            return LLMResponse(
+                content=json.dumps(data),
+                structured_data=data,
+                provider=ProviderName.OPENAI,
+                model=config.model,
+            )
         if (
             config.structured_output is not None
             and "citations" in config.structured_output.json_schema.get("properties", {})
@@ -265,6 +299,7 @@ def test_invalid_rag_citation_retries_then_saves_answer_with_warning(
             citation_calls += 1
         data = {
             "answer": "The blue kite is stored somewhere.",
+            "answer_mode": "grounded",
             "citations": [{"chunk_id": "handbook-4", "quote": "blue kite in locker 4"}],
         }
         return LLMResponse(
@@ -285,14 +320,14 @@ def test_invalid_rag_citation_retries_then_saves_answer_with_warning(
 
     assert response.status_code == 200
     content = response.json()["response"]["content"]
-    assert content.startswith("⚠️ Цитаты не прошли проверку. Ответ модели может быть ошибочным.")
-    assert "The blue kite is stored somewhere." in content
-    assert response.json()["sources"][0]["chunk_id"] == "handbook-4"
-    assert response.json()["sources"][0]["quote"] == "blue kite in locker 4"
+    assert content == "I could not find this personal detail in the knowledge base."
+    assert "Не знаю." not in content
+    assert response.json()["sources"] == []
     assert citation_calls == 2
+    assert fallback_calls == 1
     saved_messages = sessions.load(session["id"]).messages
     assert saved_messages[-1].content == content
-    assert saved_messages[-1].sources[0].quote == "blue kite in locker 4"
+    assert saved_messages[-1].sources == []
 
 
 def test_missing_index_error_is_visible_and_does_not_call_llm(monkeypatch, tmp_path: Path) -> None:
