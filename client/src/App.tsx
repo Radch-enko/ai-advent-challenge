@@ -227,6 +227,7 @@ export function App() {
       messages,
       summarizationEvents,
       isLoading,
+      settingsSaving: profileSettingsSaving,
       summaryFailed: failedSummarization != null,
       taskIsActive,
       taskModeEnabled,
@@ -679,6 +680,7 @@ export function App() {
             }
             memoryPanelOpen={memoryPanelOpen}
             isLoading={isLoading}
+            settingsSaving={profileSettingsSaving}
             summaryFailed={failedSummarization != null}
             taskIsActive={taskIsActive}
             canPauseTask={activeSession?.task?.status === 'running'}

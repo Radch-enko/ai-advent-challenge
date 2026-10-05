@@ -31,6 +31,8 @@ export type SessionChatResponse = Omit<ChatResponse, 'response'> & {
   response: SessionChatResponseData
   duration_seconds: number
   sources: KnowledgeSource[]
+  rag_enabled: boolean
+  rewritten_query: string | null
 }
 
 export type StoredMessage = {
@@ -47,6 +49,8 @@ export type StoredMessage = {
   task_id?: string | null
   task_step_id?: string | null
   sources?: KnowledgeSource[]
+  rag_enabled?: boolean | null
+  rewritten_query?: string | null
 }
 
 export type ChatSession = {

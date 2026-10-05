@@ -121,6 +121,8 @@ export function useConversationControls({ state, actions, meta }: ConversationCo
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             sources: response.sources,
+            ragEnabled: response.rag_enabled,
+            rewrittenQuery: response.rewritten_query,
             transcriptIndex: transcriptLength(current),
           }
           return assistantMessageId === null

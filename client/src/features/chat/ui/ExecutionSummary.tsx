@@ -5,7 +5,13 @@ import type { KnowledgeSource } from '../../../domain/models/knowledgeSource'
 type Props = Pick<
   ChatMessage,
   'provider' | 'model' | 'durationSeconds' | 'executionStatus' | 'executionError' | 'usage'
-> & { memoryEvents?: MemoryEvent[]; sources?: KnowledgeSource[] }
+> & {
+  memoryEvents?: MemoryEvent[]
+  sources?: KnowledgeSource[]
+  showRagDiagnostics?: boolean
+  ragEnabled?: boolean | null
+  rewrittenQuery?: string | null
+}
 
 export function ExecutionSummary({
   provider,
@@ -16,6 +22,9 @@ export function ExecutionSummary({
   usage,
   memoryEvents,
   sources,
+  showRagDiagnostics,
+  ragEnabled,
+  rewrittenQuery,
 }: Props) {
   if (
     !provider &&
@@ -25,7 +34,8 @@ export function ExecutionSummary({
     !executionError &&
     !executionStatus &&
     !memoryEvents?.length &&
-    !sources?.length
+    !sources?.length &&
+    !showRagDiagnostics
   )
     return null
   const summaryLabel =
@@ -40,6 +50,18 @@ export function ExecutionSummary({
         {summaryLabel}
       </summary>
       <div className="execution-summary-details" aria-label="Сводка выполнения">
+        {showRagDiagnostics && (
+          <section className="execution-summary-rag">
+            <h3>
+              RAG: {ragEnabled == null ? 'not recorded' : ragEnabled ? 'enabled' : 'disabled'}
+            </h3>
+            {ragEnabled && (
+              <div className="execution-summary-rag-query">
+                Переписанный запрос: <code>{rewrittenQuery ?? 'не применялся'}</code>
+              </div>
+            )}
+          </section>
+        )}
         {usage && (
           <section className="execution-summary-tokens">
             <h3>Статистика токенов</h3>

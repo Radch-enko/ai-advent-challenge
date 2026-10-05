@@ -21,3 +21,5 @@ class ChatMessage(BaseModel):
     task_id: str | None = None
     task_step_id: str | None = None
     sources: list[KnowledgeSource] = Field(default_factory=list)
+    rag_enabled: bool | None = None
+    rewritten_query: str | None = None

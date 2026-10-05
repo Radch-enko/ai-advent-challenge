@@ -339,9 +339,15 @@
 }
 .execution-summary-tokens,
 .execution-summary-sources,
-.execution-summary-memory {
+.execution-summary-memory,
+.execution-summary-rag {
   display: grid;
   gap: 12px;
+}
+
+.execution-summary-rag-query code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .execution-summary-sources ul,

@@ -212,6 +212,15 @@ export function ChatTranscript({
                       usage={entry.usage}
                       memoryEvents={entry.memoryEvents}
                       sources={contextSources}
+                      showRagDiagnostics={
+                        entry.role === 'assistant' &&
+                        Boolean(activeSession) &&
+                        !activeSession?.task_mode_enabled &&
+                        !entry.taskId &&
+                        !entry.taskStepId
+                      }
+                      ragEnabled={entry.ragEnabled}
+                      rewrittenQuery={entry.rewrittenQuery}
                     />
                   )}
                   {(entry.timestamp ||

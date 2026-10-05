@@ -35,6 +35,7 @@ type SubmissionState = {
   isLoading: boolean
   summaryFailed: boolean
   taskIsActive: boolean
+  settingsSaving: boolean
   taskModeEnabled: boolean
   ragModeEnabled: boolean
   ragSettings: RagSettings
@@ -116,7 +117,14 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
   async function submit(event: FormEvent) {
     event.preventDefault()
     const content = state.message.trim()
-    if (!content || state.isLoading || state.summaryFailed || state.taskIsActive) return
+    if (
+      !content ||
+      state.isLoading ||
+      state.summaryFailed ||
+      state.taskIsActive ||
+      state.settingsSaving
+    )
+      return
     if (state.taskModeEnabled) {
       actions.setMessage('')
       await submitTask(content)
@@ -239,6 +247,8 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
             memoryEvents: response.memory_events,
             contextWindow: response.response.context_window,
             sources: response.sources,
+            ragEnabled: response.rag_enabled,
+            rewrittenQuery: response.rewritten_query,
             transcriptIndex: userTranscriptIndex + 1,
           }
           return assistantMessageId === null

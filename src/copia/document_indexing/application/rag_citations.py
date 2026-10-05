@@ -45,6 +45,7 @@ def rag_answer_schema(
     properties = schema.setdefault("properties", {})
     if not isinstance(properties, dict):
         raise ValueError("RAG structured output schema must define object properties")
+    properties.pop("answer_mode", None)
     properties["answer"] = {"type": "string", "minLength": 1}
     properties["citations"] = {
         "type": "array",
@@ -59,23 +60,11 @@ def rag_answer_schema(
             "additionalProperties": False,
         },
     }
-    if allow_uncited_fallback:
-        properties["answer_mode"] = {
-            "type": "string",
-            "enum": [
-                "grounded",
-                "general_knowledge",
-                "clarification_needed",
-                "personal_unknown",
-            ],
-        }
     required = schema.setdefault("required", [])
     if not isinstance(required, list):
         raise ValueError("RAG structured output schema must define required properties")
-    required_fields = ["answer", "citations"]
-    if allow_uncited_fallback:
-        required_fields.append("answer_mode")
-    schema["required"] = list(dict.fromkeys([*required, *required_fields]))
+    required_fields = [field for field in required if field != "answer_mode"]
+    schema["required"] = list(dict.fromkeys([*required_fields, "answer", "citations"]))
     schema["additionalProperties"] = False
     return schema
 
@@ -89,12 +78,13 @@ def complete_with_citation_recovery(
     retry_complete: Callable[[Sequence[ChatMessage], LLMConfig], LLMResponse] | None = None,
     allow_uncited_fallback: bool = False,
 ) -> tuple[LLMResponse, list[KnowledgeSource]]:
+    fallback_allowed = allow_uncited_fallback and not result.context_chunks
     structured_config = config.model_copy(
         update={
             "structured_output": StructuredOutputConfig(
                 schema=rag_answer_schema(
                     config.structured_output.json_schema if config.structured_output else None,
-                    allow_uncited_fallback=allow_uncited_fallback,
+                    allow_uncited_fallback=fallback_allowed,
                 ),
                 strict=True,
             )
@@ -113,7 +103,7 @@ def complete_with_citation_recovery(
                 ),
                 ChatMessage(
                     role="user",
-                    content=(_citation_retry_instruction(allow_uncited_fallback)),
+                    content=(_citation_retry_instruction(fallback_allowed)),
                 ),
             ]
         response = (
@@ -123,9 +113,7 @@ def complete_with_citation_recovery(
         )
         previous_response = response
         try:
-            return validate_rag_response(
-                response, result, allow_uncited_fallback=allow_uncited_fallback
-            )
+            return validate_rag_response(response, result, allow_uncited_fallback=fallback_allowed)
         except RagCitationValidationError:
             if attempt:
                 return _unverified_response(response, result)
@@ -146,17 +134,9 @@ def validate_rag_response(
     citations = data.get("citations")
     if not isinstance(answer, str) or not answer.strip() or not isinstance(citations, list):
         raise RagCitationValidationError("RAG answer failed citation validation after retry.")
-    if allow_uncited_fallback:
-        answer_mode = data.get("answer_mode")
-        if answer_mode in {"general_knowledge", "clarification_needed", "personal_unknown"}:
-            if citations:
-                raise RagCitationValidationError(
-                    "Uncited RAG fallback responses must not include citations."
-                )
-            return response.model_copy(update={"content": answer.strip()}), []
-        if answer_mode != "grounded":
-            raise RagCitationValidationError("RAG answer mode was invalid.")
     if not citations:
+        if allow_uncited_fallback and not result.context_chunks:
+            return response.model_copy(update={"content": answer.strip()}), []
         raise RagCitationValidationError("RAG answer failed citation validation after retry.")
 
     chunks_by_id = {chunk.source.chunk_id: chunk for chunk in result.context_chunks}
@@ -210,12 +190,10 @@ def _citation_retry_instruction(allow_uncited_fallback: bool) -> str:
     if allow_uncited_fallback:
         return (
             "The previous response did not pass citation validation. Return a corrected structured "
-            "response. If the excerpts support the answer, use answer_mode grounded and cite only "
-            "exact quotes from provided chunks. If they do not support it, use general_knowledge "
-            "for a general question, clarification_needed when task-specific inputs are missing, or "
-            "personal_unknown when the user asks for an unavailable personal fact. Use no citations "
-            "for these fallback modes. In your own words, explain when the knowledge base did not "
-            "contain relevant information. Never invent a citation."
+            "response. If the excerpts support the answer, cite only exact quotes from provided "
+            "chunks. If they do not support it, answer using the available conversation and "
+            "general knowledge, explain in your own words that the knowledge base did not contain "
+            "relevant information, and use no citations. Never invent a citation."
         )
     return (
         "The previous response did not pass citation validation. Return a corrected structured "

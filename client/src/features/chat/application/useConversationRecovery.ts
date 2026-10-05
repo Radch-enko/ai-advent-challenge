@@ -92,6 +92,8 @@ export function useConversationRecovery({
                 context_window?: number
               }
               duration_seconds?: number
+              rag_enabled?: boolean | null
+              rewritten_query?: string | null
               memory_events?: MemoryEvent[]
               sources?: import('../../../domain/models/knowledgeSource').KnowledgeSource[]
             }
@@ -114,6 +116,8 @@ export function useConversationRecovery({
                         memoryEvents: result.memory_events,
                         contextWindow: result.response?.context_window,
                         sources: result.sources,
+                        ragEnabled: result.rag_enabled,
+                        rewrittenQuery: result.rewritten_query,
                       }
                     : entry,
                 )
@@ -132,6 +136,8 @@ export function useConversationRecovery({
                     memoryEvents: result.memory_events,
                     contextWindow: result.response?.context_window,
                     sources: result.sources,
+                    ragEnabled: result.rag_enabled,
+                    rewrittenQuery: result.rewritten_query,
                     transcriptIndex,
                   },
                 ],

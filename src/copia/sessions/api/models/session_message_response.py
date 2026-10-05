@@ -14,6 +14,8 @@ from copia.sessions.domain.models.summarization_event import SummarizationEvent
 class SessionMessageResponse(BaseModel):
     response: SessionLLMResponse
     duration_seconds: float
+    rag_enabled: bool = False
+    rewritten_query: str | None = None
     summarization_events: list[SummarizationEvent] = Field(default_factory=list)
     facts_events: list[FactsUpdateEvent] = Field(default_factory=list)
     facts: dict[str, str] = Field(default_factory=dict)

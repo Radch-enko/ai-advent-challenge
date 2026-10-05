@@ -22,6 +22,7 @@ type Props = {
   planApprovalContent: ReactNode
   memoryPanelOpen: boolean
   isLoading: boolean
+  settingsSaving: boolean
   summaryFailed: boolean
   taskIsActive: boolean
   canPauseTask: boolean
@@ -43,6 +44,7 @@ export function ChatComposer({
   planApprovalContent,
   memoryPanelOpen,
   isLoading,
+  settingsSaving,
   summaryFailed,
   taskIsActive,
   canPauseTask,
@@ -110,7 +112,7 @@ export function ChatComposer({
               : 'Напишите сообщение Copia…'
           }
           rows={1}
-          disabled={isLoading || summaryFailed || taskIsActive}
+          disabled={isLoading || settingsSaving || summaryFailed || taskIsActive}
         />
         {taskIsActive ? (
           <button
@@ -127,7 +129,7 @@ export function ChatComposer({
           <button
             className="send"
             type="submit"
-            disabled={isLoading || summaryFailed || !message.trim()}
+            disabled={isLoading || settingsSaving || summaryFailed || !message.trim()}
             aria-label="Send"
           >
             ↑

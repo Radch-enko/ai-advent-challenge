@@ -129,11 +129,26 @@ def test_default_query_rewrite_falls_back_to_original_question_when_no_chunks_ma
     )
 
     assert [chunk.source.chunk_id for chunk in result.context_chunks] == ["moving"]
+    assert result.rewritten_query == "unrelated rewritten query"
     assert provider.calls == [
         (["unrelated rewritten query"], "index-model"),
         (["How should I plan a move?"], "index-model"),
     ]
     assert router.calls == 1
+
+
+def test_retriever_keeps_rewritten_query_when_no_chunks_match(tmp_path: Path) -> None:
+    retriever = DocumentRetriever(
+        write_index(tmp_path, [record("moving", "Moving checklist", [1.0, 0.0])]),
+        EmbeddingRouter({"fake": FakeEmbeddingProvider()}),
+    )
+    retriever._rewrite_query = lambda *_args: "rewritten query with no matches"
+    retriever._search = lambda _query, _settings: []
+
+    result = retriever.retrieve_with_settings("original question", RagSettings())
+
+    assert result.context_chunks == []
+    assert result.rewritten_query == "rewritten query with no matches"
 
 
 def test_retriever_uses_context_builder_with_untrusted_chunk_content(tmp_path: Path) -> None:

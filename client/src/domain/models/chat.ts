@@ -31,6 +31,8 @@ export type ChatMessage = {
   taskId?: string
   taskStepId?: string
   sources?: KnowledgeSource[]
+  ragEnabled?: boolean | null
+  rewrittenQuery?: string | null
 }
 
 export type SummarizationEvent = {

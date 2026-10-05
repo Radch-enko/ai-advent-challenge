@@ -25,10 +25,14 @@ def make_session_message_response(
     pending_memory: list[PendingMemorySuggestion] | None = None,
     working_memory: list[WorkingMemoryItem] | None = None,
     sources: list[KnowledgeSource] | None = None,
+    rag_enabled: bool = False,
+    rewritten_query: str | None = None,
 ) -> SessionMessageResponse:
     return SessionMessageResponse(
         response=SessionLLMResponse.from_response(response),
         duration_seconds=duration_seconds,
+        rag_enabled=rag_enabled,
+        rewritten_query=rewritten_query,
         summarization_events=safe_summarization_events(summarization_events or []),
         facts_events=safe_facts_events(facts_events or []),
         facts=facts or {},

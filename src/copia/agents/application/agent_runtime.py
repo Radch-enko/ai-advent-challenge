@@ -107,6 +107,15 @@ class Agent:
             return
         self._history[-1] = self._history[-1].model_copy(update={"sources": sources})
 
+    def attach_rag_metadata_to_last_response(
+        self, rag_enabled: bool, rewritten_query: str | None
+    ) -> None:
+        if not self._history or self._history[-1].role != "assistant":
+            return
+        self._history[-1] = self._history[-1].model_copy(
+            update={"rag_enabled": rag_enabled, "rewritten_query": rewritten_query}
+        )
+
     @property
     def context(self) -> ConversationContext:
         return self._context.model_copy(deep=True)

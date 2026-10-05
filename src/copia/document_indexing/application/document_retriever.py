@@ -82,10 +82,12 @@ class DocumentRetriever:
 
         try:
             search_query = question
+            rewritten_query = None
             if settings.query_rewrite_enabled:
-                search_query = self._rewrite_query(
+                rewritten_query = self._rewrite_query(
                     question, history or [], summary, task_memory or [], config
                 )
+                search_query = rewritten_query
 
             candidates = self._search(search_query, settings)
             filtered = _filter_candidates(candidates, settings)
@@ -116,7 +118,11 @@ class DocumentRetriever:
                 )
                 for score, chunk in filtered
             ]
-            return RagRetrievalResult(context_chunks=context_chunks, filtered_sources=sources)
+            return RagRetrievalResult(
+                context_chunks=context_chunks,
+                filtered_sources=sources,
+                rewritten_query=rewritten_query,
+            )
         except DocumentRetrievalError:
             raise
         except ProviderError as error:

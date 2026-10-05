@@ -109,7 +109,7 @@ class SessionMessageRoutes:
                 detail="A task is active for this session; resume or wait for it to finish",
             )
         started_at = time.perf_counter()
-        completion, sources = await self._prepare_rag(
+        completion, sources, rewritten_query = await self._prepare_rag(
             runtime, session, request.content, completion, effective_config, emit=emit
         )
         if request.config is not None and session.profile_name is None:
@@ -228,6 +228,7 @@ class SessionMessageRoutes:
             response = response.model_copy(update={"structured_data": None})
         if sources:
             agent.attach_sources_to_last_response(sources)
+        agent.attach_rag_metadata_to_last_response(session.rag_enabled, rewritten_query)
         runtime.save_agent(session, agent)
         if session.title is None:
             background_tasks.add_task(runtime.generate_title, session.id)
@@ -241,6 +242,8 @@ class SessionMessageRoutes:
             pending_memory=agent.pending_memory,
             working_memory=agent.working_memory,
             sources=sources,
+            rag_enabled=session.rag_enabled,
+            rewritten_query=rewritten_query,
         )
 
     async def retry_session_summarization(
@@ -267,7 +270,7 @@ class SessionMessageRoutes:
                 ),
                 "",
             )
-            completion, sources = await self._prepare_rag(
+            completion, sources, rewritten_query = await self._prepare_rag(
                 runtime, session, query, completion, session.config
             )
             user_profile = await runtime.load_profile(session)
@@ -354,6 +357,7 @@ class SessionMessageRoutes:
                 response = response.model_copy(update={"structured_data": None})
             if sources:
                 agent.attach_sources_to_last_response(sources)
+            agent.attach_rag_metadata_to_last_response(session.rag_enabled, rewritten_query)
             runtime.save_agent(session, agent)
             return runtime.make_response(
                 response,
@@ -365,6 +369,8 @@ class SessionMessageRoutes:
                 pending_memory=agent.pending_memory,
                 working_memory=agent.working_memory,
                 sources=sources,
+                rag_enabled=session.rag_enabled,
+                rewritten_query=rewritten_query,
             )
         finally:
             message_lock.lock.release()
@@ -372,7 +378,7 @@ class SessionMessageRoutes:
 
     async def _prepare_rag(self, runtime, session, query: str, completion, config, *, emit=None):
         if not session.rag_enabled:
-            return completion, []
+            return completion, [], None
         try:
             retrieval_args = (
                 query,
@@ -423,7 +429,7 @@ class SessionMessageRoutes:
                     emit("message.delta", {"text": response.content})
                 return response
 
-            return complete_without_context, sources
+            return complete_without_context, sources, result.rewritten_query
 
         sources = []
         rag_completion = (
@@ -433,7 +439,7 @@ class SessionMessageRoutes:
         )
 
         def complete_with_rag(messages, config):
-            contextualized = runtime.contextualize(messages, result, allow_uncited_fallback=True)
+            contextualized = runtime.contextualize(messages, result)
             response, verified_sources = complete_with_citation_recovery(
                 rag_completion,
                 contextualized,
@@ -444,7 +450,7 @@ class SessionMessageRoutes:
                     if config.mcp_access and completion is not None
                     else None
                 ),
-                allow_uncited_fallback=True,
+                allow_uncited_fallback=False,
             )
             if response.content.startswith(RAG_CITATION_WARNING):
                 response = complete_with_no_evidence_fallback(
@@ -459,4 +465,4 @@ class SessionMessageRoutes:
                 emit("message.delta", {"text": response.content})
             return response
 
-        return complete_with_rag, sources
+        return complete_with_rag, sources, result.rewritten_query

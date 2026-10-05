@@ -185,8 +185,12 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
 
   async function saveRagSettings(settings: RagSettings) {
     const session = state.activeSession
+    if (!session) {
+      actions.setRagSettingsDraft(settings)
+      return
+    }
+    if (state.taskIsActive || state.profileSettingsSaving) return
     actions.setRagSettingsDraft(settings)
-    if (!session || state.taskIsActive || state.profileSettingsSaving) return
     actions.setProfileSettingsSaving(true)
     actions.setProfileSettingsError(null)
     try {
@@ -197,6 +201,18 @@ export function useSessionOperations({ state, actions, meta }: SessionOperations
       }
     } catch (error) {
       if (activeSessionIdRef.current === session.id) {
+        try {
+          const confirmed = await getSession(session.id)
+          if (activeSessionIdRef.current === confirmed.id) {
+            actions.setActiveSession(confirmed)
+            actions.setRagModeDraft(confirmed.rag_enabled)
+            actions.setRagSettingsDraft(confirmed.rag_settings)
+          }
+        } catch {
+          if (activeSessionIdRef.current === session.id)
+            actions.setRagSettingsDraft(session.rag_settings)
+        }
+        if (activeSessionIdRef.current !== session.id) return
         actions.setProfileSettingsError(
           error instanceof Error ? error.message : 'Не удалось сохранить настройки RAG',
         )
