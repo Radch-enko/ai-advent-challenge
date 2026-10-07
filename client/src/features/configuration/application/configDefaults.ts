@@ -4,6 +4,7 @@ import { Provider } from '../../../domain/models/provider'
 export const providerModels: Record<Provider, string> = {
   openai: 'gpt-5.4-mini',
   gigachat: 'GigaChat',
+  ollama: 'llama3.1:8b',
 }
 
 export const defaultSummaryPrompt = `Update the compact summary of the conversation using the existing summary

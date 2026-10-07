@@ -5,6 +5,7 @@ from collections.abc import Iterator, Sequence
 from copia.providers.data.gigachat_provider import GigaChatProvider
 from copia.providers.data.llm import LLMProvider
 from copia.providers.data.model_catalog import context_window_for
+from copia.providers.data.ollama_provider import OllamaProvider
 from copia.providers.data.openai_provider import OpenAIProvider
 from copia.providers.domain.errors import ProviderError
 from copia.providers.domain.models.llm_config import LLMConfig
@@ -28,6 +29,7 @@ class LLMRouter:
         self._providers = providers or {
             ProviderName.OPENAI: OpenAIProvider(),
             ProviderName.GIGACHAT: GigaChatProvider(),
+            ProviderName.OLLAMA: OllamaProvider(),
         }
 
     def complete(

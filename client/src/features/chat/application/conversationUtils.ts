@@ -151,7 +151,7 @@ export function useOutsideClose(isOpen: boolean, onClose: () => void) {
 }
 
 export function supportsSamplingParameters(provider: Provider, model: string): boolean {
-  if (provider === 'gigachat') return true
+  if (provider === 'gigachat' || provider === 'ollama') return true
   const normalized = model.trim().toLowerCase()
   const unsupportedPrefixes = [
     'gpt-5-mini-',

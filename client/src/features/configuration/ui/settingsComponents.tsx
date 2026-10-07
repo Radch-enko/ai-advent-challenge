@@ -811,7 +811,11 @@ export function ProviderSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const ref = useOutsideClose(isOpen, () => setIsOpen(false))
-  const labels: Record<Provider, string> = { openai: 'OpenAI', gigachat: 'GigaChat' }
+  const labels: Record<Provider, string> = {
+    openai: 'OpenAI',
+    gigachat: 'GigaChat',
+    ollama: 'Ollama',
+  }
   return (
     <div className="react-select" ref={ref}>
       <button

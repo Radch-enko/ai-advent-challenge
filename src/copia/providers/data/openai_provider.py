@@ -73,6 +73,11 @@ def _openai_tool_calls(value: object) -> list[ToolCall]:
 class OpenAIProvider(LLMProvider):
     CHAT_URL = "https://api.openai.com/v1/chat/completions"
     MODELS_URL = "https://api.openai.com/v1/models"
+    PROVIDER_NAME = ProviderName.OPENAI
+    PROVIDER_LABEL = "OpenAI"
+    MAX_TOKENS_PARAMETER = "max_completion_tokens"
+    INCLUDE_STREAM_USAGE = True
+    SEND_PARALLEL_TOOL_CALLS = True
     capabilities = ProviderCapabilities(
         provider=ProviderName.OPENAI,
         supported_parameters=["max_output_tokens", "temperature", "top_p"],
@@ -90,6 +95,13 @@ class OpenAIProvider(LLMProvider):
             configured_key.get_secret_value() if configured_key is not None else None
         )
         self._client = client or httpx.Client(timeout=60.0)
+
+    def _require_configuration(self) -> None:
+        if not self._api_key:
+            raise ProviderError("OPENAI_API_KEY is not configured")
+
+    def _request_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._api_key}"}
 
     @staticmethod
     def _supports_sampling(model: str) -> bool:
@@ -117,8 +129,7 @@ class OpenAIProvider(LLMProvider):
         config: LLMConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> LLMResponse:
-        if not self._api_key:
-            raise ProviderError("OPENAI_API_KEY is not configured")
+        self._require_configuration()
 
         request_payload: dict[str, Any] = {
             "model": config.model,
@@ -137,10 +148,11 @@ class OpenAIProvider(LLMProvider):
                 for tool in tools
             ]
             request_payload["tool_choice"] = "auto"
-            request_payload["parallel_tool_calls"] = False
+            if self.SEND_PARALLEL_TOOL_CALLS:
+                request_payload["parallel_tool_calls"] = False
         generation = config.generation
         if generation.max_output_tokens is not None:
-            request_payload["max_completion_tokens"] = generation.max_output_tokens
+            request_payload[self.MAX_TOKENS_PARAMETER] = generation.max_output_tokens
         if generation.temperature is not None and self._supports_sampling(config.model):
             request_payload["temperature"] = generation.temperature
         if generation.top_p is not None and self._supports_sampling(config.model):
@@ -161,7 +173,7 @@ class OpenAIProvider(LLMProvider):
             "POST",
             self.CHAT_URL,
             json=request_payload,
-            headers={"Authorization": f"Bearer {self._api_key}"},
+            headers=self._request_headers(),
         )
         try:
             response = self._client.send(http_request)
@@ -178,7 +190,7 @@ class OpenAIProvider(LLMProvider):
                 except ValueError:
                     body = {"raw": response.text}
             raise ProviderError(
-                f"OpenAI request failed: {error}",
+                f"{self.PROVIDER_LABEL} request failed: {error}",
                 status_code=response.status_code if response is not None else 0,
                 request_body=request_payload,
                 response_body=body,
@@ -203,7 +215,7 @@ class OpenAIProvider(LLMProvider):
                 usage["cached_prompt_tokens"] = prompt_details["cached_tokens"]
         return LLMResponse(
             content=content,
-            provider=ProviderName.OPENAI,
+            provider=self.PROVIDER_NAME,
             model=data.get("model", config.model),
             usage=usage,
             structured_data=_structured_data(content, config.structured_output is not None),
@@ -221,14 +233,14 @@ class OpenAIProvider(LLMProvider):
         config: LLMConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> Iterator[LLMStreamEvent]:
-        if not self._api_key:
-            raise ProviderError("OPENAI_API_KEY is not configured")
+        self._require_configuration()
         payload: dict[str, Any] = {
             "model": config.model,
             "messages": [_openai_message(message) for message in messages],
             "stream": True,
-            "stream_options": {"include_usage": True},
         }
+        if self.INCLUDE_STREAM_USAGE:
+            payload["stream_options"] = {"include_usage": True}
         if tools:
             payload["tools"] = [
                 {
@@ -242,10 +254,11 @@ class OpenAIProvider(LLMProvider):
                 for tool in tools
             ]
             payload["tool_choice"] = "auto"
-            payload["parallel_tool_calls"] = False
+            if self.SEND_PARALLEL_TOOL_CALLS:
+                payload["parallel_tool_calls"] = False
         generation = config.generation
         if generation.max_output_tokens is not None:
-            payload["max_completion_tokens"] = generation.max_output_tokens
+            payload[self.MAX_TOKENS_PARAMETER] = generation.max_output_tokens
         if generation.temperature is not None and self._supports_sampling(config.model):
             payload["temperature"] = generation.temperature
         if generation.top_p is not None and self._supports_sampling(config.model):
@@ -275,7 +288,7 @@ class OpenAIProvider(LLMProvider):
                 "POST",
                 self.CHAT_URL,
                 json=payload,
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                headers=self._request_headers(),
             ) as response:
                 response.request.extensions["copia.otel.request.body"] = payload
                 if response.is_error:
@@ -337,7 +350,7 @@ class OpenAIProvider(LLMProvider):
             stream_response_body = response_body
             result = LLMResponse(
                 content=content_text,
-                provider=ProviderName.OPENAI,
+                provider=self.PROVIDER_NAME,
                 model=response_model,
                 usage=_usage(usage, "cached_tokens"),
                 structured_data=_structured_data(
@@ -355,7 +368,7 @@ class OpenAIProvider(LLMProvider):
             raise
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             raise ProviderError(
-                f"OpenAI stream failed: {error}",
+                f"{self.PROVIDER_LABEL} stream failed: {error}",
                 status_code=response.status_code if response else 0,
                 request_body=payload,
             ) from error
@@ -369,10 +382,9 @@ class OpenAIProvider(LLMProvider):
                 )
 
     def list_models(self) -> list[ProviderModel]:
-        if not self._api_key:
-            raise ProviderError("OPENAI_API_KEY is not configured")
+        self._require_configuration()
         request = self._client.build_request(
-            "GET", self.MODELS_URL, headers={"Authorization": f"Bearer {self._api_key}"}
+            "GET", self.MODELS_URL, headers=self._request_headers()
         )
         response = None
         try:
@@ -380,7 +392,7 @@ class OpenAIProvider(LLMProvider):
             response.raise_for_status()
             return [ProviderModel(id=model["id"]) for model in response.json()["data"]]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-            raise ProviderError(f"OpenAI models request failed: {error}") from error
+            raise ProviderError(f"{self.PROVIDER_LABEL} models request failed: {error}") from error
         finally:
             if response is not None:
                 record_response(response)

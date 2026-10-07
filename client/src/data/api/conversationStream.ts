@@ -12,6 +12,8 @@ type ActiveConversation = {
   last_event_id: string | null
 }
 
+const activeRequestIds = new Set<string>()
+
 function activeConversationsKey(scopeId: string): string {
   return `copia.activeConversations.${scopeId}`
 }
@@ -110,6 +112,19 @@ export async function streamConversationResilient(
   onEvent: (event: ConversationEvent) => void,
   storageScopeId?: string,
 ): Promise<void> {
+  activeRequestIds.add(command.request_id)
+  try {
+    await runConversationStream(command, onEvent, storageScopeId)
+  } finally {
+    activeRequestIds.delete(command.request_id)
+  }
+}
+
+async function runConversationStream(
+  command: ConversationCommand,
+  onEvent: (event: ConversationEvent) => void,
+  storageScopeId?: string,
+): Promise<void> {
   const sessionId =
     storageScopeId ??
     (typeof command.session_id === 'string'
@@ -183,7 +198,9 @@ export async function resumeActiveConversations(
   onEvent: (event: ConversationEvent) => void,
 ): Promise<void> {
   const storageKey = activeConversationsKey(sessionId)
-  const active = readActiveConversations(storageKey)
+  const active = readActiveConversations(storageKey).filter(
+    (conversation) => !activeRequestIds.has(conversation.request_id),
+  )
   await Promise.all(
     active.map((conversation) =>
       streamConversationResilient(

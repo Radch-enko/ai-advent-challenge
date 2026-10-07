@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class CopiaSettings(BaseSettings):
     """Typed runtime configuration loaded from the process environment."""
 
-    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+    model_config = SettingsConfigDict(env_file=None, extra="ignore", hide_input_in_errors=True)
 
     data_root: Path = Field(default=Path("~/.copia"), validation_alias="COPIA_DATA_ROOT")
     documents_path_override: Path | None = Field(
@@ -50,6 +50,9 @@ class CopiaSettings(BaseSettings):
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     gigachat_auth_key: SecretStr | None = Field(default=None, validation_alias="GIGACHAT_AUTH_KEY")
     gigachat_scope: str = Field(default="GIGACHAT_API_PERS", validation_alias="GIGACHAT_SCOPE")
+    ollama_base_url: AnyHttpUrl = Field(
+        default="https://ollama.example.invalid", validation_alias="OLLAMA_BASE_URL"
+    )
     allow_local_mcp_value: str = Field(default="true", validation_alias="COPIA_ALLOW_LOCAL_MCP")
     trusted_mcp_endpoint: str | None = Field(
         default=None, validation_alias="COPIA_MCP_TRUSTED_ENDPOINT"
@@ -62,6 +65,13 @@ class CopiaSettings(BaseSettings):
         default="http://localhost:4317", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
     otel_service_name: str = Field(default="copia-backend", validation_alias="OTEL_SERVICE_NAME")
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def validate_ollama_base_url(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+        if value.username or value.password or value.query or value.fragment or value.path != "/":
+            raise ValueError("OLLAMA_BASE_URL must be an HTTP origin without credentials or path")
+        return value
 
     @property
     def project_root(self) -> Path:

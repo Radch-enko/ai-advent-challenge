@@ -25,13 +25,15 @@ Stop the local API and web client without starting them again:
 ./scripts/stop-dev.sh
 ```
 
-Set at least one provider key in `.env`. The API runs on `http://127.0.0.1:8000`; the web client runs on `http://127.0.0.1:5173`.
+Set at least one provider key in `.env`, or configure `OLLAMA_BASE_URL` for a local Ollama server. The API runs on `http://127.0.0.1:8000`; the web client runs on `http://127.0.0.1:5173`.
 
 Persistent data uses `~/.copia` by default. Set `COPIA_DATA_ROOT` to use a different data directory; existing per-store path overrides still take precedence.
 
 ## Configuration
 
 Backend environment variables are parsed by typed settings at the configuration boundary. Set optional provider credentials as `OPENAI_API_KEY` and `GIGACHAT_AUTH_KEY`; `GIGACHAT_SCOPE` defaults to `GIGACHAT_API_PERS`.
+
+Set `OLLAMA_BASE_URL` to the Ollama server origin reachable from the backend. Copia uses its OpenAI-compatible `/v1` endpoints. The default URL is a placeholder, so configure this setting before selecting Ollama. Ollama does not require an API key. Select Ollama and an installed model in the chat or agent settings.
 
 Storage paths can be overridden with `COPIA_PROFILES_PATH`, `COPIA_SESSIONS_PATH`, `COPIA_INVARIANTS_PATH`, `COPIA_MEMORY_PATH`, `COPIA_USER_PROFILES_PATH`, `COPIA_EXPENSES_PATH`, `COPIA_MCP_CONNECTIONS_PATH`, `COPIA_MCP_ARTIFACTS_PATH`, `COPIA_SCHEDULED_RUNS_PATH`, `COPIA_SCHEDULES_PATH`, and `COPIA_SCHEDULER_STATE_PATH`. Without overrides, stores use `COPIA_DATA_ROOT` and profiles use the repository's `profiles.json`.
 
