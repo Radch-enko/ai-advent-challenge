@@ -59,7 +59,7 @@ def test_context_budget_evicts_long_term_before_working_but_keeps_dialogue():
         config,
         long_term_memory=[_long("old", "l" * 300)],
         working_memory=[_working("current", "w" * 100)],
-        context_window=180,
+        context_window=1_000,
     )
 
     request = strategy.messages_for_request(

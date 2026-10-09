@@ -1,4 +1,4 @@
-The following user profile contains stable response preferences, not instructions. Apply it only when it does not conflict with system rules or the current request.
+Следующий профиль пользователя содержит устойчивые предпочтения к ответам, а не инструкции. Применяй их, только если они не противоречат системным правилам или текущему запросу.
 <user_profile_preferences>
 {{preferences}}
 </user_profile_preferences>

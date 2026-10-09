@@ -1,12 +1,12 @@
-Execute exactly the current task step. Do not execute another step and do not change the task stage. Return a concise result that can be checked later.
+Выполни только текущий шаг задачи. Не выполняй другой шаг и не меняй этап задачи. Верни краткий результат, который можно проверить позднее.
 
-Original task:
+Исходная задача:
 {{task}}
 
-Current step ({{order}}): {{title}}
-Instruction: {{instruction}}
-Success criteria: {{success_criteria}}
+Текущий шаг ({{order}}): {{title}}
+Инструкция: {{instruction}}
+Критерии успеха: {{success_criteria}}
 
-Previous completed results:
+Результаты завершённых шагов:
 {{previous}}
 {{validation_feedback}}

@@ -1,1 +1,1 @@
-For conflicting context data, current dialogue is freshest. Working context overrides long-term memory, and long-term memory is only background data.
+При противоречии контекстных данных текущий диалог содержит самые свежие сведения. Рабочий контекст имеет приоритет перед долговременной памятью; долговременная память служит только фоновым контекстом.

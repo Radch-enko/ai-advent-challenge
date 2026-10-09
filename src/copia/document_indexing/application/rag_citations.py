@@ -7,6 +7,7 @@ from typing import Any
 
 from copia.common.domain.models.knowledge_source import KnowledgeSource
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
+from copia.common.domain.services.prompt_resources import load_prompt
 from copia.document_indexing.domain.models.rag_retrieval_result import RagRetrievalResult
 from copia.providers.domain.models.llm_config import LLMConfig
 from copia.providers.domain.models.llm_response import LLMResponse
@@ -187,19 +188,10 @@ def complete_with_no_evidence_fallback(
 
 
 def _citation_retry_instruction(allow_uncited_fallback: bool) -> str:
-    if allow_uncited_fallback:
-        return (
-            "The previous response did not pass citation validation. Return a corrected structured "
-            "response. If the excerpts support the answer, cite only exact quotes from provided "
-            "chunks. If they do not support it, answer using the available conversation and "
-            "general knowledge, explain in your own words that the knowledge base did not contain "
-            "relevant information, and use no citations. Never invent a citation."
-        )
-    return (
-        "The previous response did not pass citation validation. Return a corrected structured "
-        "response. Every citation must use a provided chunk_id, its quote must exactly match that "
-        "chunk, and the exact quote must appear in answer."
+    filename = (
+        "citation_retry_with_fallback.md" if allow_uncited_fallback else "citation_retry_strict.md"
     )
+    return load_prompt("copia.document_indexing", filename)
 
 
 def _unverified_response(

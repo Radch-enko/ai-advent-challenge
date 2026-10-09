@@ -32,8 +32,8 @@ def test_runtime_context_is_rfc3339_and_replaces_previous_value() -> None:
     assert updated[0].role == "system"
     assert "2026-09-23T17:46:13+06:00" in updated[0].content
     assert updated[0].content.count("<current_datetime_context>") == 1
-    assert "Timezone: UTC+06:00" in updated[0].content
-    assert "UTC offset: +06:00" in updated[0].content
+    assert "Часовой пояс: UTC+06:00" in updated[0].content
+    assert "Смещение относительно UTC: +06:00" in updated[0].content
     assert "17:45:12" not in updated[0].content
     assert render_current_datetime_context(first).startswith("<current_datetime_context>")
 

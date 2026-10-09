@@ -107,7 +107,7 @@ def test_invalid_first_response_is_retried_and_only_verified_answer_returns() ->
     assert len(configs) == 2
     assert configs[0].structured_output is not None
     assert configs[0].structured_output.json_schema["required"] == ["answer", "citations"]
-    assert "citation validation" in request_messages[1][-1].content
+    assert "проверку цитат" in request_messages[1][-1].content
 
 
 def test_second_invalid_response_returns_answer_with_warning_and_safe_source() -> None:

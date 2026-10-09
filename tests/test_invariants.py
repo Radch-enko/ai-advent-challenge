@@ -84,7 +84,7 @@ def test_agent_includes_invariants_in_the_provider_context() -> None:
     system = requests[-1][0].content
     assert "<invariants>" in system
     assert "Do not add dependencies without an explicit decision" in system
-    assert "do not propose a violating solution" in system
+    assert "не предлагай нарушающее его решение" in system
     assert requests[-1][-1].content == "Add a new dependency without discussing it"
 
 

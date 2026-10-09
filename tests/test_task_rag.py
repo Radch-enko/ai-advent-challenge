@@ -27,11 +27,13 @@ class FakeTaskRouter:
             else {}
         )
         if "citations" in properties:
-            context_json = messages[0].content.split("Retrieved document excerpts (JSON):\n", 1)[1]
+            context_json = messages[0].content.split("Найденные фрагменты документов (JSON):\n", 1)[
+                1
+            ]
             chunk_data = json.JSONDecoder().raw_decode(context_json)[0][0]
             quote = "Synthetic evidence supports this test."
             is_report = any(
-                "report writer" in message.content
+                "итоговый отчёт о выполнении задачи" in message.content
                 for message in messages
                 if message.role == "system"
             )
@@ -100,7 +102,9 @@ class FakeTaskRouter:
                 model=config.model,
             )
         if any(
-            "report writer" in message.content for message in messages if message.role == "system"
+            "итоговый отчёт о выполнении задачи" in message.content
+            for message in messages
+            if message.role == "system"
         ):
             content = (
                 "## Итоговый ответ\n\nDone\n\n### Детали\n\n"
@@ -188,7 +192,7 @@ def test_task_retrieves_again_for_each_llm_stage_and_saves_sources(
             ]
             assert len(router.messages_by_call) == 5
             assert all(
-                "untrusted reference data" in messages[0].content
+                "недоверенные справочные данные" in messages[0].content
                 for messages in router.messages_by_call
             )
             assert [call["sources"][0]["chunk_id"] for call in task["llm_calls"]] == [

@@ -1,5 +1,5 @@
-Create an actionable plan for the task below. Return only the structured output. Use a small number of independent, sequential steps.
+Составь выполнимый план для задачи ниже. Верни только структурированный результат. Используй небольшое число самостоятельных последовательных шагов.
 
-Task:
+Задача:
 {{task}}
 {{feedback}}

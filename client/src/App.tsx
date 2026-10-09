@@ -49,7 +49,7 @@ export function App() {
   const [mode, setMode] = useState<AppMode>('chat')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState(providerModels.openai)
-  const [systemPrompt, setSystemPrompt] = useState('You are Copia, a helpful personal assistant.')
+  const [systemPrompt, setSystemPrompt] = useState('Ты Copia, полезный персональный ассистент.')
   const [maxTokens, setMaxTokens] = useState('512')
   const [temperature, setTemperature] = useState('0.7')
   const [topP, setTopP] = useState('1')

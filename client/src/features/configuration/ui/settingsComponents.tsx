@@ -352,7 +352,7 @@ export function Settings(props: SettingsProps) {
         </label>
       </div>
       <label>
-        System prompt
+        Системный промпт
         <textarea
           value={props.systemPrompt}
           onChange={(e) => {

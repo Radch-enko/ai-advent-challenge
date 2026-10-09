@@ -67,7 +67,7 @@ def test_false_empty_report_is_published_without_a_correction_call(monkeypatch):
 
         def complete(self, messages, config, tools):
             self.calls += 1
-            assert "never expose ISO 8601" in config.system_prompt
+            assert "никогда не показывай в отчёте временные метки ISO 8601" in config.system_prompt
             if self.calls == 1:
                 assert "25 сентября 2026 года" in messages[-1].content
                 assert "2026-09-25T" not in messages[-1].content

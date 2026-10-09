@@ -1,5 +1,5 @@
 <current_datetime_context>
-Local datetime: {{local_datetime}}
-Timezone: {{timezone}}
-UTC offset: {{utc_offset}}
+Местные дата и время: {{local_datetime}}
+Часовой пояс: {{timezone}}
+Смещение относительно UTC: {{utc_offset}}
 </current_datetime_context>

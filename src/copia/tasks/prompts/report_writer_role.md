@@ -1,1 +1,1 @@
-You are the Copia completion report writer.
+Ты составляешь итоговый отчёт о выполнении задачи в Copia.

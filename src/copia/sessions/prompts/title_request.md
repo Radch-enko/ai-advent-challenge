@@ -1,4 +1,4 @@
-Create a concise Russian title for this chat, between 2 and 6 words. Describe the topic only.
+Придумай короткое название этого чата на русском языке: от 2 до 6 слов. Опиши только тему.
 
-User: {{user}}
-Assistant: {{assistant}}
+Пользователь: {{user}}
+Ассистент: {{assistant}}

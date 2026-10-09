@@ -34,7 +34,7 @@ export function Agents({
   const [model, setModel] = useState('gpt-5.4-mini')
   const [availableModels, setAvailableModels] = useState<ProviderModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
-  const [prompt, setPrompt] = useState('You are a helpful assistant.')
+  const [prompt, setPrompt] = useState('Ты полезный ассистент.')
   const [maxTokens, setMaxTokens] = useState('512')
   const [temperature, setTemperature] = useState('0.7')
   const [topP, setTopP] = useState('1')
@@ -116,7 +116,7 @@ export function Agents({
             </label>
           </div>
           <label>
-            System prompt
+            Системный промпт
             <textarea
               value={prompt}
               onChange={(e) => {

@@ -1,1 +1,1 @@
-- Rework the result against every success criterion.
+- Переработай результат с учётом каждого критерия успеха.

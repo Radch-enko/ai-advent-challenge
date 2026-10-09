@@ -52,7 +52,8 @@ class MalformedThenValidReportRouter:
                 model=config.model,
             )
         if any(
-            message.role == "system" and "report writer" in message.content for message in messages
+            message.role == "system" and "итоговый отчёт о выполнении задачи" in message.content
+            for message in messages
         ):
             self.report_calls += 1
             self.report_prompts.append(messages[-1].content)
@@ -105,7 +106,7 @@ def test_task_retries_report_when_model_adds_an_extra_heading(monkeypatch, tmp_p
             assert completed["stage"] == "done"
             assert completed["completion_report"].startswith("## Итоговый ответ")
             assert router.report_calls == 2
-            assert "format correction attempt" in router.report_prompts[1]
+            assert "попытка исправить формат" in router.report_prompts[1]
             assert [call["kind"] for call in completed["llm_calls"]] == [
                 "task_planning",
                 "task_execution_step",

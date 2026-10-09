@@ -169,7 +169,7 @@ def test_retriever_uses_context_builder_with_untrusted_chunk_content(tmp_path: P
 
     assert [message.role for message in messages] == ["system", "user"]
     assert "System prompt" in messages[0].content
-    assert "untrusted reference data" in messages[0].content
+    assert "недоверенные справочные данные" in messages[0].content
     assert "malicious-looking text" in messages[0].content
 
 

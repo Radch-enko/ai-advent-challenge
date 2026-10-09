@@ -28,10 +28,10 @@ def test_memory_classifier_prompt_defines_scope_boundaries_and_examples() -> Non
 
     assert classifier.classify("message", [], []) == []
     assert captured["system"] == MEMORY_CLASSIFIER_SYSTEM_PROMPT
-    assert "working: temporary context for the current chat or task" in captured["system"]
+    assert "working: временный контекст текущего чата или задачи" in captured["system"]
     assert (
-        "long_term: stable user information that should be useful in future chats"
+        "long_term: устойчивые сведения о пользователе, которые пригодятся в будущих чатах"
         in captured["system"]
     )
-    assert '"Always answer briefly and perform a self-check" -> long_term' in captured["system"]
+    assert "«Всегда отвечай кратко и проверяй свой ответ» → `long_term`" in captured["system"]
     assert json.loads(captured["payload"])["message"] == "message"

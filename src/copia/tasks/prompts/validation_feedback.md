@@ -1,3 +1,3 @@
-Validation feedback from the previous attempt:
+Замечания по итогам предыдущей проверки:
 {{issues}}
-Use this feedback to improve the current step.
+Используй их, чтобы улучшить текущий шаг.

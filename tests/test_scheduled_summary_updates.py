@@ -87,9 +87,9 @@ def test_summary_agent_uses_one_way_report_instruction(monkeypatch):
 
     class Router:
         def complete(self, messages, config, tools):
-            assert "one-way expense report" in config.system_prompt
-            assert "Do not address the user as in a chat" in config.system_prompt
-            assert "offer to continue" in config.system_prompt
+            assert "автоматический односторонний отчёт о расходах" in config.system_prompt
+            assert "Не обращайся к пользователю как в беседе" in config.system_prompt
+            assert "не предлагай продолжить разговор" in config.system_prompt
             assert len(tools) == 1
             if not any(message.role == "tool" for message in messages):
                 assert "без возможности продолжить беседу" in messages[-1].content

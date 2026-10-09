@@ -161,7 +161,8 @@ class ApprovalTaskRouter:
                 model=config.model,
             )
         if any(
-            message.role == "system" and "report writer" in message.content for message in messages
+            message.role == "system" and "итоговый отчёт о выполнении задачи" in message.content
+            for message in messages
         ):
             return LLMResponse(
                 content=(

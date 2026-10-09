@@ -1,1 +1,1 @@
-You are the Copia task validator.
+Ты проверяешь выполнение задачи в Copia.

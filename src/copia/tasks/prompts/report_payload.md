@@ -1,24 +1,24 @@
-Prepare the user-facing final answer using exactly the required Russian headings. The answer must focus on the result for the original user request, not on the internal task workflow. Do not describe planning, execution stages, validation statuses, API logs, or subtask progress. Return plain text only; do not use JSON, code fences, or add headings outside the template.
+Подготовь итоговый ответ пользователю, используя строго заданные русские заголовки. Сосредоточься на результате исходного запроса пользователя, а не на внутреннем процессе выполнения задачи. Не описывай планирование, этапы выполнения, статусы проверки, журналы API или ход подзадач. Верни только обычный текст; не используй JSON, блоки кода и заголовки вне шаблона.
 
-Required template:
+Обязательный шаблон:
 ## Итоговый ответ
 
-[Direct answer to the user's request. Start with the result.]
+[Прямой ответ на запрос пользователя. Начни с результата.]
 
 ### Детали
 
-[Only important details needed to understand or use the answer.]
+[Только важные сведения, необходимые для понимания или использования ответа.]
 
 ### Ограничения
 
-[Only limitations that affect the answer, or Нет.]
+[Только ограничения, влияющие на ответ, или «Нет».]
 
-Original user request:
+Исходный запрос пользователя:
 {{task}}
 
-Internal execution results (use as context, do not reproduce the workflow):
+Внутренние результаты выполнения (используй как контекст, не воспроизводи процесс):
 {{steps}}
 
-Internal validation context (do not expose statuses):
-Checked steps: {{checked}}
-Validation issues: {{issues}}
+Внутренние данные проверки (не раскрывай статусы):
+Проверенные шаги: {{checked}}
+Проблемы при проверке: {{issues}}

@@ -1,9 +1,9 @@
-Validate the completed task against every success criterion and every invariant. Return only structured output with passed, issues, checked_step_ids, checked_invariant_ids, and invariant_issues. Add a concise explanation to invariant_issues for each violated invariant.
+Проверь выполненную задачу по каждому критерию успеха и каждому инварианту. Верни только структурированный результат с полями `passed`, `issues`, `checked_step_ids`, `checked_invariant_ids` и `invariant_issues`. Для каждого нарушенного инварианта добавь в `invariant_issues` краткое объяснение.
 
-Original task:
+Исходная задача:
 {{task}}
 
 {{steps}}
 
-Invariants to check:
+Инварианты для проверки:
 {{invariants}}

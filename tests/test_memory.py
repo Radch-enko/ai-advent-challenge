@@ -80,7 +80,7 @@ def test_long_term_memory_precedes_working_context_and_preserves_safe_trace() ->
     assert system.index("system instructions") < system.index("<long_term_memory>")
     assert system.index('"deadline"') < system.index('"language"') < system.index('"reference"')
     assert system.index("<long_term_memory>") < system.index("<conversation_summary>")
-    assert "current dialogue is freshest" in system
+    assert "текущий диалог содержит самые свежие сведения" in system
     assert router.requests[-1][-1].content == "What next?"
 
 
@@ -216,13 +216,13 @@ def test_long_term_memory_drops_whole_items_when_bounded() -> None:
         long_term_memory=[
             memory_item("decision", f"key-{index}", value) for index, value in enumerate(values)
         ],
-        context_window=16_385,
+        context_window=18_000,
     )
 
     agent.ask("current dialogue")
 
     system = router.requests[-1][0].content
-    assert len(system[system.index("The following long-term memory") :]) <= 6_000
+    assert len(system[system.index("Следующая долговременная память") :]) <= 6_000
     assert values[0] in system
     assert values[-1] not in system
     assert values[-1][:100] not in system
@@ -270,7 +270,7 @@ def test_context_window_budget_drops_long_term_before_working_context_and_dialog
         long_term_memory=[
             memory_item("decision", f"key-{index}", value) for index, value in enumerate(values)
         ],
-        context_window=16_385,
+        context_window=18_000,
     )
 
     agent.ask("fresh dialogue")

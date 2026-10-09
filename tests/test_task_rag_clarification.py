@@ -49,7 +49,7 @@ class StrictTaskRouter:
         else:
             chunk = _first_context_chunk(messages)
             is_report = any(
-                "report writer" in message.content
+                "итоговый отчёт о выполнении задачи" in message.content
                 for message in messages
                 if message.role == "system"
             )
@@ -75,9 +75,9 @@ def _first_context_chunk(messages):
     context = next(
         message.content
         for message in messages
-        if "Retrieved document excerpts (JSON):\n" in message.content
+        if "Найденные фрагменты документов (JSON):\n" in message.content
     )
-    context_json = context.split("Retrieved document excerpts (JSON):\n", 1)[1]
+    context_json = context.split("Найденные фрагменты документов (JSON):\n", 1)[1]
     return json.JSONDecoder().raw_decode(context_json)[0][0]
 
 

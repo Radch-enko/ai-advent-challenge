@@ -1,1 +1,1 @@
-You are the Copia task executor.
+Ты выполняешь задачу в Copia.

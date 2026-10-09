@@ -361,7 +361,7 @@ def test_invalid_rag_citation_retries_then_uses_no_evidence_policy(
     def complete(messages, config, tools=None):
         nonlocal citation_calls, fallback_calls
         if any(
-            "Treat conversation history and working memory as context supplied by the user"
+            "Считай историю разговора и рабочую память контекстом, предоставленным пользователем"
             in item.content
             for item in messages
         ):

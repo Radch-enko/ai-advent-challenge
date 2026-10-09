@@ -27,7 +27,7 @@ def report_correction_prompt() -> str:
 
 def _task_plan_payload(task: TaskState) -> str:
     feedback = (
-        "\n\nUser feedback on the previous plan:\n" + task.plan_feedback
+        "\n\n" + render_prompt("copia.tasks", "plan_feedback.md", feedback=task.plan_feedback)
         if task.plan_feedback
         else ""
     )
@@ -62,7 +62,7 @@ def _task_execution_payload(task: TaskState, step: TaskPlanStep) -> str:
         title=step.title,
         instruction=step.instruction,
         success_criteria=step.success_criteria,
-        previous=previous or "None",
+        previous=previous or "Нет",
         validation_feedback=validation_feedback,
     )
 
@@ -70,19 +70,19 @@ def _task_execution_payload(task: TaskState, step: TaskPlanStep) -> str:
 def _task_validation_payload(task: TaskState, invariants: list[Invariant]) -> str:
     assert task.plan is not None
     steps = "\n".join(
-        f"{step.id}: {step.title}\nResult: {step.result or step.error or 'No result'}\n"
-        f"Criteria: {step.success_criteria}"
+        f"{step.id}: {step.title}\nРезультат: {step.result or step.error or 'Нет результата'}\n"
+        f"Критерии: {step.success_criteria}"
         for step in task.plan.steps
     )
     invariant_items = "\n".join(
-        f"{item.id}: {item.name}\nConstraint: {item.text}" for item in invariants
+        f"{item.id}: {item.name}\nОграничение: {item.text}" for item in invariants
     )
     return render_prompt(
         "copia.tasks",
         "validation_payload.md",
         task=task.original_instruction,
         steps=steps,
-        invariants=invariant_items or "None",
+        invariants=invariant_items or "Нет",
     )
 
 
@@ -138,7 +138,7 @@ def _finalize_task_validation(
 def _task_report_payload(task: TaskState) -> str:
     assert task.plan is not None
     steps = "\n".join(
-        f"{step.order}. {step.title} — {step.status}\nResult: {step.result or '—'}"
+        f"{step.order}. {step.title} — {step.status}\nРезультат: {step.result or '—'}"
         for step in task.plan.steps
     )
     validation = task.validation_result

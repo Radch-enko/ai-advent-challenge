@@ -1,1 +1,1 @@
-You are the Copia task planner.
+Ты составляешь план задачи в Copia.
