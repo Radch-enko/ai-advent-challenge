@@ -1,6 +1,7 @@
 import { ChatMessage } from '../../../domain/models/chat'
 import type { MemoryEvent } from '../../../domain/models/memory'
 import type { KnowledgeSource } from '../../../domain/models/knowledgeSource'
+import type { RagDiagnostics } from '../../../domain/models/ragDiagnostics'
 
 type Props = Pick<
   ChatMessage,
@@ -11,6 +12,7 @@ type Props = Pick<
   showRagDiagnostics?: boolean
   ragEnabled?: boolean | null
   rewrittenQuery?: string | null
+  ragDiagnostics?: RagDiagnostics | null
 }
 
 export function ExecutionSummary({
@@ -25,6 +27,7 @@ export function ExecutionSummary({
   showRagDiagnostics,
   ragEnabled,
   rewrittenQuery,
+  ragDiagnostics,
 }: Props) {
   if (
     !provider &&
@@ -59,6 +62,37 @@ export function ExecutionSummary({
               <div className="execution-summary-rag-query">
                 Переписанный запрос: <code>{rewrittenQuery ?? 'не применялся'}</code>
               </div>
+            )}
+            {ragEnabled && !sources?.length && ragDiagnostics && (
+              <div className="execution-summary-rag-diagnostics">
+                <p>
+                  {ragDiagnostics.reason === 'below_threshold'
+                    ? 'Причина отсутствия источников: ни один чанк не прошёл порог similarity.'
+                    : 'Причина отсутствия источников: найденные чанки прошли порог, но цитаты ответа не прошли проверку.'}
+                </p>
+                <p>Порог similarity: {ragDiagnostics.similarity_threshold.toFixed(6)}</p>
+                {ragDiagnostics.query_fallback_used && (
+                  <p>
+                    После поиска по переписанному запросу выполнен повторный поиск по исходному.
+                  </p>
+                )}
+                {ragDiagnostics.candidates.length > 0 && (
+                  <ul>
+                    {ragDiagnostics.candidates.map((candidate, index) => (
+                      <li key={`${candidate.source.chunk_id}-${index}`}>
+                        <code>{candidate.source.chunk_id}</code> · {candidate.source.title} ·{' '}
+                        {candidate.source.source}
+                        {candidate.source.section && ` · ${candidate.source.section}`} · similarity{' '}
+                        {candidate.source.similarity_score?.toFixed(6) ?? '—'}
+                        {candidate.text_preview && <p>{candidate.text_preview}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {ragEnabled && !sources?.length && !ragDiagnostics && (
+              <p>Причина отсутствия источников не записана для этого ответа.</p>
             )}
           </section>
         )}

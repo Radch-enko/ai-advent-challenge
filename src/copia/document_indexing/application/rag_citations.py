@@ -154,7 +154,6 @@ def validate_rag_response(
             or not isinstance(quote, str)
             or not quote.strip()
             or quote not in chunk.text
-            or quote not in answer
         ):
             raise RagCitationValidationError("RAG answer failed citation validation after retry.")
         source = metadata_by_id.get(chunk_id, chunk.source)

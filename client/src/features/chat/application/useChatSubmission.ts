@@ -218,6 +218,7 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
             actions.setRunningMcpTool(null)
           }
         },
+        userTranscriptIndex,
       )
 
       if (activeSessionIdRef.current === requestSession.id) {
@@ -249,6 +250,7 @@ export function useChatSubmission({ state, actions, meta }: ChatSubmissionOption
             sources: response.sources,
             ragEnabled: response.rag_enabled,
             rewrittenQuery: response.rewritten_query,
+            ragDiagnostics: response.rag_diagnostics,
             transcriptIndex: userTranscriptIndex + 1,
           }
           return assistantMessageId === null

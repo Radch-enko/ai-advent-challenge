@@ -20,6 +20,7 @@ export function mapStoredMessages(messages: StoredMessage[]): ChatMessage[] {
     sources: item.sources ?? [],
     ragEnabled: item.rag_enabled,
     rewrittenQuery: item.rewritten_query,
+    ragDiagnostics: item.rag_diagnostics,
     transcriptIndex: index,
   }))
 }

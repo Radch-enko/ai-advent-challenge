@@ -14,6 +14,7 @@ class OllamaProvider(OpenAIProvider):
     MAX_TOKENS_PARAMETER = "max_tokens"
     INCLUDE_STREAM_USAGE = False
     SEND_PARALLEL_TOOL_CALLS = False
+    SEND_TOOL_CHOICE = False
     capabilities = ProviderCapabilities(
         provider=ProviderName.OLLAMA,
         supported_parameters=["max_output_tokens", "temperature", "top_p"],

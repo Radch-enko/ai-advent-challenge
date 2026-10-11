@@ -78,6 +78,7 @@ class OpenAIProvider(LLMProvider):
     MAX_TOKENS_PARAMETER = "max_completion_tokens"
     INCLUDE_STREAM_USAGE = True
     SEND_PARALLEL_TOOL_CALLS = True
+    SEND_TOOL_CHOICE = True
     capabilities = ProviderCapabilities(
         provider=ProviderName.OPENAI,
         supported_parameters=["max_output_tokens", "temperature", "top_p"],
@@ -147,7 +148,8 @@ class OpenAIProvider(LLMProvider):
                 }
                 for tool in tools
             ]
-            request_payload["tool_choice"] = "auto"
+            if self.SEND_TOOL_CHOICE:
+                request_payload["tool_choice"] = "auto"
             if self.SEND_PARALLEL_TOOL_CALLS:
                 request_payload["parallel_tool_calls"] = False
         generation = config.generation
@@ -253,7 +255,8 @@ class OpenAIProvider(LLMProvider):
                 }
                 for tool in tools
             ]
-            payload["tool_choice"] = "auto"
+            if self.SEND_TOOL_CHOICE:
+                payload["tool_choice"] = "auto"
             if self.SEND_PARALLEL_TOOL_CALLS:
                 payload["parallel_tool_calls"] = False
         generation = config.generation

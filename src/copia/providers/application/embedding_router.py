@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from copia.providers.data.ollama_embedding_provider import OllamaEmbeddingProvider
 from copia.providers.data.openai_embedding_provider import OpenAIEmbeddingProvider
 from copia.providers.domain.contracts.embedding_provider import EmbeddingProvider
 from copia.providers.domain.errors import ProviderError
@@ -13,7 +14,9 @@ class EmbeddingRouter:
 
     def __init__(self, providers: Mapping[str, EmbeddingProvider] | None = None) -> None:
         self._providers = (
-            dict(providers) if providers is not None else {"openai": OpenAIEmbeddingProvider()}
+            dict(providers)
+            if providers is not None
+            else {"openai": OpenAIEmbeddingProvider(), "ollama": OllamaEmbeddingProvider()}
         )
 
     def provider(self, provider_id: str) -> EmbeddingProvider:

@@ -1,5 +1,6 @@
 import type { MemoryEvent } from './memory'
 import type { KnowledgeSource } from './knowledgeSource'
+import type { RagDiagnostics } from './ragDiagnostics'
 
 export type TokenUsage = {
   prompt_tokens?: number
@@ -33,6 +34,7 @@ export type ChatMessage = {
   sources?: KnowledgeSource[]
   ragEnabled?: boolean | null
   rewrittenQuery?: string | null
+  ragDiagnostics?: RagDiagnostics | null
 }
 
 export type SummarizationEvent = {

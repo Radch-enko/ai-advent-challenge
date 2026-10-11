@@ -3,13 +3,16 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from copia.common.domain.models.knowledge_source import KnowledgeSource
+from copia.common.domain.models.rag_diagnostics import RagDiagnosticCandidate
 from copia.document_indexing.domain.models.retrieved_chunk import RetrievedChunk
 
 
 class RagRetrievalResult(BaseModel):
     context_chunks: list[RetrievedChunk] = Field(default_factory=list)
     filtered_sources: list[KnowledgeSource] = Field(default_factory=list)
+    diagnostic_candidates: list[RagDiagnosticCandidate] = Field(default_factory=list)
     rewritten_query: str | None = None
+    query_fallback_used: bool = False
 
     @classmethod
     def from_single_chunk(cls, chunk: RetrievedChunk) -> RagRetrievalResult:

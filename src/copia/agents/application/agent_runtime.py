@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from copia.agents.domain.models.agent_config import AgentConfig
 from copia.common.domain.models.knowledge_source import KnowledgeSource
+from copia.common.domain.models.rag_diagnostics import RagDiagnostics
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.invariants.domain.models.invariant import Invariant
 from copia.profile_memory.domain.models.long_term_memory_item import LongTermMemoryItem
@@ -108,12 +109,19 @@ class Agent:
         self._history[-1] = self._history[-1].model_copy(update={"sources": sources})
 
     def attach_rag_metadata_to_last_response(
-        self, rag_enabled: bool, rewritten_query: str | None
+        self,
+        rag_enabled: bool,
+        rewritten_query: str | None,
+        rag_diagnostics: RagDiagnostics | None = None,
     ) -> None:
         if not self._history or self._history[-1].role != "assistant":
             return
         self._history[-1] = self._history[-1].model_copy(
-            update={"rag_enabled": rag_enabled, "rewritten_query": rewritten_query}
+            update={
+                "rag_enabled": rag_enabled,
+                "rewritten_query": rewritten_query,
+                "rag_diagnostics": rag_diagnostics,
+            }
         )
 
     @property

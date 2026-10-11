@@ -5,6 +5,7 @@ import { TaskState } from './task'
 import { MemoryEvent, PendingMemorySuggestion, WorkingMemoryItem } from './memory'
 import { KnowledgeSource } from './knowledgeSource'
 import { RagSettings } from './ragSettings'
+import type { RagDiagnostics } from './ragDiagnostics'
 
 type ChatResponseData = {
   content: string
@@ -33,6 +34,7 @@ export type SessionChatResponse = Omit<ChatResponse, 'response'> & {
   sources: KnowledgeSource[]
   rag_enabled: boolean
   rewritten_query: string | null
+  rag_diagnostics?: RagDiagnostics | null
 }
 
 export type StoredMessage = {
@@ -51,6 +53,7 @@ export type StoredMessage = {
   sources?: KnowledgeSource[]
   rag_enabled?: boolean | null
   rewritten_query?: string | null
+  rag_diagnostics?: RagDiagnostics | null
 }
 
 export type ChatSession = {

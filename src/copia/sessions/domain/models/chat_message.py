@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from copia.common.domain.models.knowledge_source import KnowledgeSource
+from copia.common.domain.models.rag_diagnostics import RagDiagnostics
 
 
 class ChatMessage(BaseModel):
@@ -23,3 +24,4 @@ class ChatMessage(BaseModel):
     sources: list[KnowledgeSource] = Field(default_factory=list)
     rag_enabled: bool | None = None
     rewritten_query: str | None = None
+    rag_diagnostics: RagDiagnostics | None = None

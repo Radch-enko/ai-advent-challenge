@@ -123,6 +123,7 @@ export function useConversationControls({ state, actions, meta }: ConversationCo
             sources: response.sources,
             ragEnabled: response.rag_enabled,
             rewrittenQuery: response.rewritten_query,
+            ragDiagnostics: response.rag_diagnostics,
             transcriptIndex: transcriptLength(current),
           }
           return assistantMessageId === null

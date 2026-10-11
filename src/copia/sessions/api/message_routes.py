@@ -9,6 +9,7 @@ from copia.agents.application.agent_runtime import (
     SummarizationFailed,
     SummarizationRetryRequired,
 )
+from copia.common.domain.models.rag_diagnostics import RagDiagnosticCandidate, RagDiagnostics
 from copia.common.domain.services.prompt_resources import render_prompt
 from copia.document_indexing.application.rag_citations import (
     RAG_CITATION_WARNING,
@@ -30,6 +31,12 @@ from copia.storage.domain.services.path_identifiers import validate_path_identif
 class SessionMessageRoutes:
     def __init__(self, get_dependencies: Callable[[], SessionMessageDependencies]) -> None:
         self._get_dependencies = get_dependencies
+
+    @staticmethod
+    def _provider_error_message(error: ProviderError, provider: str) -> str:
+        if error.status_code > 0:
+            return f"Provider request failed ({provider}, upstream HTTP {error.status_code})"
+        return f"Provider request failed ({provider}, no HTTP response)"
 
     async def validate_streaming_message(self, session_id: str) -> None:
         runtime = self._get_dependencies()
@@ -109,7 +116,7 @@ class SessionMessageRoutes:
                 detail="A task is active for this session; resume or wait for it to finish",
             )
         started_at = time.perf_counter()
-        completion, sources, rewritten_query = await self._prepare_rag(
+        completion, sources, rewritten_query, diagnostics = await self._prepare_rag(
             runtime, session, request.content, completion, effective_config, emit=emit
         )
         if request.config is not None and session.profile_name is None:
@@ -211,7 +218,7 @@ class SessionMessageRoutes:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
-                    "message": "Provider request failed",
+                    "message": self._provider_error_message(error, effective_config.provider.value),
                     "code": "provider_request_failed",
                 },
             ) from error
@@ -228,7 +235,10 @@ class SessionMessageRoutes:
             response = response.model_copy(update={"structured_data": None})
         if sources:
             agent.attach_sources_to_last_response(sources)
-        agent.attach_rag_metadata_to_last_response(session.rag_enabled, rewritten_query)
+        rag_diagnostics = diagnostics[0] if diagnostics and not sources else None
+        agent.attach_rag_metadata_to_last_response(
+            session.rag_enabled, rewritten_query, rag_diagnostics
+        )
         runtime.save_agent(session, agent)
         if session.title is None:
             background_tasks.add_task(runtime.generate_title, session.id)
@@ -244,6 +254,7 @@ class SessionMessageRoutes:
             sources=sources,
             rag_enabled=session.rag_enabled,
             rewritten_query=rewritten_query,
+            rag_diagnostics=rag_diagnostics,
         )
 
     async def retry_session_summarization(
@@ -270,7 +281,7 @@ class SessionMessageRoutes:
                 ),
                 "",
             )
-            completion, sources, rewritten_query = await self._prepare_rag(
+            completion, sources, rewritten_query, diagnostics = await self._prepare_rag(
                 runtime, session, query, completion, session.config
             )
             user_profile = await runtime.load_profile(session)
@@ -340,7 +351,9 @@ class SessionMessageRoutes:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail={
-                        "message": "Provider request failed",
+                        "message": self._provider_error_message(
+                            error, session.config.provider.value
+                        ),
                         "code": "provider_request_failed",
                     },
                 ) from error
@@ -357,7 +370,10 @@ class SessionMessageRoutes:
                 response = response.model_copy(update={"structured_data": None})
             if sources:
                 agent.attach_sources_to_last_response(sources)
-            agent.attach_rag_metadata_to_last_response(session.rag_enabled, rewritten_query)
+            rag_diagnostics = diagnostics[0] if diagnostics and not sources else None
+            agent.attach_rag_metadata_to_last_response(
+                session.rag_enabled, rewritten_query, rag_diagnostics
+            )
             runtime.save_agent(session, agent)
             return runtime.make_response(
                 response,
@@ -371,6 +387,7 @@ class SessionMessageRoutes:
                 sources=sources,
                 rag_enabled=session.rag_enabled,
                 rewritten_query=rewritten_query,
+                rag_diagnostics=rag_diagnostics,
             )
         finally:
             message_lock.lock.release()
@@ -378,7 +395,7 @@ class SessionMessageRoutes:
 
     async def _prepare_rag(self, runtime, session, query: str, completion, config, *, emit=None):
         if not session.rag_enabled:
-            return completion, [], None
+            return completion, [], None, []
         try:
             retrieval_args = (
                 query,
@@ -417,6 +434,14 @@ class SessionMessageRoutes:
             ) from error
         if not result.context_chunks:
             sources = []
+            diagnostics = [
+                RagDiagnostics(
+                    reason="below_threshold",
+                    similarity_threshold=session.rag_settings.similarity_threshold,
+                    query_fallback_used=result.query_fallback_used,
+                    candidates=result.diagnostic_candidates[:3],
+                )
+            ]
 
             def complete_without_context(messages, response_config):
                 response = complete_with_no_evidence_fallback(
@@ -429,9 +454,10 @@ class SessionMessageRoutes:
                     emit("message.delta", {"text": response.content})
                 return response
 
-            return complete_without_context, sources, result.rewritten_query
+            return complete_without_context, sources, result.rewritten_query, diagnostics
 
         sources = []
+        diagnostics: list[RagDiagnostics] = []
         rag_completion = (
             completion
             if config.mcp_access and completion is not None
@@ -453,16 +479,27 @@ class SessionMessageRoutes:
                 allow_uncited_fallback=False,
             )
             if response.content.startswith(RAG_CITATION_WARNING):
-                response = complete_with_no_evidence_fallback(
-                    runtime.llm_router.complete,
-                    messages,
-                    config,
-                    render_prompt("copia.document_indexing", "rag_no_evidence.md"),
+                previews_by_id = {
+                    candidate.source.chunk_id: candidate.text_preview
+                    for candidate in result.diagnostic_candidates
+                }
+                diagnostics.append(
+                    RagDiagnostics(
+                        reason="citation_validation_failed",
+                        similarity_threshold=session.rag_settings.similarity_threshold,
+                        query_fallback_used=result.query_fallback_used,
+                        candidates=[
+                            RagDiagnosticCandidate(
+                                source=source,
+                                text_preview=previews_by_id.get(source.chunk_id, ""),
+                            )
+                            for source in result.filtered_sources[:3]
+                        ],
+                    )
                 )
-                verified_sources = []
             sources[:] = verified_sources
             if emit is not None:
                 emit("message.delta", {"text": response.content})
             return response
 
-        return complete_with_rag, sources, result.rewritten_query
+        return complete_with_rag, sources, result.rewritten_query, diagnostics

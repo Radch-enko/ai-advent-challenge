@@ -5,6 +5,7 @@ import json
 import math
 from typing import Any
 
+from copia.common.domain.models.rag_diagnostics import RagDiagnosticCandidate
 from copia.common.domain.models.rag_settings import RagSettings
 from copia.common.domain.services.llm_context_builder import LLMContextBuilder
 from copia.common.domain.services.prompt_resources import render_prompt
@@ -91,9 +92,11 @@ class DocumentRetriever:
 
             candidates = self._search(search_query, settings)
             filtered = _filter_candidates(candidates, settings)
+            query_fallback_used = False
             if not filtered and search_query != question:
                 candidates = self._search(question, settings)
                 filtered = _filter_candidates(candidates, settings)
+                query_fallback_used = True
             selected_ids = {chunk.source.chunk_id for _, chunk in filtered}
 
             if settings.reranker_enabled and filtered:
@@ -118,10 +121,21 @@ class DocumentRetriever:
                 )
                 for score, chunk in filtered
             ]
+            diagnostic_candidates = [
+                RagDiagnosticCandidate(
+                    source=chunk.source.model_copy(
+                        update={"similarity_score": score, "selected_for_context": False}
+                    ),
+                    text_preview=chunk.text[:240],
+                )
+                for score, chunk in candidates[:3]
+            ]
             return RagRetrievalResult(
                 context_chunks=context_chunks,
                 filtered_sources=sources,
+                diagnostic_candidates=diagnostic_candidates,
                 rewritten_query=rewritten_query,
+                query_fallback_used=query_fallback_used,
             )
         except DocumentRetrievalError:
             raise

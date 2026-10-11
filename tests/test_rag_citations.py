@@ -33,8 +33,17 @@ def make_result(text: str = "A fictional handbook says a blue kite is stored in 
     )
 
 
-def make_response(answer: str, *, chunk_id: str = "handbook-4", quote: str = "blue kite"):
-    data = {"answer": answer, "citations": [{"chunk_id": chunk_id, "quote": quote}]}
+def make_response(
+    answer: str,
+    *,
+    chunk_id: str = "handbook-4",
+    quote: str = "blue kite",
+    citations: list[dict[str, str]] | None = None,
+):
+    data = {
+        "answer": answer,
+        "citations": citations or [{"chunk_id": chunk_id, "quote": quote}],
+    }
     return LLMResponse(
         content="provider JSON must not be returned as the answer",
         structured_data=data,
@@ -49,9 +58,8 @@ def make_response(answer: str, *, chunk_id: str = "handbook-4", quote: str = "bl
         make_response("   "),
         make_response("The kite is blue: blue kite", chunk_id="unknown-chunk"),
         make_response("The kite is blue: missing phrase", quote="missing phrase"),
-        make_response("The kite is blue", quote="blue kite"),
     ],
-    ids=["empty-answer", "unknown-chunk-id", "quote-not-in-chunk", "quote-not-in-answer"],
+    ids=["empty-answer", "unknown-chunk-id", "quote-not-in-chunk"],
 )
 def test_invalid_citations_are_rejected(response: LLMResponse) -> None:
     with pytest.raises(RagCitationValidationError):
@@ -78,10 +86,23 @@ def test_valid_citation_uses_retrieved_source_and_plain_answer() -> None:
     }
 
 
+def test_citation_is_valid_when_answer_paraphrases_the_exact_source_quote() -> None:
+    response = make_response(
+        "A blue kite is kept in locker four.",
+        quote="blue kite is stored in locker 4",
+    )
+
+    validated, sources = validate_rag_response(response, make_result())
+
+    assert validated.content == "A blue kite is kept in locker four."
+    assert len(sources) == 1
+    assert sources[0].quote == "blue kite is stored in locker 4"
+
+
 def test_invalid_first_response_is_retried_and_only_verified_answer_returns() -> None:
     result = make_result()
     answers = [
-        make_response("The kite is blue.", quote="blue kite"),
+        make_response("The kite is blue.", quote="missing phrase"),
         make_response(
             'The kite is in locker 4: "blue kite is stored in locker 4".',
             quote="blue kite is stored in locker 4",
@@ -111,7 +132,14 @@ def test_invalid_first_response_is_retried_and_only_verified_answer_returns() ->
 
 
 def test_second_invalid_response_returns_answer_with_warning_and_safe_source() -> None:
-    responses = [make_response("unverified"), make_response("still unverified")]
+    citations = [
+        {"chunk_id": "handbook-4", "quote": "blue kite"},
+        {"chunk_id": "unknown-chunk", "quote": "invented quote"},
+    ]
+    responses = [
+        make_response("unverified", citations=citations),
+        make_response("still unverified", citations=citations),
+    ]
     calls = 0
 
     def complete(messages, config):

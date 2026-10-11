@@ -339,7 +339,7 @@ def test_rag_preserves_llm_response_when_chunk_is_below_similarity_threshold(
     assert "answer_mode" not in llm_configs[-1].structured_output.json_schema["properties"]
 
 
-def test_invalid_rag_citation_retries_then_uses_no_evidence_policy(
+def test_invalid_rag_citation_retries_then_preserves_answer_with_warning(
     monkeypatch, tmp_path: Path
 ) -> None:
     sessions = setup_runtime(monkeypatch, tmp_path)
@@ -383,7 +383,7 @@ def test_invalid_rag_citation_retries_then_uses_no_evidence_policy(
             citation_calls += 1
         data = {
             "answer": "The blue kite is stored somewhere.",
-            "citations": [{"chunk_id": "handbook-4", "quote": "blue kite in locker 4"}],
+            "citations": [{"chunk_id": "handbook-4", "quote": "blue kite in cabinet 9"}],
         }
         return LLMResponse(
             content=json.dumps(data),
@@ -403,11 +403,12 @@ def test_invalid_rag_citation_retries_then_uses_no_evidence_policy(
 
     assert response.status_code == 200
     content = response.json()["response"]["content"]
-    assert content == "I could not find this personal detail in the knowledge base."
+    assert content.startswith("⚠️ Цитаты не прошли проверку. Ответ модели может быть ошибочным.\n\n")
+    assert "The blue kite is stored somewhere." in content
     assert "Не знаю." not in content
     assert response.json()["sources"] == []
     assert citation_calls == 2
-    assert fallback_calls == 1
+    assert fallback_calls == 0
     saved_messages = sessions.load(session["id"]).messages
     assert saved_messages[-1].content == content
     assert saved_messages[-1].sources == []

@@ -22,6 +22,7 @@ import { useMcpConnections } from './features/mcp/application/useMcpConnections'
 import { useTaskActions } from './features/tasks/application/useTaskActions'
 import { useSessionMemory } from './features/memory/application/useSessionMemory'
 import { mapStoredMessages } from './features/chat/application/sessionTranscript'
+import { pendingUserMessagesForSession } from './data/api/conversationStream'
 import { useConversationRecovery } from './features/chat/application/useConversationRecovery'
 import { useChatSubmission } from './features/chat/application/useChatSubmission'
 import { useSessionOperations } from './features/chat/application/useSessionOperations'
@@ -33,6 +34,7 @@ import { Agents } from './features/agents/ui/Agents'
 import {
   contextTokenCount,
   normalizeContextManagement,
+  now,
   supportsSamplingParameters,
   transcriptLength,
 } from './features/chat/application/conversationUtils'
@@ -359,7 +361,29 @@ export function App() {
       activeSessionIdRef.current = session.id
       localStorage.setItem('copia.activeSessionId', session.id)
       if (session.profile_name == null) applyConfig(session.config)
-      setMessages(mapStoredMessages(session.messages))
+      const restoredMessages = mapStoredMessages(session.messages)
+      for (const [index, pendingMessage] of pendingUserMessagesForSession(session.id).entries()) {
+        if (
+          restoredMessages.some(
+            (entry) =>
+              entry.role === 'user' && entry.transcriptIndex === pendingMessage.transcript_index,
+          )
+        )
+          continue
+        restoredMessages.push({
+          id: Date.now() + index,
+          role: 'user',
+          content: pendingMessage.content,
+          timestamp: now(),
+          transcriptIndex: pendingMessage.transcript_index,
+        })
+      }
+      restoredMessages.sort(
+        (left, right) =>
+          (left.transcriptIndex ?? Number.MAX_SAFE_INTEGER) -
+          (right.transcriptIndex ?? Number.MAX_SAFE_INTEGER),
+      )
+      setMessages(restoredMessages)
       setSummarizationEvents(session.context.events)
       setFactsEvents(session.context.facts_events ?? [])
       void refreshInvariants()

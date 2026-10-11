@@ -10,7 +10,10 @@ type ActiveConversation = {
   request_id: string
   conversation_id: string | null
   last_event_id: string | null
+  pending_user_message?: PendingUserMessage
 }
+
+export type PendingUserMessage = { content: string; transcript_index: number }
 
 const activeRequestIds = new Set<string>()
 
@@ -26,6 +29,12 @@ function readActiveConversations(key: string): ActiveConversation[] {
   } catch {
     return []
   }
+}
+
+export function pendingUserMessagesForSession(sessionId: string): PendingUserMessage[] {
+  return readActiveConversations(activeConversationsKey(sessionId))
+    .map((conversation) => conversation.pending_user_message)
+    .filter((message): message is PendingUserMessage => message != null)
 }
 
 function updateActiveConversation(key: string, conversation: ActiveConversation): void {
@@ -111,10 +120,11 @@ export async function streamConversationResilient(
   command: ConversationCommand,
   onEvent: (event: ConversationEvent) => void,
   storageScopeId?: string,
+  pendingUserMessage?: PendingUserMessage,
 ): Promise<void> {
   activeRequestIds.add(command.request_id)
   try {
-    await runConversationStream(command, onEvent, storageScopeId)
+    await runConversationStream(command, onEvent, storageScopeId, pendingUserMessage)
   } finally {
     activeRequestIds.delete(command.request_id)
   }
@@ -124,6 +134,7 @@ async function runConversationStream(
   command: ConversationCommand,
   onEvent: (event: ConversationEvent) => void,
   storageScopeId?: string,
+  pendingUserMessage?: PendingUserMessage,
 ): Promise<void> {
   const sessionId =
     storageScopeId ??
@@ -147,6 +158,7 @@ async function runConversationStream(
     request_id: command.request_id,
     conversation_id: conversationId,
     last_event_id: lastEventId,
+    pending_user_message: pendingUserMessage,
   })
   for (let attempt = 0; attempt < 4 && !terminal; attempt += 1) {
     const nextCommand: ConversationCommand =
@@ -179,6 +191,7 @@ async function runConversationStream(
             request_id: command.request_id,
             conversation_id: conversationId,
             last_event_id: lastEventId,
+            pending_user_message: pendingUserMessage,
           })
         }
         onEvent(event)
@@ -196,14 +209,22 @@ async function runConversationStream(
 export async function resumeActiveConversations(
   sessionId: string,
   onEvent: (event: ConversationEvent) => void,
+  onPendingUserMessage?: (message: PendingUserMessage) => void,
+  onRecoveryStart?: () => void,
 ): Promise<void> {
   const storageKey = activeConversationsKey(sessionId)
-  const active = readActiveConversations(storageKey).filter(
+  const conversations = readActiveConversations(storageKey)
+  conversations.forEach((conversation) => {
+    if (conversation.pending_user_message) onPendingUserMessage?.(conversation.pending_user_message)
+  })
+  const active = conversations.filter(
     (conversation) => !activeRequestIds.has(conversation.request_id),
   )
+  if (!active.length) return
+  onRecoveryStart?.()
   await Promise.all(
-    active.map((conversation) =>
-      streamConversationResilient(
+    active.map((conversation) => {
+      return streamConversationResilient(
         {
           command: 'resume',
           request_id: conversation.request_id,
@@ -212,10 +233,11 @@ export async function resumeActiveConversations(
         },
         onEvent,
         sessionId,
+        conversation.pending_user_message,
       ).catch((error: unknown) => {
         removeActiveConversation(storageKey, conversation.request_id)
         throw error
-      }),
-    ),
+      })
+    }),
   )
 }

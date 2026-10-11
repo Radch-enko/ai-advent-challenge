@@ -11,6 +11,7 @@ export async function sendConversationMessage(
   content: string,
   config: AgentConfig | undefined,
   onEvent: (event: ConversationEvent) => void,
+  transcriptIndex: number,
 ): Promise<SessionChatResponse> {
   let result: SessionChatResponse | undefined
   let failure: string | undefined
@@ -21,12 +22,18 @@ export async function sendConversationMessage(
     content,
     config,
   }
-  await streamConversationResilient(command, (event) => {
-    onEvent(event)
-    if (event.event === 'conversation.completed') result = event.data.result as SessionChatResponse
-    if (event.event === 'conversation.failed')
-      failure = String(event.data.message ?? 'Conversation failed')
-  })
+  await streamConversationResilient(
+    command,
+    (event) => {
+      onEvent(event)
+      if (event.event === 'conversation.completed')
+        result = event.data.result as SessionChatResponse
+      if (event.event === 'conversation.failed')
+        failure = String(event.data.message ?? 'Conversation failed')
+    },
+    undefined,
+    target.kind === 'session' ? { content, transcript_index: transcriptIndex } : undefined,
+  )
   if (failure) throw new Error(failure)
   if (!result) throw new Error('Conversation ended without a result')
   return result

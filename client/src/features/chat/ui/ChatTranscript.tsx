@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useLayoutEffect, useRef } from 'react'
 import { ContextManagementConfig } from '../../../domain/models/agent'
 import { ChatMessage, FactsUpdateEvent, SummarizationEvent } from '../../../domain/models/chat'
 import { ChatSession } from '../../../domain/models/session'
@@ -81,9 +81,33 @@ export function ChatTranscript({
 }: Props) {
   const pendingApproval = mcpApproval ?? activeTask?.mcp_approval
   const activeTool = runningMcpTool ?? activeTask?.mcp_running_tool
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+  const lastUserKeyRef = useRef<string | null>(null)
+
+  useLayoutEffect(() => {
+    const lastUser = [...messages].reverse().find((entry) => entry.role === 'user')
+    const userKey = lastUser ? `${activeSession?.id ?? 'draft'}:${lastUser.id}` : null
+    const newUserMessage = userKey !== null && userKey !== lastUserKeyRef.current
+    lastUserKeyRef.current = userKey
+    const scroll = scrollRef.current
+    if (scroll && (newUserMessage || stickToBottomRef.current)) {
+      scroll.scrollTop = scroll.scrollHeight
+      stickToBottomRef.current = true
+    }
+  }, [activeSession?.id, activeTool, isLoading, isSummarizing, messages, pendingApproval])
 
   return (
-    <div className="messages-scroll" aria-live="polite">
+    <div
+      className="messages-scroll"
+      aria-live="polite"
+      ref={scrollRef}
+      onScroll={(event) => {
+        const scroll = event.currentTarget
+        stickToBottomRef.current =
+          scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 100
+      }}
+    >
       <div className="message-list">
         {messages.map((entry, index) => {
           const task = entry.taskId
@@ -221,6 +245,7 @@ export function ChatTranscript({
                       }
                       ragEnabled={entry.ragEnabled}
                       rewrittenQuery={entry.rewrittenQuery}
+                      ragDiagnostics={entry.ragDiagnostics}
                     />
                   )}
                   {(entry.timestamp ||

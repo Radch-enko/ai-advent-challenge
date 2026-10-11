@@ -186,7 +186,7 @@ export function DocumentsLibrary({
               list="embedding-model-options"
               value={modelDraft}
               onChange={(event) => setModelDraft(event.target.value)}
-              placeholder="text-embedding-3-small"
+              placeholder={selectedProvider?.default_model ?? 'text-embedding-3-small'}
             />
             <datalist id="embedding-model-options">
               {selectedProvider?.models.map((model) => (
@@ -215,7 +215,9 @@ export function DocumentsLibrary({
         </div>
         {selectedProvider && !selectedProvider.configured ? (
           <p className="documents-inline-note">
-            Провайдер не настроен. Добавьте его ключ в переменные окружения backend.
+            {selectedProvider.id === 'ollama'
+              ? 'Укажите OLLAMA_BASE_URL для локального сервера Ollama.'
+              : 'Провайдер не настроен. Добавьте его ключ в переменные окружения backend.'}
           </p>
         ) : null}
         {selectedProvider?.models_error ? (
