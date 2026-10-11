@@ -16,6 +16,7 @@ class CopiaSettings(BaseSettings):
     documents_path_override: Path | None = Field(
         default=None, validation_alias="COPIA_DOCUMENTS_PATH"
     )
+    journal_path_override: Path | None = Field(default=None, validation_alias="COPIA_JOURNAL_PATH")
     profiles_path_override: Path | None = Field(
         default=None, validation_alias="COPIA_PROFILES_PATH"
     )
@@ -100,6 +101,12 @@ class CopiaSettings(BaseSettings):
     @property
     def expenses_path(self) -> Path:
         return self.expenses_path_override or self.data_root / "files/finances.xlsx"
+
+    @property
+    def journal_path(self) -> Path:
+        return self.journal_path_override or (
+            self.documents_path / "CopiaKnowledgeBase" / "Journal"
+        )
 
     @property
     def mcp_connections_path(self) -> Path:

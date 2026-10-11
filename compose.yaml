@@ -9,10 +9,11 @@ services:
     environment:
       COPIA_DATA_ROOT: /data
       COPIA_PROFILES_PATH: /app/profiles.json
+      COPIA_JOURNAL_PATH: /data/journal
       COPIA_OTEL_ENABLED: "true"
       COPIA_OTEL_CAPTURE_HTTP_BODIES: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4317}
-      COPIA_MCP_TRUSTED_ENDPOINT: http://mcp-server:8001/mcp
+      COPIA_MCP_TRUSTED_ENDPOINT: http://mcp-server:8001/mcp,http://journal-mcp-server:8002/mcp
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -21,8 +22,13 @@ services:
         source: ${HOME}/Desktop/CopiaKnowledgeBase
         target: /data/documents/CopiaKnowledgeBase
         read_only: true
+      - type: bind
+        source: ${HOME}/Desktop/CopiaKnowledgeBase/Journal
+        target: /data/journal
+        read_only: false
     depends_on:
       - mcp-server
+      - journal-mcp-server
 
   mcp-server:
     build:
@@ -32,6 +38,15 @@ services:
       COPIA_API_URL: http://backend:8000
     expose:
       - "8001"
+
+  journal-mcp-server:
+    build:
+      context: ./journal-mcp-server
+      dockerfile: Dockerfile
+    environment:
+      COPIA_API_URL: http://backend:8000
+    expose:
+      - "8002"
 
   frontend:
     build:

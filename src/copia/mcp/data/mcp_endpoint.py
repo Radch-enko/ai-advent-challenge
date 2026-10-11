@@ -20,6 +20,12 @@ MAX_HEADER_NAME_LENGTH = 256
 MAX_HEADER_VALUE_LENGTH = 4096
 MAX_ERROR_BODY_BYTES = 8 * 1024
 TRUSTED_DOCKER_MCP_ENDPOINT = "http://mcp-server:8001/mcp"
+TRUSTED_DOCKER_MCP_ENDPOINTS = frozenset(
+    {
+        TRUSTED_DOCKER_MCP_ENDPOINT,
+        "http://journal-mcp-server:8002/mcp",
+    }
+)
 CONNECT_TIMEOUT_SECONDS = 15.0
 READ_TIMEOUT_SECONDS = 40.0
 WRITE_TIMEOUT_SECONDS = 5.0
@@ -145,7 +151,10 @@ def _parse_endpoint(
         raise _reject() from error
     scheme = parsed.scheme.lower()
     local_endpoint = bool(hostname and allow_local and _is_loopback_hostname(hostname))
-    docker_endpoint = allow_trusted_docker and hostname == "mcp-server" and port == 8001
+    docker_endpoint = allow_trusted_docker and (hostname, port, parsed.path) in {
+        ("mcp-server", 8001, "/mcp"),
+        ("journal-mcp-server", 8002, "/mcp"),
+    }
     if (
         (scheme != "https" and not ((local_endpoint or docker_endpoint) and scheme == "http"))
         or not hostname
@@ -189,9 +198,13 @@ def _request_headers(header_name: str | None, header_value: str | None) -> dict[
 
 
 async def _validate_endpoint(endpoint: str, *, allow_local: bool = False) -> _ValidatedEndpoint:
+    configured_trusted_endpoints = {
+        item.strip()
+        for item in (get_settings().trusted_mcp_endpoint or "").split(",")
+        if item.strip()
+    }
     trusted_docker_endpoint = (
-        endpoint == TRUSTED_DOCKER_MCP_ENDPOINT
-        and get_settings().trusted_mcp_endpoint == TRUSTED_DOCKER_MCP_ENDPOINT
+        endpoint in TRUSTED_DOCKER_MCP_ENDPOINTS and endpoint in configured_trusted_endpoints
     )
     parsed = _parse_endpoint(
         endpoint,
@@ -225,7 +238,7 @@ async def _validate_endpoint(endpoint: str, *, allow_local: bool = False) -> _Va
         local_endpoint = allow_local and _is_loopback_hostname(hostname)
         mapped = getattr(address, "ipv4_mapped", None)
         effective_address = mapped or address
-        docker_private_endpoint = trusted_docker_endpoint and hostname == "mcp-server"
+        docker_private_endpoint = trusted_docker_endpoint
         if local_endpoint and not effective_address.is_loopback:
             raise _reject("Local MCP endpoint must resolve only to loopback addresses")
         if docker_private_endpoint and (

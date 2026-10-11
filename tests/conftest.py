@@ -18,6 +18,7 @@ for _name in (
     "COPIA_SCHEDULES_PATH",
     "COPIA_SCHEDULER_STATE_PATH",
     "COPIA_EXPENSES_PATH",
+    "COPIA_JOURNAL_PATH",
 ):
     os.environ.pop(_name, None)
 

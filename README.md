@@ -37,6 +37,19 @@ Set `OLLAMA_BASE_URL` to the Ollama server origin reachable from the backend. Co
 
 For fully local document search, install a separate Ollama embedding model, for example `ollama pull qwen3-embedding:0.6b`. In Documents, select Ollama as the embedding provider, enter that exact model ID, and reindex the Markdown files. The index manifest records the embedding provider and model; search queries use the same pair. Select an installed Ollama chat model for answer generation. Older OpenAI embedding indexes remain usable, but searching them still calls OpenAI for each query embedding. Ollama chunk token counts are approximate character counts because Ollama does not expose its tokenizer over HTTP.
 
+### Daily journal agent
+
+The `daily_journal` profile uses the local `copia-daily-journal-q4` Ollama model. Install its Q4 base model and create the context-configured variant:
+
+```bash
+ollama pull qwen3:4b-instruct-2507-q4_K_M
+ollama create copia-daily-journal-q4 -f models/DailyJournal.Modelfile
+```
+
+The profile sets `temperature` to `0.2` and `max_output_tokens` to `768`; the Modelfile sets `num_ctx` to `8192`. In MCP settings, add a connection with ID `journal` and the Journal MCP endpoint. Local development uses `http://127.0.0.1:8002/mcp`; Docker uses `http://journal-mcp-server:8002/mcp`. The `daily_journal` profile enables the `get_daily_journal` and `apply_daily_journal_changes` tools.
+
+Journal files are stored under `CopiaKnowledgeBase/Journal/YYYY-MM-DD.md`. Each write requires the existing MCP approval. Copia does not reindex after a write; start document indexing manually when the new or changed note should be searchable through RAG.
+
 Storage paths can be overridden with `COPIA_PROFILES_PATH`, `COPIA_SESSIONS_PATH`, `COPIA_INVARIANTS_PATH`, `COPIA_MEMORY_PATH`, `COPIA_USER_PROFILES_PATH`, `COPIA_EXPENSES_PATH`, `COPIA_MCP_CONNECTIONS_PATH`, `COPIA_MCP_ARTIFACTS_PATH`, `COPIA_SCHEDULED_RUNS_PATH`, `COPIA_SCHEDULES_PATH`, and `COPIA_SCHEDULER_STATE_PATH`. Without overrides, stores use `COPIA_DATA_ROOT` and profiles use the repository's `profiles.json`.
 
 `COPIA_ALLOW_LOCAL_MCP` enables local MCP endpoints unless set to `false`. `COPIA_MCP_TRUSTED_ENDPOINT` opts in to the configured private Docker endpoint. OpenTelemetry is opt-in through `COPIA_OTEL_ENABLED`; HTTP body capture is separately opt-in through `COPIA_OTEL_CAPTURE_HTTP_BODIES`. `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` configure the exporter and service identity.

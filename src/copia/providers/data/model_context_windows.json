@@ -32,5 +32,8 @@
     "GigaChat-2": 128000,
     "GigaChat-Pro": 128000,
     "GigaChat-2-Pro": 128000
+  },
+  "ollama": {
+    "copia-daily-journal-q4": 8192
   }
 }

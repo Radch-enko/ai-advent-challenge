@@ -21,6 +21,8 @@ from copia.common.observability import shutdown as shutdown_observability
 from copia.conversations.api.router import create_conversation_router
 from copia.conversations.api.service_composition import ConversationServiceComposition
 from copia.conversations.application.conversation_store import ConversationStore
+from copia.daily_journal.api.router import create_daily_journal_router
+from copia.daily_journal.data.daily_journal_repository import DailyJournalRepository
 from copia.document_indexing.api.service_composition import DocumentIndexingServiceComposition
 from copia.expenses.api.router import create_expenses_router
 from copia.expenses.api.validation import expense_validation_error_response
@@ -123,6 +125,7 @@ invariants_repository = InvariantsRepository(
 )
 user_profiles = JsonUserProfilesRepository(settings.user_profiles_path)
 expenses = ExpensesRepository(settings.expenses_path)
+journal = DailyJournalRepository(settings.journal_path)
 mcp_connections = McpConnectionsRepository(settings.mcp_connections_path)
 mcp_artifact_store = McpArtifactStore(settings.mcp_artifacts_path)
 session_lifecycle_lock = threading.RLock()
@@ -238,6 +241,7 @@ _start_task_worker = task_workflow.start_worker
 
 
 app.include_router(create_expenses_router(lambda: expenses))
+app.include_router(create_daily_journal_router(lambda: journal))
 app.include_router(document_indexing_composition.router())
 
 

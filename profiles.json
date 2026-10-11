@@ -169,5 +169,30 @@
         "enabled_tools": ["openmeteo_get_forecast"]
       }
     ]
+  },
+  "daily_journal": {
+    "name": "Дневник дня",
+    "description": "Помогает вести ежедневную заметку по фиксированному шаблону и сохраняет подтверждённые правки через MCP.",
+    "avatar_path": "/agents/researcher.png",
+    "provider": "ollama",
+    "model": "copia-daily-journal-q4",
+    "generation": {
+      "max_output_tokens": 768,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    "context_management": {
+      "enabled": false
+    },
+    "mcp_access": [
+      {
+        "connection_id": "journal",
+        "enabled_tools": [
+          "get_daily_journal",
+          "apply_daily_journal_changes"
+        ]
+      }
+    ],
+    "system_prompt_resource": "copia.daily_journal:daily_journal.md"
   }
 }
