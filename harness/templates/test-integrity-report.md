@@ -1,0 +1,43 @@
+# Отчёт Test Integrity
+
+## Резюме
+
+- Task:
+- Report Type: `ACTUAL` or `SYNTHETIC_EXAMPLE`
+- Risk Level: `MEDIUM` or `HIGH`
+- Changed Test Files:
+- Reviewer Verdict: `PENDING`, `APPROVED`, `APPROVED_WITH_NOTES`, or `REJECTED`
+- Final Outcome: `PENDING`, `MERGED`, `REWORK_REQUIRED`, `BLOCKED_WAITING_FOR_HUMAN_APPROVAL`, or `ABANDONED`
+
+## Обоснование
+
+- Reason Category: `SPECIFICATION_CHANGED`, `ACCEPTANCE_CRITERIA_CHANGED`, `TEST_BUG`, `FLAKY_TEST`, `IMPLEMENTATION_DETAIL_TO_BEHAVIOR`, `EXPANDED_COVERAGE`, or `REFACTORING_NO_BEHAVIOR_CHANGE`
+- Why The Test Changed:
+- Old Expected Behavior:
+- New Expected Behavior:
+- Affected Acceptance Criteria:
+- Specification Changed: `YES` or `NO`
+- Incorrect Artifact: `PRODUCTION_CODE`, `TEST`, `BOTH`, or `UNCLEAR`
+
+## Согласование удаления
+
+- Existing Test Deleted: `YES` or `NO`
+- Human Approval Required: `YES` or `NO`
+- Human Approval Status: `NOT_REQUIRED`, `REQUESTED`, `APPROVED`, or `DENIED`
+- Approval Evidence:
+
+## Оценка ревьюера
+
+- Is The Justification Valid:
+- Does The Test Still Protect The Same Behavior:
+- Was Production Code Incorrectly Avoided:
+- Should Production Code Have Been Fixed Instead:
+- Synthetic Test Data Review: `YES` or `NO`
+- Synthetic Test Data Evidence:
+- Notes:
+
+## Evidence
+
+- Diff Evidence:
+- Verification Commands:
+- Related Production Changes:
