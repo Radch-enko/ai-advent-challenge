@@ -9,7 +9,7 @@ import { Markdown } from './chatAppComponents'
 import {
   FactsUpdateIndicator,
   SummarizationIndicator,
-} from '../../configuration/ui/settingsComponents'
+} from '../../configuration/ui/contextIndicators'
 import { currentTaskLoadingStep } from '../../tasks/application/taskSelectors'
 import { TaskSubtaskLoadingMessage } from '../../tasks/ui/taskLoadingComponents'
 import { TaskProgressPanel } from '../../tasks/ui/TaskProgressPanel'
