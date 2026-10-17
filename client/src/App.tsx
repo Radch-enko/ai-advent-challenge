@@ -29,7 +29,7 @@ import { useSessionOperations } from './features/chat/application/useSessionOper
 import { useConversationControls } from './features/chat/application/useConversationControls'
 import { AppMode, ApplicationShell } from './ui/ApplicationShell'
 import { ProfileIndicator } from './features/chat/ui/chatAppComponents'
-import { ProfileSessionSettings, Settings } from './features/configuration/ui/settingsComponents'
+import { ProfileSessionSettings, Settings } from './features/configuration/ui/settingsScreens'
 import { Agents } from './features/agents/ui/Agents'
 import {
   contextTokenCount,

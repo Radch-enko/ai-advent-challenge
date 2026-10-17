@@ -1,8 +1,5 @@
-import {
-  SummarizationSettings,
-  ModelsSelect,
-  ProviderSelect,
-} from '../../configuration/ui/settingsComponents'
+import { SummarizationSettings } from '../../configuration/ui/contextSettings'
+import { ModelsSelect, ProviderSelect } from '../../configuration/ui/settingsControls'
 import {
   resizeTextArea,
   supportsSamplingParameters,
