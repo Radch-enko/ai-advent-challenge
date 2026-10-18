@@ -1,0 +1,30 @@
+services:
+  reviewer:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      REVIEWER_DATA_DIR: /data
+      REVIEWER_PORT: "8080"
+    secrets:
+      - source: github_app_private_key
+        target: github-app.pem
+    volumes:
+      - reviewer_data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  github_app_private_key:
+    file: ${GITHUB_APP_PRIVATE_KEY_FILE}
+
+volumes:
+  reviewer_data:

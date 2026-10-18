@@ -2,7 +2,7 @@ import json
 import math
 import os
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import closing
 from pathlib import Path
 
@@ -174,6 +174,7 @@ class IndexStore:
         requested_dimensions: int | None,
         top_k: int,
         minimum_similarity: float,
+        prioritized_paths: Collection[str] = (),
     ) -> list[SearchHit]:
         if not self.is_compatible(embedding_model, requested_dimensions):
             raise IndexCompatibilityError(
@@ -234,6 +235,7 @@ class IndexStore:
 
         hits.sort(
             key=lambda hit: (
+                hit.chunk.source_path not in prioritized_paths,
                 -hit.score,
                 hit.chunk.source_path,
                 hit.chunk.start_line,

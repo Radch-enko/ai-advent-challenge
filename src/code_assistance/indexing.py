@@ -1,14 +1,14 @@
 import hashlib
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from code_assistance.chunking import chunk_document
-from code_assistance.documents import collect_documents
+from code_assistance.documents import DocumentCollection, collect_documents
 from code_assistance.errors import IndexCompatibilityError, ProviderError
 from code_assistance.index_store import IndexStore
-from code_assistance.models import Chunk
+from code_assistance.models import Chunk, Document
 from code_assistance.ports import EmbeddingProvider
 
 EMBEDDING_BATCH_SIZE = 64
@@ -36,6 +36,8 @@ class IndexSynchronizer:
         embedding_model: str,
         embedding_dimensions: int | None,
         max_file_bytes: int,
+        collector: Callable[[Path, int], DocumentCollection] = collect_documents,
+        progress: Callable[[int, int], None] | None = None,
     ) -> None:
         self.repository_root = repository_root.resolve(strict=True)
         self.store = store
@@ -43,9 +45,11 @@ class IndexSynchronizer:
         self.embedding_model = embedding_model
         self.embedding_dimensions = embedding_dimensions
         self.max_file_bytes = max_file_bytes
+        self.collector = collector
+        self.progress = progress
 
     def sync(self, force: bool = False) -> SyncResult:
-        collection = collect_documents(self.repository_root, self.max_file_bytes)
+        collection = self.collector(self.repository_root, self.max_file_bytes)
         current_documents = {document.path: document for document in collection.documents}
         current_digests = {path: document.digest for path, document in current_documents.items()}
         old_digests = self.store.document_digests()
@@ -63,50 +67,67 @@ class IndexSynchronizer:
         )
         removed_paths = set(old_digests) - set(current_documents)
 
-        changed_chunks = {path: chunk_document(current_documents[path]) for path in changed_paths}
-        all_chunks = [chunk for chunks in changed_chunks.values() for chunk in chunks]
-        vectors = self._embed_chunks(all_chunks)
-        dimension = len(vectors[0]) if vectors else None
-
         previous_dimension = metadata.get("actual_dimensions")
-        if (
-            not reset
-            and dimension is not None
-            and previous_dimension
-            and int(previous_dimension) != dimension
-        ):
-            reset = True
-            changed_paths = set(current_documents)
-            changed_chunks = {
-                path: chunk_document(document) for path, document in current_documents.items()
-            }
-            all_chunks = [chunk for chunks in changed_chunks.values() for chunk in chunks]
-            vectors = self._embed_chunks(all_chunks)
-            dimension = len(vectors[0]) if vectors else None
-
-        embedded_chunks: dict[str, list[tuple[Chunk, Sequence[float]]]] = {}
-        offset = 0
-        for path in changed_paths:
-            chunks = changed_chunks[path]
-            embedded_chunks[path] = []
-            for chunk in chunks:
-                embedded_chunks[path].append((chunk, vectors[offset]))
-                offset += 1
-
-        self.store.apply_sync(
-            document_digests=current_digests,
-            indexed_chunks=embedded_chunks,
-            removed_paths=removed_paths,
-            embedding_model=self.embedding_model,
-            requested_dimensions=self.embedding_dimensions,
-            actual_dimensions=dimension
-            or (
-                int(previous_dimension)
-                if not reset and previous_dimension
-                else self.embedding_dimensions
-            ),
-            reset=reset,
-        )
+        while True:
+            groups = self._document_groups(current_documents, changed_paths)
+            cached_count = len(current_documents) - len(changed_paths)
+            if self.progress is not None:
+                self.progress(cached_count, len(current_documents))
+            completed = 0
+            actual_dimension = int(previous_dimension) if not reset and previous_dimension else None
+            restart = False
+            embedded_any = False
+            for group in groups:
+                chunks = {path: chunk_document(current_documents[path]) for path in group}
+                ordered = [chunk for path in group for chunk in chunks[path]]
+                vectors = self._embed_chunks(ordered)
+                dimension = len(vectors[0]) if vectors else None
+                if dimension is not None and actual_dimension is not None:
+                    if dimension != actual_dimension:
+                        if not reset and not embedded_any:
+                            reset = True
+                            changed_paths = set(current_documents)
+                            restart = True
+                            break
+                        raise IndexCompatibilityError(
+                            "The embedding provider changed dimensions during indexing."
+                        )
+                actual_dimension = dimension or actual_dimension
+                indexed_chunks: dict[str, list[tuple[Chunk, Sequence[float]]]] = {}
+                offset = 0
+                for path in group:
+                    indexed_chunks[path] = []
+                    for chunk in chunks[path]:
+                        indexed_chunks[path].append((chunk, vectors[offset]))
+                        offset += 1
+                self.store.apply_sync(
+                    document_digests={path: current_digests[path] for path in group},
+                    indexed_chunks=indexed_chunks,
+                    removed_paths=removed_paths if completed == 0 else set(),
+                    embedding_model=self.embedding_model,
+                    requested_dimensions=self.embedding_dimensions,
+                    actual_dimensions=actual_dimension or self.embedding_dimensions,
+                    reset=reset if completed == 0 else False,
+                )
+                completed += len(group)
+                embedded_any = embedded_any or bool(vectors)
+                if self.progress is not None:
+                    self.progress(cached_count + completed, len(current_documents))
+            if restart:
+                continue
+            if not groups:
+                self.store.apply_sync(
+                    document_digests={},
+                    indexed_chunks={},
+                    removed_paths=removed_paths,
+                    embedding_model=self.embedding_model,
+                    requested_dimensions=self.embedding_dimensions,
+                    actual_dimensions=actual_dimension or self.embedding_dimensions,
+                    reset=reset,
+                )
+            break
+        if self.progress is not None:
+            self.progress(len(current_documents), len(current_documents))
         return SyncResult(
             indexed_document_count=len(current_documents),
             changed_document_count=len(changed_paths),
@@ -114,7 +135,26 @@ class IndexSynchronizer:
             warnings=collection.warnings,
         )
 
-    def _embed_chunks(self, chunks: list[Chunk]) -> list[list[float]]:
+    @staticmethod
+    def _document_groups(documents: dict[str, Document], paths: set[str]) -> list[list[str]]:
+        groups: list[list[str]] = []
+        group: list[str] = []
+        chunk_count = 0
+        for path in sorted(paths):
+            count = len(chunk_document(documents[path]))
+            if group and chunk_count + count > EMBEDDING_BATCH_SIZE:
+                groups.append(group)
+                group = []
+                chunk_count = 0
+            group.append(path)
+            chunk_count += count
+        if group:
+            groups.append(group)
+        return groups
+
+    def _embed_chunks(
+        self, chunks: list[Chunk], progress: Callable[[int], None] | None = None
+    ) -> list[list[float]]:
         vectors: list[list[float]] = []
         for offset in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
             batch = chunks[offset : offset + EMBEDDING_BATCH_SIZE]
@@ -125,6 +165,8 @@ class IndexSynchronizer:
             if len(batch_vectors) != len(batch):
                 raise ProviderError("The embedding provider returned an unexpected vector count.")
             vectors.extend(batch_vectors)
+            if progress is not None:
+                progress(len(vectors))
 
         if not vectors:
             return []

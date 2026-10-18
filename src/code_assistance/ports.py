@@ -19,6 +19,11 @@ class ChatGenerator(Protocol):
         """Let the model choose tools and return their results in the same response flow."""
 
 
+class ReviewGenerator(Protocol):
+    def generate(self, instructions: str, prompt: str) -> str:
+        """Return a review response for application-side validation."""
+
+
 class EmbeddingProvider(Protocol):
     def embed(
         self,

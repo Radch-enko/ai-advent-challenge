@@ -91,6 +91,8 @@ def _is_hard_excluded(relative_path: Path) -> bool:
         or name.startswith(".env")
         or "credential" in name
         or "secret" in name
+        or "token" in name
+        or "password" in name
         or name in SECRET_FILE_NAMES
         or name.endswith(SECRET_FILE_SUFFIXES)
     )
@@ -98,29 +100,17 @@ def _is_hard_excluded(relative_path: Path) -> bool:
 
 def _candidate_paths(repository_root: Path) -> list[Path]:
     candidates: list[Path] = []
-    try:
-        for entry in repository_root.iterdir():
-            if entry.name.casefold().startswith("readme") and (
-                entry.is_file() or entry.is_symlink()
-            ):
-                candidates.append(entry)
-    except OSError as exc:
-        raise DocumentError("The repository root could not be scanned.") from exc
-
-    docs_root = repository_root / "docs"
-    if docs_root.is_dir() and not docs_root.is_symlink():
-        for current, directory_names, file_names in os.walk(docs_root, followlinks=False):
-            current_path = Path(current)
-            directory_names[:] = [
-                name
-                for name in directory_names
-                if name.casefold() not in HARD_EXCLUDED_COMPONENTS
-                and not (current_path / name).is_symlink()
-            ]
-            for name in file_names:
-                candidate = current_path / name
-                if candidate.suffix.casefold() in {".md", ".markdown"}:
-                    candidates.append(candidate)
+    for current, directory_names, file_names in os.walk(repository_root, followlinks=False):
+        current_path = Path(current)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if name.casefold() not in HARD_EXCLUDED_COMPONENTS
+            and not (current_path / name).is_symlink()
+        ]
+        for name in file_names:
+            if Path(name).suffix == ".md":
+                candidates.append(current_path / name)
 
     selected: list[Path] = []
     for candidate in candidates:
@@ -131,6 +121,42 @@ def _candidate_paths(repository_root: Path) -> list[Path]:
         if not _is_hard_excluded(relative):
             selected.append(candidate)
     return sorted(set(selected), key=lambda path: path.relative_to(repository_root).as_posix())
+
+
+def collect_code_files(repository_root: Path, max_bytes: int) -> DocumentCollection:
+    """Collect safe text files other than Markdown from a repository snapshot."""
+    root = repository_root.resolve(strict=True)
+    candidates: list[Path] = []
+    for current, directory_names, file_names in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if name.casefold() not in HARD_EXCLUDED_COMPONENTS
+            and not (current_path / name).is_symlink()
+        ]
+        for name in file_names:
+            candidate = current_path / name
+            relative = candidate.relative_to(root)
+            if (
+                candidate.is_symlink()
+                or relative.suffix in {".md", ".markdown", ".mdx"}
+                or _is_hard_excluded(relative)
+            ):
+                continue
+            candidates.append(candidate)
+    ignored = _ignored_paths(root, candidates)
+    documents: list[Document] = []
+    warnings: list[str] = []
+    for candidate in sorted(candidates):
+        relative_name = candidate.relative_to(root).as_posix()
+        if relative_name in ignored:
+            continue
+        try:
+            documents.append(read_document(root, candidate, max_bytes))
+        except DocumentError as exc:
+            warnings.append(f"Skipped {relative_name}: {exc}")
+    return DocumentCollection(tuple(documents), tuple(warnings))
 
 
 def _ignored_paths(repository_root: Path, candidates: list[Path]) -> set[str]:

@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+config.toml
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.pem
+*.key
+*.sqlite3
+build
+dist
+report

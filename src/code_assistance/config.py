@@ -132,7 +132,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     embedding_model = _string(openai, "embedding_model", DEFAULT_EMBEDDING_MODEL, "openai")
     dimensions = _optional_positive_integer(openai, "embedding_dimensions", "openai")
 
-    request_timeout = _positive_number(openai, "timeout_seconds", 30, "openai")
+    request_timeout = _positive_number(openai, "timeout_seconds", 60, "openai")
     if request_timeout > 300:
         raise ConfigurationError("[openai].timeout_seconds must not exceed 300.")
     max_file_bytes = _positive_integer(index, "max_file_bytes", 1_048_576, "index")

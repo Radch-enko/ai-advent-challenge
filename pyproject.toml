@@ -12,6 +12,7 @@ dependencies = [
     "mcp>=2.0,<3.0",
     "openai>=1.66,<3.0",
     "platformdirs>=4.0,<5.0",
+    "PyJWT[crypto]>=2.9,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,8 @@ dev = [
 [project.scripts]
 code-assistance = "code_assistance.cli:main"
 code-assistance-git-mcp = "code_assistance.git_mcp_server:main"
+code-assistance-reviewer = "code_assistance.review_webhook:main"
+code-assistance-review-reset = "code_assistance.review_reset:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -13,3 +13,5 @@ dist/
 .coverage
 *.db
 *.sqlite3
+*.pem
+*.key
