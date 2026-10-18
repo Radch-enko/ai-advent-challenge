@@ -15,6 +15,8 @@ class ChatGenerator(Protocol):
         prompt: str,
         tools: Sequence[ToolDefinition],
         call_tool: Callable[[str, dict[str, object]], str],
+        *,
+        unbounded: bool = False,
     ) -> str:
         """Let the model choose tools and return their results in the same response flow."""
 
@@ -48,3 +50,5 @@ class GitProvider(Protocol):
     def recent_commits(self, repository_root: Path) -> list[GitEvidence]: ...
 
     def diff(self, repository_root: Path) -> list[GitEvidence]: ...
+
+    def diff_entries(self, repository_root: Path) -> tuple[list[tuple[str, str, str]], bool]: ...

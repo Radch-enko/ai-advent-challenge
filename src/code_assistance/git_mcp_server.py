@@ -6,11 +6,7 @@ from pathlib import Path
 
 from mcp.server import MCPServer
 
-from code_assistance.documents import (
-    HARD_EXCLUDED_COMPONENTS,
-    SECRET_FILE_NAMES,
-    SECRET_FILE_SUFFIXES,
-)
+from code_assistance.file_policy import is_hard_excluded
 
 SERVER = MCPServer("code-assistance-git")
 GIT_TIMEOUT = 8
@@ -74,22 +70,19 @@ def _safe_path(root: Path, raw: str) -> bool:
         or any(ord(character) < 32 for character in raw)
     ):
         return False
-    components = {part.casefold() for part in path.parts}
-    name = path.name.casefold()
-    if components & HARD_EXCLUDED_COMPONENTS or name in SECRET_FILE_NAMES:
-        return False
-    if name.startswith(".env") or name.endswith(SECRET_FILE_SUFFIXES):
-        return False
-    if any(token in name for token in ("secret", "credential", "token", "password")):
+    if is_hard_excluded(path):
         return False
     candidate = root / path
-    if candidate.is_symlink():
-        return False
     try:
-        candidate.resolve().relative_to(root)
-    except ValueError:
+        if any(
+            (root.joinpath(*path.parts[:index])).is_symlink()
+            for index in range(1, len(path.parts) + 1)
+        ):
+            return False
+        resolved = candidate.resolve().relative_to(root)
+    except (ValueError, OSError):
         return False
-    return True
+    return not is_hard_excluded(resolved)
 
 
 @SERVER.tool()

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "code-assistance"
 version = "0.1.0"
-description = "A local read-only assistant for Git repository documentation"
+description = "A local assistant for repository questions and reviewed file edits"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

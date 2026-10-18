@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from platformdirs import user_data_path
 
 from code_assistance.errors import ConfigurationError
+from code_assistance.file_policy import is_hard_excluded
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_CHAT_MODEL = "gpt-5-mini"
@@ -30,6 +31,10 @@ class AppConfig:
     mcp_command: tuple[str, ...] | None
     mcp_tool_name: str
     mcp_timeout_seconds: float
+    agent_read_roots: tuple[str, ...]
+    agent_write_roots: tuple[str, ...]
+    agent_read_extensions: tuple[str, ...]
+    agent_write_extensions: tuple[str, ...]
 
 
 def default_config_path() -> Path:
@@ -98,6 +103,37 @@ def _optional_positive_integer(
     return int(value)
 
 
+def _agent_paths(table: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = table.get(key, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ConfigurationError(f"[agent.files].{key} must be an array of relative paths.")
+    paths: list[str] = []
+    for item in value:
+        path = Path(item)
+        if (
+            not item
+            or path.is_absolute()
+            or ".." in path.parts
+            or (item != "." and item != path.as_posix())
+            or "\\" in item
+            or any(part.startswith(".") for part in path.parts if part != ".")
+            or is_hard_excluded(path)
+        ):
+            raise ConfigurationError(f"[agent.files].{key} contains an unsafe path.")
+        paths.append(path.as_posix())
+    return tuple(paths)
+
+
+def _agent_extensions(table: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = table.get(key, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ConfigurationError(f"[agent.files].{key} must be an array of extensions.")
+    for item in value:
+        if not item.startswith(".") or len(item) < 2 or not item[1:].isalnum():
+            raise ConfigurationError(f"[agent.files].{key} contains an invalid extension.")
+    return tuple(item.casefold() for item in value)
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or default_config_path()
     try:
@@ -113,6 +149,8 @@ def load_config(path: Path | None = None) -> AppConfig:
     openai = _table(raw.get("openai"), "openai")
     index = _table(raw.get("index"), "index")
     mcp = _table(raw.get("git_mcp"), "git_mcp")
+    agent = _table(raw.get("agent"), "agent")
+    agent_files = _table(agent.get("files"), "agent.files")
 
     base_url = _string(openai, "base_url", DEFAULT_BASE_URL, "openai").rstrip("/")
     parsed_url = urlsplit(base_url)
@@ -185,6 +223,10 @@ def load_config(path: Path | None = None) -> AppConfig:
         mcp_command=command,
         mcp_tool_name=mcp_tool_name,
         mcp_timeout_seconds=mcp_timeout,
+        agent_read_roots=_agent_paths(agent_files, "read_roots"),
+        agent_write_roots=_agent_paths(agent_files, "write_roots"),
+        agent_read_extensions=_agent_extensions(agent_files, "read_extensions"),
+        agent_write_extensions=_agent_extensions(agent_files, "write_extensions"),
     )
 
 

@@ -3,6 +3,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from code_assistance.agent_service import prepare_agent_work
 from code_assistance.config import (
     AppConfig,
     default_index_directory,
@@ -21,7 +22,7 @@ from code_assistance.service import HelpService
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="code-assistance",
-        description="Answer read-only questions about a Git repository with /help.",
+        description="Explore a Git repository with /help or prepare reviewed edits with /agent.",
     )
     parser.add_argument(
         "--repo",
@@ -59,7 +60,8 @@ def run_session(
     output_fn(f"OpenAI endpoint: {config.base_url}")
     output_fn(
         "Privacy notice: questions, relevant documentation excerpts, and selected Git data "
-        "(including uncommitted diff) may be sent to OpenAI."
+        "(including uncommitted diff), plus permitted code excerpts used by /agent, "
+        "may be sent to OpenAI."
     )
 
     default_provider = OpenAIProvider(config)
@@ -112,7 +114,7 @@ def run_session(
         index_ready=index_ready,
         index_error=index_error,
     )
-    output_fn("Enter /help <question> or /exit.")
+    output_fn("Enter /help <question>, /agent <goal>, or /exit.")
 
     while True:
         try:
@@ -139,4 +141,31 @@ def run_session(
             except CodeAssistanceError as exc:
                 output_fn(f"Error: {exc}")
             continue
-        output_fn("Unknown command. Use /help <question> or /exit.")
+        if line == "/agent":
+            output_fn("Usage: /agent <goal>")
+            continue
+        if line.startswith("/agent "):
+            goal = line[len("/agent ") :].strip()
+            if not goal:
+                output_fn("Usage: /agent <goal>")
+                continue
+            try:
+                summary, workspace = prepare_agent_work(
+                    goal, repository_root, config, chat, status=output_fn, git_provider=git
+                )
+                output_fn(summary)
+                patch = workspace.diff()
+                if not patch:
+                    output_fn("No file changes proposed.")
+                    continue
+                output_fn(patch)
+                confirmation = input_fn("Apply changes? [y/N] ").strip().casefold()
+                if confirmation != "y":
+                    output_fn("Changes discarded.")
+                    continue
+                changed = workspace.apply()
+                output_fn(f"Applied changes to {len(changed)} file(s): {', '.join(changed)}")
+            except CodeAssistanceError as exc:
+                output_fn(f"Error: {exc}")
+            continue
+        output_fn("Unknown command. Use /help <question>, /agent <goal>, or /exit.")

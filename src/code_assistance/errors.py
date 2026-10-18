@@ -40,3 +40,7 @@ class BranchUnavailableError(CodeAssistanceError):
 
 class GitUnavailableError(CodeAssistanceError):
     """A read-only Git MCP tool could not provide valid data."""
+
+
+class AgentFileError(CodeAssistanceError):
+    """An agent file operation was denied or could not complete safely."""

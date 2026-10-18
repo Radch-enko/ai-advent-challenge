@@ -160,11 +160,22 @@ class MCPBranchProvider:
         return evidence or [GitEvidence("Git history", "No commits exist yet.")]
 
     def diff(self, repository_root: Path) -> list[GitEvidence]:
+        files, truncated = self.diff_entries(repository_root)
+        evidence = [GitEvidence(f"{path} ({kind} diff)", patch) for path, kind, patch in files]
+        if not evidence:
+            evidence.append(
+                GitEvidence("Git diff", "No reportable tracked changes; excluded paths may exist.")
+            )
+        if truncated:
+            evidence.append(GitEvidence("Git diff", "Diff output was truncated."))
+        return evidence
+
+    def diff_entries(self, repository_root: Path) -> tuple[list[tuple[str, str, str]], bool]:
         data = self._read_git_tool(repository_root, "get_diff")
         files = data.get("files")
         if not isinstance(files, list) or not isinstance(data.get("truncated"), bool):
             raise GitUnavailableError("The Git MCP diff response is invalid.")
-        evidence = []
+        entries = []
         for item in files:
             if not isinstance(item, dict) or not all(
                 isinstance(item.get(key), str) for key in ("path", "kind", "patch")
@@ -174,14 +185,8 @@ class MCPBranchProvider:
             kind = item["kind"]
             if kind not in ("staged", "unstaged"):
                 raise GitUnavailableError("The Git MCP diff response has an invalid kind.")
-            evidence.append(GitEvidence(f"{path} ({kind} diff)", item["patch"][:16_384]))
-        if not evidence:
-            evidence.append(
-                GitEvidence("Git diff", "No reportable tracked changes; excluded paths may exist.")
-            )
-        if data["truncated"]:
-            evidence.append(GitEvidence("Git diff", "Diff output was truncated."))
-        return evidence
+            entries.append((path, kind, item["patch"][:16_384]))
+        return entries, data["truncated"]
 
     def _read_git_tool(self, repository_root: Path, name: str) -> dict[str, Any]:
         if self.config.mcp_command is None:

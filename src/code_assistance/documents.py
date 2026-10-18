@@ -5,37 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from code_assistance.errors import DocumentError, UnsafePathError
+from code_assistance.file_policy import is_hard_excluded
 from code_assistance.models import Document
 
-HARD_EXCLUDED_COMPONENTS = frozenset(
-    {
-        ".cache",
-        ".aws",
-        ".env",
-        ".git",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ssh",
-        ".tox",
-        ".venv",
-        "__pycache__",
-        "build",
-        "credentials",
-        "dist",
-        "env",
-        "keys",
-        "node_modules",
-        "private_keys",
-        "secrets",
-        "site-packages",
-        "target",
-        "vendor",
-        "venv",
-        "virtualenv",
-    }
-)
-SECRET_FILE_SUFFIXES = (".pem", ".key")
-SECRET_FILE_NAMES = frozenset({"id_rsa", "id_ed25519", "credentials.md", "secrets.md"})
 IGNORE_TIMEOUT_SECONDS = 5
 
 
@@ -51,12 +23,16 @@ def read_document(repository_root: Path, source_path: Path, max_bytes: int) -> D
     lexical_candidate = Path(os.path.abspath(candidate))
     if not lexical_candidate.is_relative_to(root):
         raise UnsafePathError("A documentation path escapes the selected repository.")
+    if is_hard_excluded(lexical_candidate.relative_to(root)):
+        raise UnsafePathError("A documentation path is excluded.")
     try:
         resolved = candidate.resolve(strict=True)
     except OSError as exc:
         raise DocumentError("A documentation file could not be resolved.") from exc
     if not resolved.is_relative_to(root):
         raise UnsafePathError("A documentation path resolves outside the selected repository.")
+    if is_hard_excluded(resolved.relative_to(root)):
+        raise UnsafePathError("A documentation path is excluded.")
     if not resolved.is_file():
         raise DocumentError("A documentation path is not a regular file.")
 
@@ -84,18 +60,7 @@ def read_document(repository_root: Path, source_path: Path, max_bytes: int) -> D
 
 
 def _is_hard_excluded(relative_path: Path) -> bool:
-    parts = {part.casefold() for part in relative_path.parts}
-    name = relative_path.name.casefold()
-    return (
-        bool(parts.intersection(HARD_EXCLUDED_COMPONENTS))
-        or name.startswith(".env")
-        or "credential" in name
-        or "secret" in name
-        or "token" in name
-        or "password" in name
-        or name in SECRET_FILE_NAMES
-        or name.endswith(SECRET_FILE_SUFFIXES)
-    )
+    return is_hard_excluded(relative_path)
 
 
 def _candidate_paths(repository_root: Path) -> list[Path]:
@@ -105,8 +70,7 @@ def _candidate_paths(repository_root: Path) -> list[Path]:
         directory_names[:] = [
             name
             for name in directory_names
-            if name.casefold() not in HARD_EXCLUDED_COMPONENTS
-            and not (current_path / name).is_symlink()
+            if not is_hard_excluded(Path(name)) and not (current_path / name).is_symlink()
         ]
         for name in file_names:
             if Path(name).suffix == ".md":
@@ -132,8 +96,7 @@ def collect_code_files(repository_root: Path, max_bytes: int) -> DocumentCollect
         directory_names[:] = [
             name
             for name in directory_names
-            if name.casefold() not in HARD_EXCLUDED_COMPONENTS
-            and not (current_path / name).is_symlink()
+            if not is_hard_excluded(Path(name)) and not (current_path / name).is_symlink()
         ]
         for name in file_names:
             candidate = current_path / name

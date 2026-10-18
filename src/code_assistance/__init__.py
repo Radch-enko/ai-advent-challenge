@@ -1,4 +1,4 @@
-"""Local, read-only assistant for Git repository documentation."""
+"""Local assistant for repository questions and reviewed file edits."""
 
 __version__ = "0.1.0"
 

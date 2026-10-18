@@ -273,6 +273,8 @@ class OpenAIProvider:
         prompt: str,
         tools: Sequence[ToolDefinition],
         call_tool: Callable[[str, dict[str, object]], str],
+        *,
+        unbounded: bool = False,
     ) -> str:
         if not tools:
             return self.generate(instructions, prompt)
@@ -287,8 +289,12 @@ class OpenAIProvider:
             for tool in tools
         ]
         input_items: list[Any] = [{"role": "user", "content": prompt}]
+        round_count = 0
         call_count = 0
-        for _ in range(5):
+        while True:
+            if not unbounded and round_count == 8:
+                raise ProviderError("OpenAI did not finish after the allowed tool rounds.")
+            round_count += 1
             try:
                 response = self._request(
                     "tool response",
@@ -330,7 +336,7 @@ class OpenAIProvider:
             input_items.extend(response.output)
             for item in calls:
                 call_count += 1
-                if call_count > 8:
+                if not unbounded and call_count > 16:
                     raise ProviderError("OpenAI requested too many tool calls.")
                 try:
                     arguments = json.loads(item.arguments)
@@ -344,7 +350,6 @@ class OpenAIProvider:
                 input_items.append(
                     {"type": "function_call_output", "call_id": item.call_id, "output": result}
                 )
-        raise ProviderError("OpenAI did not finish after the allowed tool rounds.")
 
     def embed(
         self,
