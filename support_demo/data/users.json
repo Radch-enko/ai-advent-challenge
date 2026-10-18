@@ -1,0 +1,5 @@
+[
+  {"id": "u-jane", "name": "Jane", "gender": "female", "email": "jane@example.invalid", "city": "Москва", "loyalty_level": "Плюс", "bonus_balance": "840"},
+  {"id": "u-alex", "name": "Alex", "gender": "male", "email": "alex@example.invalid", "city": "Санкт-Петербург", "loyalty_level": "Старт", "bonus_balance": "120"},
+  {"id": "u-maria", "name": "Maria", "gender": "female", "email": "maria@example.invalid", "city": "Новосибирск", "loyalty_level": "Старт", "bonus_balance": "0"}
+]
